@@ -1,0 +1,49 @@
+# 高海拔增压建筑智能设计系统配置文件
+
+# 结构参数
+structural_params:
+  length: 7.2 # 舱体长度 (y方向，米)
+  width: 3.6 # 舱体宽度 (x方向，米)
+  height: 3.3 # 舱体高度 (z方向，米)
+  main_beam_spacing: 1.05 # 环向主梁间距 (米)
+  secondary_beam_spacing: 0.5 # 环向次梁间距 (米)
+  brace_spacing: 0.3 # 支撑梁间距 (米)
+  windows: # 窗户参数列表
+    - y_position: 3.6 # 窗户中心在y轴的位置 (米)
+      width: 1.2 # 窗户宽度 (米)
+      height: 1.0 # 窗户高度 (米)
+      bottom_height: 1.0 # 窗户底部离地高度 (米)
+      on_face: "front" # 窗户所在面 ('front', 'back', 'right')
+    - y_position: 3.6
+      width: 1.2
+      height: 1.0
+      bottom_height: 1.0
+      on_face: "right"
+
+# 强化学习参数
+rl_params:
+  actor_lr: 1.0e-4 # Actor网络学习率
+  critic_lr: 1.0e-3 # Critic网络学习率
+  gamma: 0.99 # 折扣因子
+  tau: 0.005 # 目标网络软更新参数
+  batch_size: 64 # 批次大小
+  buffer_size: 10000 # 经验回放缓冲区大小
+  update_interval: 5 # 更新间隔
+  noise_scale: 0.1 # 探索噪声
+  max_episodes: 1000 # 最大训练回合数
+  max_steps: 100 # 每个回合的最大步数
+
+# 图神经网络参数
+gnn_params:
+  in_channels: 10 # 输入特征维度
+  hidden_channels: 64 # 隐藏层维度
+  out_channels: 32 # 输出特征维度
+  num_layers: 3 # 图卷积层数
+  dropout: 0.1 # Dropout率
+
+# OpenSees分析参数
+analysis_params:
+  max_stress_ratio: 0.8 # 最大应力比
+  max_disp_ratio: 0.004 # 最大位移比 (L/250)
+  check_drift: true # 是否检查层间位移角
+  max_drift_ratio: 0.005 # 最大层间位移角 (H/200)
