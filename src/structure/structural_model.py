@@ -1,9 +1,12 @@
 import itertools
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
+
+from src.utils.util import is_close
 
 
 class BeamType(Enum):
@@ -80,7 +83,8 @@ class Window:
     width: float  # 窗户宽度
     height: float  # 窗户高度
     bottom_height: float  # 窗户底部离地高度
-    on_face: str  # 窗户所在面 ('front', 'back', 'right')
+    on_face: str  # 窗户所在面 ('front', 'back', 'left', 'right')
+    is_door: bool = False  # 是否为门
 
 
 @dataclass
@@ -96,12 +100,31 @@ class StructuralParameters:
     windows: List[Window] = field(default_factory=list)  # 窗户参数列表
 
 
+class NodeMap:
+    """节点坐标到节点ID的映射"""
+
+    def __init__(self):
+        self._node_map: Dict[Tuple[float, float, float], int] = {}
+
+    def add_node(self, x: float, y: float, z: float, node_id: int):
+        key = (round(x, 6), round(y, 6), round(z, 6))
+        if key in self._node_map:
+            return self._node_map[key]
+        self._node_map[key] = node_id
+        return node_id
+
+    def get_node_id(self, x: float, y: float, z: float) -> int:
+        key = (round(x, 6), round(y, 6), round(z, 6))
+        return self._node_map.get(key, None)
+
+
 class StructuralModel:
     """舱体结构模型类"""
 
     def __init__(self, params: StructuralParameters):
         self.params = params
         self.nodes: Dict[int, Node] = {}  # 节点字典 {节点ID: 节点}
+        self.node_map = NodeMap()  # 节点坐标到节点ID的映射
         self.beams: Dict[int, Beam] = {}  # 梁构件字典 {梁ID: 梁}
         self.sections: Dict[str, Section] = {}  # 截面属性字典 {截面名: 截面属性}
         self.node_counter = 0  # 节点ID计数器
@@ -165,14 +188,14 @@ class StructuralModel:
     def add_node(self, x: float, y: float, z: float) -> int:
         """添加节点并返回节点ID"""
         # 首先检查是否已经存在相同坐标的节点（考虑一定的精度）
-        tolerance = 1e-6
-        for node in self.nodes.values():
-            if abs(node.x - x) < tolerance and abs(node.y - y) < tolerance and abs(node.z - z) < tolerance:
-                return node.id  # 返回已存在节点的ID
+        node_id = self.node_map.get_node_id(x, y, z)
+        if node_id is not None:
+            return node_id
 
         # 如果不存在，创建新节点
         node_id = self.node_counter
         self.nodes[node_id] = Node(id=node_id, x=x, y=y, z=z)
+        self.node_map.add_node(x, y, z, node_id)
         self.node_counter += 1
         return node_id
 
@@ -197,239 +220,6 @@ class StructuralModel:
         )
         self.beam_counter += 1
         return beam_id
-
-    def generate_mesh(self):
-        """生成结构网格"""
-        # 清空现有节点和构件
-        self.nodes = {}
-        self.beams = {}
-        self.node_counter = 0
-        self.beam_counter = 0
-
-        # 按顺序生成各类型梁
-        self._generate_frame_beams()
-        self._generate_main_beams()
-        self._generate_secondary_beams()
-        self._generate_brace_beams()
-
-    def _generate_frame_beams(self):
-        """生成框架梁"""
-        # 获取舱体参数
-        length = self.params.length
-        width = self.params.width
-        height = self.params.height
-
-        # 生成框架的8个顶点
-        corners = list(itertools.product([0, width], [0, length], [0, height]))
-        corner_nodes = []
-
-        for i, (x, y, z) in enumerate(corners):
-            corner_nodes.append(self.add_node(x, y, z))
-
-        # 连接框架梁（12条边）
-        # 底部矩形（z=0）
-        self.add_beam(corner_nodes[0], corner_nodes[1], BeamType.FRAME, "FRAME")  # 底部前边
-        self.add_beam(corner_nodes[1], corner_nodes[3], BeamType.FRAME, "FRAME")  # 底部右边
-        self.add_beam(corner_nodes[3], corner_nodes[2], BeamType.FRAME, "FRAME")  # 底部后边
-        self.add_beam(corner_nodes[2], corner_nodes[0], BeamType.FRAME, "FRAME")  # 底部左边
-
-        # 顶部矩形（z=height）
-        self.add_beam(corner_nodes[4], corner_nodes[5], BeamType.FRAME, "FRAME")  # 顶部前边
-        self.add_beam(corner_nodes[5], corner_nodes[7], BeamType.FRAME, "FRAME")  # 顶部右边
-        self.add_beam(corner_nodes[7], corner_nodes[6], BeamType.FRAME, "FRAME")  # 顶部后边
-        self.add_beam(corner_nodes[6], corner_nodes[4], BeamType.FRAME, "FRAME")  # 顶部左边
-
-        # 垂直边（连接顶部和底部）
-        self.add_beam(corner_nodes[0], corner_nodes[4], BeamType.FRAME, "FRAME")  # 左前柱
-        self.add_beam(corner_nodes[1], corner_nodes[5], BeamType.FRAME, "FRAME")  # 右前柱
-        self.add_beam(corner_nodes[2], corner_nodes[6], BeamType.FRAME, "FRAME")  # 左后柱
-        self.add_beam(corner_nodes[3], corner_nodes[7], BeamType.FRAME, "FRAME")  # 右后柱
-
-    def _generate_main_beams(self):
-        """生成环向主梁"""
-        # 获取舱体参数
-        length = self.params.length
-        width = self.params.width
-        height = self.params.height
-        spacing = self.params.main_beam_spacing
-
-        # 计算沿y轴的主梁分布位置
-        y_positions = np.arange(spacing, length, spacing)
-        if abs(y_positions[-1] - length) < spacing * 0.5:  # 如果最后一个位置太接近尾部
-            y_positions = y_positions[:-1]  # 移除最后一个位置
-
-        # 为每个y坐标位置创建主梁（在xz平面上）
-        for y in y_positions:
-            # 创建主梁所需的4个节点（形成一个垂直于y轴的矩形）
-            bottom_left = self.add_node(0, y, 0)
-            bottom_right = self.add_node(width, y, 0)
-            top_left = self.add_node(0, y, height)
-            top_right = self.add_node(width, y, height)
-
-            # 添加主梁构件
-            self.add_beam(bottom_left, bottom_right, BeamType.MAIN, "MAIN")  # 底部横梁
-            self.add_beam(top_left, top_right, BeamType.MAIN, "MAIN")  # 顶部横梁
-            self.add_beam(bottom_left, top_left, BeamType.MAIN, "MAIN")  # 左侧立柱
-            self.add_beam(bottom_right, top_right, BeamType.MAIN, "MAIN")  # 右侧立柱
-
-    def _generate_secondary_beams(self):
-        """生成环向次梁"""
-        # 获取舱体参数
-        length = self.params.length
-        width = self.params.width
-        height = self.params.height
-        spacing = self.params.secondary_beam_spacing
-
-        # 处理窗户位置
-        window_heights = set()  # 存储窗户上下边沿的z坐标
-
-        for window in self.params.windows:
-            window_heights.add(window.bottom_height)
-            window_heights.add(window.bottom_height + window.height)
-
-        # 计算z方向的次梁分布位置
-        z_positions = list(np.arange(spacing, height, spacing))
-
-        # 如果有窗户，确保窗户边沿有次梁
-        for z in window_heights:
-            if 0 < z < height:  # 确保z在合理范围内
-                # 查找最接近的现有z位置
-                closest_idx = np.abs(np.array(z_positions) - z).argmin()
-                closest_z = z_positions[closest_idx]
-
-                # 如果不够接近，添加窗户边沿位置
-                if abs(closest_z - z) > 0.1:  # 允许10cm的误差
-                    z_positions.append(z)
-
-        # 排序并去重
-        z_positions = sorted(list(set(z_positions)))
-
-        # 添加次梁（平行于y轴）
-        for z in z_positions:
-            # 创建前后面的次梁
-            front_left = self.add_node(0, 0, z)
-            front_right = self.add_node(width, 0, z)
-            back_left = self.add_node(0, length, z)
-            back_right = self.add_node(width, length, z)
-
-            self.add_beam(front_left, front_right, BeamType.SECONDARY, "SECONDARY")  # 前面横梁
-            self.add_beam(back_left, back_right, BeamType.SECONDARY, "SECONDARY")  # 后面横梁
-
-            # 检查是否需要避开窗户位置
-            skip_positions = []
-            for window in self.params.windows:
-                if (
-                    abs(z - window.bottom_height) < 0.01
-                    or abs(z - (window.bottom_height + window.height)) < 0.01
-                ):
-                    # 这是窗户边沿，需要计算跳过的区间
-                    if window.on_face == "front" or window.on_face == "back":
-                        y_min = window.y_position - window.width / 2
-                        y_max = window.y_position + window.width / 2
-                        skip_positions.append((y_min, y_max, window.on_face))
-                    elif window.on_face == "right":
-                        y_min = window.y_position - window.width / 2
-                        y_max = window.y_position + window.width / 2
-                        skip_positions.append((y_min, y_max, "right"))
-
-            # 在左右面添加次梁（考虑窗户位置）
-            y_positions = (
-                [0]
-                + list(np.arange(self.params.main_beam_spacing, length, self.params.main_beam_spacing))
-                + [length]
-            )
-
-            for i in range(len(y_positions) - 1):
-                y1, y2 = y_positions[i], y_positions[i + 1]
-                y_mid = (y1 + y2) / 2
-
-                # 检查是否在窗户位置
-                skip_left = False
-                skip_right = False
-
-                for y_min, y_max, face in skip_positions:
-                    if y_min <= y_mid <= y_max:
-                        if face == "right":
-                            skip_right = True
-                        elif face == "left":
-                            skip_left = True
-
-                # 添加左侧次梁
-                if not skip_left:
-                    left_front = self.add_node(0, y1, z)
-                    left_back = self.add_node(0, y2, z)
-                    self.add_beam(left_front, left_back, BeamType.SECONDARY, "SECONDARY")
-
-                # 添加右侧次梁
-                if not skip_right:
-                    right_front = self.add_node(width, y1, z)
-                    right_back = self.add_node(width, y2, z)
-                    self.add_beam(right_front, right_back, BeamType.SECONDARY, "SECONDARY")
-
-    def _generate_brace_beams(self):
-        """生成支撑梁"""
-        # 获取舱体参数
-        length = self.params.length
-        width = self.params.width
-        height = self.params.height
-
-        # 计算支撑梁位置（在连续两排次梁之间添加）
-        if self.params.secondary_beam_spacing > self.params.brace_spacing and self.params.brace_spacing > 0:
-            # 计算每个次梁间距内应该放置的支撑梁数量
-            n_braces = max(1, int(self.params.secondary_beam_spacing / self.params.brace_spacing) - 1)
-
-            # 获取所有次梁的z坐标位置
-            secondary_beams_z = sorted(
-                list(
-                    set(
-                        [
-                            self.nodes[beam.start_node].z
-                            for beam in self.beams.values()
-                            if beam.beam_type == BeamType.SECONDARY
-                        ]
-                    )
-                )
-            )
-
-            # 在每对相邻次梁之间添加支撑梁
-            for i in range(len(secondary_beams_z) - 1):
-                z1, z2 = secondary_beams_z[i], secondary_beams_z[i + 1]
-
-                # 平均分配支撑梁
-                z_positions = [z1 + (z2 - z1) * (j + 1) / (n_braces + 1) for j in range(n_braces)]
-
-                for z in z_positions:
-                    # 添加前后面的支撑梁
-                    front_left = self.add_node(0, 0, z)
-                    front_right = self.add_node(width, 0, z)
-                    back_left = self.add_node(0, length, z)
-                    back_right = self.add_node(width, length, z)
-
-                    self.add_beam(front_left, front_right, BeamType.BRACE, "BRACE")  # 前面支撑
-                    self.add_beam(back_left, back_right, BeamType.BRACE, "BRACE")  # 后面支撑
-
-                    # 添加左右面的支撑梁
-                    # 同样按照主梁间距划分
-                    y_positions = (
-                        [0]
-                        + list(
-                            np.arange(self.params.main_beam_spacing, length, self.params.main_beam_spacing)
-                        )
-                        + [length]
-                    )
-
-                    for j in range(len(y_positions) - 1):
-                        y1, y2 = y_positions[j], y_positions[j + 1]
-
-                        # 添加左侧支撑梁
-                        left_front = self.add_node(0, y1, z)
-                        left_back = self.add_node(0, y2, z)
-                        self.add_beam(left_front, left_back, BeamType.BRACE, "BRACE")
-
-                        # 添加右侧支撑梁
-                        right_front = self.add_node(width, y1, z)
-                        right_back = self.add_node(width, y2, z)
-                        self.add_beam(right_front, right_back, BeamType.BRACE, "BRACE")
 
     def get_structure_graph(self) -> Tuple[np.ndarray, np.ndarray]:
         """获取结构图表示
@@ -496,3 +286,480 @@ class StructuralModel:
                 total_mass += mass
 
         return total_mass
+
+    def generate_grid_mesh(self):
+        """使用网格法生成结构，将长直梁拆分成多段小梁段"""
+        # 清空现有节点和构件
+        self.nodes = {}
+        self.beams = {}
+        self.node_counter = 0
+        self.beam_counter = 0
+
+        # 生成水平面的网格
+        self._generate_horizontal_grids()
+
+        # 生成前后立面的网格
+        self._generate_vertical_grids()
+
+        # 生成左右侧面的网格
+        self._generate_side_grids()
+
+    def _generate_horizontal_grids(self):
+        """生成上下平面的网格布置"""
+        length = self.params.length
+        width = self.params.width
+        height = self.params.height
+        main_spacing = self.params.main_beam_spacing
+        brace_spacing = self.params.brace_spacing
+
+        # 计算所有垂直坐标线（x轴方向）
+        all_x = set([0, width])  # 框架边界
+
+        # 计算次梁的x坐标（从中间向两边对称扩展）
+        x_mid = width / 2
+        secondary_x = {x_mid}  # 中间的次梁
+
+        # 向左右两侧扩展次梁
+        x = x_mid + main_spacing
+        while x < width:
+            secondary_x.add(x)
+            x += main_spacing
+
+        x = x_mid - main_spacing
+        while x > 0:
+            secondary_x.add(x)
+            x -= main_spacing
+
+        # 计算支撑梁的x坐标（在次梁之间添加支撑梁）
+        support_x = set()
+        sorted_secondary = sorted(secondary_x)
+        for i in range(len(sorted_secondary) - 1):
+            x_start = sorted_secondary[i]
+            x_end = sorted_secondary[i + 1]
+
+            n = math.ceil((x_end - x_start) / brace_spacing)
+            _new_brace_spacing = (x_end - x_start) / n
+
+            x_current = x_start + _new_brace_spacing
+            while x_current < x_end:
+                support_x.add(x_current)
+                x_current += _new_brace_spacing
+
+        # 计算所有水平坐标线（y轴方向）
+        all_y = set([0, length])  # 框架边界
+
+        # 计算主梁的y坐标
+        primary_y = set()
+        y = main_spacing
+        while y < length:
+            primary_y.add(y)
+            y += main_spacing
+
+        # 合并所有坐标线，形成完整的网格
+        all_x = all_x.union(secondary_x).union(support_x)
+        all_y = all_y.union(primary_y)
+
+        # 排序坐标线，便于后续处理
+        all_x = sorted(all_x)
+        all_y = sorted(all_y)
+
+        # 生成底部面的网格
+        self._generate_plane_grid(all_x, all_y, 0, secondary_x, support_x, primary_y)
+
+        # 生成顶部面的网格
+        self._generate_plane_grid(all_x, all_y, height, secondary_x, support_x, primary_y)
+
+    def _generate_vertical_grids(self):
+        """生成前后面的网格布置"""
+        width = self.params.width
+
+        # 获取所有与前后面相关的窗户
+        front_windows = [window for window in self.params.windows if window.on_face == "front"]
+        back_windows = [window for window in self.params.windows if window.on_face == "back"]
+
+        # 生成前面的网格
+        self._generate_vertical_face_grid(0, front_windows)
+
+        # 生成后面的网格
+        self._generate_vertical_face_grid(width, back_windows)
+
+    def _generate_side_grids(self):
+        """生成左右侧面的网格布置"""
+        length = self.params.length
+
+        # 获取所有与左右侧面相关的窗户和门
+        left_windows = [window for window in self.params.windows if window.on_face == "left"]
+        right_windows = [window for window in self.params.windows if window.on_face == "right"]
+
+        windows = [window for window in left_windows + right_windows if not window.is_door]
+        if windows:
+            win_bottom = windows[0].bottom_height
+            win_top = win_bottom + windows[0].height
+        else:
+            win_bottom = -1
+            win_top = -1
+
+        # 生成左侧面的网格
+        self._generate_side_face_grid(0, left_windows, win_bottom, win_top)
+
+        # 生成右侧面的网格
+        self._generate_side_face_grid(length, right_windows, win_bottom, win_top, has_door=True)
+
+    def _generate_vertical_face_grid(self, x_coord: float, windows: List[Window]):
+        """在指定x坐标位置生成前/后立面的网格
+
+        Args:
+            x_coord: 面所在的x坐标
+            windows: 该面上的窗户列表
+        """
+        length = self.params.length
+        height = self.params.height
+        main_spacing = self.params.main_beam_spacing
+        brace_spacing = self.params.brace_spacing
+
+        # 计算所有z坐标点
+        # 首先添加底部和顶部框架点
+        all_z = {0, height}
+
+        # 为每个窗户添加窗户底部和顶部高度作为次梁位置
+        window = windows[0]  # 每个窗户高度和离地高度相同
+        window_bottom = window.bottom_height
+        window_top = window.bottom_height + window.height
+        all_z.add(window_bottom)
+        all_z.add(window_top)
+
+        # 添加支撑梁的z坐标
+        # 窗户以下的支撑梁
+        z = window_bottom - brace_spacing
+        while z > 0:
+            all_z.add(z)
+            z -= brace_spacing
+
+        # 窗户以上的支撑梁
+        z = window_top + brace_spacing
+        while z < height - 1e-4:
+            all_z.add(z)
+            z += brace_spacing
+
+        # 窗户之间的支撑梁
+        n = math.ceil(window.height / brace_spacing)
+        _new_brace_spacing = window.height / n
+        for i in range(n - 1):
+            z = window_bottom + (i + 1) * _new_brace_spacing
+            all_z.add(z)
+
+        # 计算所有y坐标点
+        all_y = {0, length}  # 框架边界
+
+        # 计算主梁的y坐标
+        primary_y = set()
+        y = main_spacing
+        while y < length:
+            primary_y.add(y)
+            y += main_spacing
+
+        all_y = all_y.union(primary_y)
+
+        # 排序所有坐标点
+        all_y = sorted(all_y)
+        all_z = sorted(all_z)
+
+        # 生成节点
+        for y in all_y:
+            for z in all_z:
+                self.add_node(x_coord, y, z)
+
+        # 生成水平方向的梁段（沿y方向）
+        for z in all_z:
+            for i in range(len(all_y) - 1):
+                y1, y2 = all_y[i], all_y[i + 1]
+                start_node = self.node_map.get_node_id(x_coord, y1, z)
+                end_node = self.node_map.get_node_id(x_coord, y2, z)
+
+                # 确定梁类型
+                if z == 0 or z == height:  # 底部或顶部的梁
+                    beam_type = BeamType.FRAME
+                    section = "FRAME"
+                else:
+                    # 检查是否在窗户区域内
+                    in_window = False
+                    for window in windows:
+                        window_bottom = window.bottom_height
+                        window_top = window.bottom_height + window.height
+                        window_left = window.y_position - window.width / 2
+                        window_right = window.y_position + window.width / 2
+
+                        if (window_bottom < z < window_top) and y1 < window.y_position < y2:
+                            # 这个区域在窗户范围内，不添加梁
+                            in_window = True
+                            break
+
+                    if not in_window:
+                        # 判断是否为次梁或支撑梁
+                        is_secondary = False
+                        for window in windows:
+                            window_bottom = window.bottom_height
+                            window_top = window.bottom_height + window.height
+                            if z == window_bottom or z == window_top:
+                                is_secondary = True
+                                break
+
+                        if is_secondary:
+                            beam_type = BeamType.SECONDARY
+                            section = "SECONDARY"
+                        else:
+                            beam_type = BeamType.BRACE
+                            section = "BRACE"
+
+                        self.add_beam(start_node, end_node, beam_type, section)
+
+        # 生成竖直方向的梁段（沿z方向）
+        for y in all_y:
+            for i in range(len(all_z) - 1):
+                z1, z2 = all_z[i], all_z[i + 1]
+                start_node = self.node_map.get_node_id(x_coord, y, z1)
+                end_node = self.node_map.get_node_id(x_coord, y, z2)
+
+                # 确定梁类型
+                if y == 0 or y == length:  # 左右边界上的梁
+                    beam_type = BeamType.FRAME
+                    section = "FRAME"
+                    self.add_beam(start_node, end_node, beam_type, section)
+                else:
+                    # 检查是否在窗户区域内
+                    in_window = False
+                    for window in windows:
+                        window_left = window.y_position - window.width / 2
+                        window_right = window.y_position + window.width / 2
+
+                        if is_close(y, window_left) or is_close(y, window_right):
+                            # 这个区域在窗户范围内，不添加梁
+                            in_window = True
+                            beam_type = BeamType.FRAME
+                            section = "FRAME"
+                            break
+
+                    if not in_window:
+                        # 判断是否为主梁
+                        if y in primary_y:
+                            beam_type = BeamType.MAIN
+                            section = "MAIN"
+                        else:
+                            raise ValueError(f"Invalid y coordinate: {y}")
+
+                    self.add_beam(start_node, end_node, beam_type, section)
+
+    def _generate_side_face_grid(
+        self, y_coord: float, windows: List[Window], win_bottom, win_top, has_door: bool = False
+    ):
+        """在指定y坐标位置生成左/右侧面的网格
+
+        Args:
+            y_coord: 面所在的y坐标
+            windows: 该面上的窗户或门列表
+        """
+        width = self.params.width
+        height = self.params.height
+        main_spacing = self.params.main_beam_spacing
+        brace_spacing = self.params.brace_spacing
+
+        # 计算所有z坐标点
+        # 首先添加底部和顶部框架点
+        all_z = {0, height}
+
+        # 检查是否有窗户或门
+        if windows:
+            for window in windows:
+                # 为每个窗户或门添加底部和顶部高度作为次梁位置
+                window_bottom = window.bottom_height
+                window_top = window.bottom_height + window.height
+                all_z.add(window_bottom)
+                all_z.add(window_top)
+
+                # 添加支撑梁的z坐标
+                # 窗户/门以下的支撑梁
+                z = window_bottom - brace_spacing
+                while z > 0:
+                    all_z.add(z)
+                    z -= brace_spacing
+
+                # 窗户/门以上的支撑梁
+                z = window_top + brace_spacing
+                while z < height - 1e-4:
+                    all_z.add(z)
+                    z += brace_spacing
+
+                # 窗户/门之间的支撑梁
+                n = math.ceil(window.height / brace_spacing)
+                _new_brace_spacing = window.height / n
+                for i in range(n - 1):
+                    z = window_bottom + (i + 1) * _new_brace_spacing
+                    all_z.add(z)
+        else:
+            # 如果没有窗户或门，按照支撑梁间距布置支撑梁
+            z = brace_spacing
+            while z < height - 1e-4:
+                all_z.add(z)
+                z += brace_spacing
+
+        # 计算所有x坐标点
+        all_x = {0, width}  # 框架边界
+
+        # 计算主梁的x坐标（先添加跨中主梁，然后向两侧扩展）
+        primary_x = set()
+        x_mid = width / 2
+        primary_x.add(x_mid)  # 跨中主梁
+
+        # 向左右两侧扩展主梁
+        x = x_mid + main_spacing
+        while x < width:
+            primary_x.add(x)
+            x += main_spacing
+
+        x = x_mid - main_spacing
+        while x > 0:
+            primary_x.add(x)
+            x -= main_spacing
+
+        all_x = all_x.union(primary_x)
+
+        # 排序所有坐标点
+        all_x = sorted(all_x)
+        all_z = sorted(all_z)
+
+        # 生成节点
+        for x in all_x:
+            for z in all_z:
+                self.add_node(x, y_coord, z)
+
+        # 生成水平方向的梁段（沿x方向）
+        for z in all_z:
+            for i in range(len(all_x) - 1):
+                x1, x2 = all_x[i], all_x[i + 1]
+                start_node = self.node_map.get_node_id(x1, y_coord, z)
+                end_node = self.node_map.get_node_id(x2, y_coord, z)
+
+                # 确定梁类型
+                if z == 0 or z == height:  # 底部或顶部的梁
+                    beam_type = BeamType.FRAME
+                    section = "FRAME"
+                else:
+                    # 检查是否在窗户/门区域内
+                    in_window = False
+                    for window in windows:
+                        _bt = 0 if has_door else win_bottom
+                        # 对于门或窗，检查是否在其区域内（对于侧面，窗户中心是x坐标）
+                        if (_bt < z < win_top) and x1 < window.y_position < x2:
+                            # 这个区域在窗户/门范围内，不添加梁
+                            in_window = True
+                            break
+
+                    if not in_window:
+                        # 判断是否为次梁或支撑梁
+                        is_secondary = False
+                        if z == win_bottom or z == win_top:
+                            is_secondary = True
+
+                        if is_secondary:
+                            beam_type = BeamType.SECONDARY
+                            section = "SECONDARY"
+                        else:
+                            beam_type = BeamType.BRACE
+                            section = "BRACE"
+
+                        self.add_beam(start_node, end_node, beam_type, section)
+
+        # 生成竖直方向的梁段（沿z方向）
+        for x in all_x:
+            for i in range(len(all_z) - 1):
+                z1, z2 = all_z[i], all_z[i + 1]
+                start_node = self.node_map.get_node_id(x, y_coord, z1)
+                end_node = self.node_map.get_node_id(x, y_coord, z2)
+
+                # 确定梁类型
+                if x == 0 or x == width:  # 左右边界上的梁
+                    beam_type = BeamType.FRAME
+                    section = "FRAME"
+                    self.add_beam(start_node, end_node, beam_type, section)
+                else:
+                    # 检查是否在窗户/门区域内
+                    in_window = False
+                    for window in windows:
+                        # 在左右侧面，窗户/门的宽度方向是x轴
+                        window_left = window.y_position - window.width / 2
+                        window_right = window.y_position + window.width / 2
+
+                        if is_close(x, window_left) or is_close(x, window_right):
+                            # 这是窗户/门的边缘，添加框架梁
+                            in_window = True
+                            beam_type = BeamType.FRAME
+                            section = "FRAME"
+                            break
+
+                    if not in_window:
+                        # 判断是否为主梁
+                        if x in primary_x:
+                            beam_type = BeamType.MAIN
+                            section = "MAIN"
+                        else:
+                            raise ValueError(f"Invalid x coordinate: {x}")
+
+                    self.add_beam(start_node, end_node, beam_type, section)
+
+    def _generate_plane_grid(self, all_x, all_y, z, secondary_x, support_x, primary_y):
+        """在指定z平面生成网格
+
+        Args:
+            all_x: 所有x坐标点
+            all_y: 所有y坐标点
+            z: 平面的z坐标
+            secondary_x: 次梁的x坐标集合
+            support_x: 支撑梁的x坐标集合
+            primary_y: 主梁的y坐标集合
+        """
+
+        for x in all_x:
+            for y in all_y:
+                node_id = self.add_node(x, y, z)
+                # print(f"add node: {node_id}, x: {x}, y: {y}, z: {z}")
+
+        # 生成水平方向的梁段（y方向，框架梁、次梁、支撑梁）
+        for x in all_x:
+            for i in range(len(all_y) - 1):
+                y1, y2 = all_y[i], all_y[i + 1]
+                start_node = self.node_map.get_node_id(x, y1, z)
+                end_node = self.node_map.get_node_id(x, y2, z)
+
+                # 确定梁的类型
+                if x == 0 or x == all_x[-1]:  # 边界上的梁
+                    beam_type = BeamType.FRAME
+                    section = "FRAME"
+                elif x in secondary_x:  # 次梁
+                    beam_type = BeamType.SECONDARY
+                    section = "SECONDARY"
+                elif x in support_x:  # 支撑梁
+                    beam_type = BeamType.BRACE
+                    section = "BRACE"
+                else:
+                    raise ValueError(f"Invalid x coordinate: {x}")
+
+                self.add_beam(start_node, end_node, beam_type, section)
+
+        # 生成垂直方向的梁段（x方向，框架梁、主梁）
+        for y in all_y:
+            for i in range(len(all_x) - 1):
+                x1, x2 = all_x[i], all_x[i + 1]
+                start_node = self.node_map.get_node_id(x1, y, z)
+                end_node = self.node_map.get_node_id(x2, y, z)
+
+                # 确定梁的类型
+                if y == 0 or y == all_y[-1]:  # 边界上的梁
+                    beam_type = BeamType.FRAME
+                    section = "FRAME"
+                elif y in primary_y:  # 主梁
+                    beam_type = BeamType.MAIN
+                    section = "MAIN"
+                else:  # 这种情况不应该发生，为了安全起见，当作次梁处理
+                    raise ValueError(f"Invalid y coordinate: {y}")
+
+                self.add_beam(start_node, end_node, beam_type, section)
