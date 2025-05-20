@@ -9,7 +9,7 @@ import numpy as np
 # 添加src目录到Python路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.structure.structural_model import BeamType, Node, StructuralModel, StructuralParameters, Window
+from src.structure.structural_model import BeamType, Point, StructuralModel, StructuralParameters, Window
 
 
 class ViewType(Enum):
@@ -45,7 +45,7 @@ class StructureVisualizer:
             ViewType.FULL_3D: {"elev": 20, "azim": 45, "title": "Pressure Vessel Structure (3D)"},
         }
 
-    def _is_beam_in_face(self, beam: Tuple[Node, Node], face_type: ViewType) -> bool:
+    def _is_beam_in_face(self, beam: Tuple[Point, Point], face_type: ViewType) -> bool:
         """判断梁是否在指定面上"""
         start_node, end_node = beam
         if face_type == ViewType.LEFT:

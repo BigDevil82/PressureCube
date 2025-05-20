@@ -60,6 +60,7 @@ python main.py --mode test --config config.yaml
 │   │   └── structural_model.py  # 参数化结构模型
 │   ├── graph/             # 图神经网络
 │   │   └── hebg.py        # 层次图嵌入模型
+│   │   └── structural_graph.py # 结构图表示模块
 │   ├── reinforcement/     # 强化学习
 │   │   └── rl_agent.py    # DDPG智能体
 │   ├── analysis/          # 结构分析
@@ -89,9 +90,9 @@ python main.py --mode test --config config.yaml
 - [ ] 实现HEBG层次图嵌入
   - [ ] 完成池化和反池化操作
   - [ ] 实现结构层次表示
+- [x] 实现结构到图的转换 (Type 1: 梁为边，连接为节点)
+- [x] 实现结构到图的转换 (Type 2: 梁为节点，连接为边)
 - [ ] 开发强化学习环境
-  - [ ] 定义状态空间和动作空间
-  - [ ] 实现奖励函数
 - [ ] 集成OpenSees分析
   - [ ] 实现荷载生成
   - [ ] 完成约束校核

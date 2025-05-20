@@ -34,7 +34,7 @@ class Section:
 
 
 @dataclass
-class Node:
+class Point:
     """节点类"""
 
     id: int
@@ -46,7 +46,7 @@ class Node:
         """返回节点坐标"""
         return np.array([self.x, self.y, self.z])
 
-    def distance_to(self, other: "Node") -> float:
+    def distance_to(self, other: "Point") -> float:
         """计算到另一个节点的距离"""
         return np.linalg.norm(self.coordinates() - other.coordinates())
 
@@ -61,13 +61,13 @@ class Beam:
     beam_type: BeamType  # 梁类型
     section: str  # 截面类型
 
-    def length(self, nodes: Dict[int, Node]) -> float:
+    def length(self, nodes: Dict[int, Point]) -> float:
         """计算梁长度"""
         if self.start_node not in nodes or self.end_node not in nodes:
             raise ValueError(f"Node {self.start_node} or {self.end_node} not found")
         return nodes[self.start_node].distance_to(nodes[self.end_node])
 
-    def direction(self, nodes: Dict[int, Node]) -> np.ndarray:
+    def direction(self, nodes: Dict[int, Point]) -> np.ndarray:
         """计算梁的方向向量"""
         start = nodes[self.start_node].coordinates()
         end = nodes[self.end_node].coordinates()
@@ -123,7 +123,7 @@ class StructuralModel:
 
     def __init__(self, params: StructuralParameters):
         self.params = params
-        self.nodes: Dict[int, Node] = {}  # 节点字典 {节点ID: 节点}
+        self.nodes: Dict[int, Point] = {}  # 节点字典 {节点ID: 节点}
         self.node_map = NodeMap()  # 节点坐标到节点ID的映射
         self.beams: Dict[int, Beam] = {}  # 梁构件字典 {梁ID: 梁}
         self.sections: Dict[str, Section] = {}  # 截面属性字典 {截面名: 截面属性}
@@ -194,7 +194,7 @@ class StructuralModel:
 
         # 如果不存在，创建新节点
         node_id = self.node_counter
-        self.nodes[node_id] = Node(id=node_id, x=x, y=y, z=z)
+        self.nodes[node_id] = Point(id=node_id, x=x, y=y, z=z)
         self.node_map.add_node(x, y, z, node_id)
         self.node_counter += 1
         return node_id
