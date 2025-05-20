@@ -92,6 +92,8 @@ python main.py --mode test --config config.yaml
   - [ ] 实现结构层次表示
 - [x] 实现结构到图的转换 (Type 1: 梁为边，连接为节点)
 - [x] 实现结构到图的转换 (Type 2: 梁为节点，连接为边)
+- [x] 为Type 1图表达方式实现到PyG `Data`对象的转换 (节点：坐标, is_support; 边：端点坐标, 截面index, 方向)
+- [x] 为Type 2图表达方式实现到PyG `Data`对象的转换 (节点(梁)：类型,截面,长度,方向,形心; 边(连接)：共享点坐标)
 - [ ] 开发强化学习环境
 - [ ] 集成OpenSees分析
   - [ ] 实现荷载生成

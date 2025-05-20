@@ -2,23 +2,39 @@
 
 # 结构参数
 structural_params:
-  length: 7.2 # 舱体长度 (y方向，米)
+  length: 9.5 # 舱体长度 (y方向，米)
   width: 3.6 # 舱体宽度 (x方向，米)
   height: 3.3 # 舱体高度 (z方向，米)
-  main_beam_spacing: 1.05 # 环向主梁间距 (米)
-  secondary_beam_spacing: 0.5 # 环向次梁间距 (米)
-  brace_spacing: 0.3 # 支撑梁间距 (米)
+  main_beam_spacing: 1.2 # 环向主梁间距 (米)
+  secondary_beam_spacing: 1.2 # 环向次梁间距 (米)
+  brace_spacing: 0.6 # 支撑梁间距 (米)
   windows: # 窗户参数列表
-    - y_position: 3.6 # 窗户中心在y轴的位置 (米)
+    - y_position: 1.2 # 窗户中心在y轴的位置 (米)
       width: 1.2 # 窗户宽度 (米)
       height: 1.0 # 窗户高度 (米)
       bottom_height: 1.0 # 窗户底部离地高度 (米)
-      on_face: "front" # 窗户所在面 ('front', 'back', 'right')
-    - y_position: 3.6
-      width: 1.2
-      height: 1.0
-      bottom_height: 1.0
-      on_face: "right"
+      on_face: "left" # 窗户所在面 ('front', 'back', 'left')
+    - y_position: 1.2 # 窗户中心在y轴的位置 (米)
+      width: 1.2 # 窗户宽度 (米)
+      height: 2.0 # 窗户高度 (米)
+      bottom_height: 1.0 # 窗户底部离地高度 (米)
+      on_face: "left" # 窗户所在面 ('front', 'back', 'left')
+      is_door: true
+    - y_position: 1.8 # 窗户中心在y轴的位置 (米)
+      width: 1.2 # 窗户宽度 (米)
+      height: 1.0 # 窗户高度 (米)
+      bottom_height: 1.0 # 窗户底部离地高度 (米)
+      on_face: "front" # 窗户所在面
+    - y_position: 3.0 # 窗户中心在y轴的位置 (米)
+      width: 1.2 # 窗户宽度 (米)
+      height: 1.0 # 窗户高度 (米)
+      bottom_height: 1.0 # 窗户底部离地高度 (米)
+      on_face: "back" # 窗户所在面
+    - y_position: 4.2 # 窗户中心在y轴的位置 (米)
+      width: 1.2 # 窗户宽度 (米)
+      height: 1.0 # 窗户高度 (米)
+      bottom_height: 1.0 # 窗户底部离地高度 (米)
+      on_face: "back" # 窗户所在面
 
 # 强化学习参数
 rl_params:
