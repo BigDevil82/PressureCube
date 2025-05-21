@@ -32,7 +32,7 @@ class StructuralGraph:
 
         # Graph nodes are the Point objects from the model's node dictionary.
         # Key: node_id (int), Value: ModelPoint object
-        self.nodes: Dict[int, ModelPoint] = self.model.nodes
+        self.nodes: Dict[int, ModelPoint] = self.model.points
 
         # Graph edges are the Beam objects from the model's beam dictionary.
         # Key: beam_id (int), Value: ModelBeam object
@@ -187,8 +187,8 @@ class StructuralGraph:
             u_pyg = model_node_id_to_pyg_idx[start_model_node_id]
             v_pyg = model_node_id_to_pyg_idx[end_model_node_id]
 
-            node_u_obj = self.model.nodes[start_model_node_id]
-            node_v_obj = self.model.nodes[end_model_node_id]
+            node_u_obj = self.model.points[start_model_node_id]
+            node_v_obj = self.model.points[end_model_node_id]
 
             coords_u = [node_u_obj.x, node_u_obj.y, node_u_obj.z]
             coords_v = [node_v_obj.x, node_v_obj.y, node_v_obj.z]
@@ -276,16 +276,16 @@ class BeamAsNodeGraph:
         Populates the adjacency list.
         An edge exists between two beam-nodes if they share a common structural node (Point).
         """
-        if not self.model.nodes:
+        if not self.model.points:
             # No structural nodes, so no connections possible.
             return
 
         # 1. Create a map from structural node ID to a list of beam IDs incident to it.
         node_to_incident_beams: Dict[int, List[int]] = defaultdict(list)
         for beam_id, beam_obj in self.model.beams.items():
-            if beam_obj.start_node in self.model.nodes:
+            if beam_obj.start_node in self.model.points:
                 node_to_incident_beams[beam_obj.start_node].append(beam_id)
-            if beam_obj.end_node in self.model.nodes:
+            if beam_obj.end_node in self.model.points:
                 node_to_incident_beams[beam_obj.end_node].append(beam_id)
 
         # 2. Build the adjacency list for the beam graph.
@@ -386,8 +386,8 @@ class BeamAsNodeGraph:
 
         for beam_id in sorted_beam_ids:
             beam = self.nodes[beam_id]
-            start_node_obj = self.model.nodes[beam.start_node]
-            end_node_obj = self.model.nodes[beam.end_node]
+            start_node_obj = self.model.points[beam.start_node]
+            end_node_obj = self.model.points[beam.end_node]
 
             # Beam Type Index
             beam_type_idx = beam.beam_type.value
@@ -428,14 +428,14 @@ class BeamAsNodeGraph:
         # Re-iterate through shared structural nodes to find connections for edge attributes
         node_to_incident_beams: Dict[int, List[int]] = defaultdict(list)
         for beam_id_iter, beam_obj_iter in self.model.beams.items():
-            if beam_obj_iter.start_node in self.model.nodes:
+            if beam_obj_iter.start_node in self.model.points:
                 node_to_incident_beams[beam_obj_iter.start_node].append(beam_id_iter)
-            if beam_obj_iter.end_node in self.model.nodes:
+            if beam_obj_iter.end_node in self.model.points:
                 node_to_incident_beams[beam_obj_iter.end_node].append(beam_id_iter)
 
         for structural_node_id, incident_beams in node_to_incident_beams.items():
             if len(incident_beams) > 1:
-                shared_point_coords = list(self.model.nodes[structural_node_id].coordinates())
+                shared_point_coords = list(self.model.points[structural_node_id].coordinates())
                 for i in range(len(incident_beams)):
                     for j in range(i + 1, len(incident_beams)):
                         beam1_id = incident_beams[i]

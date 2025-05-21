@@ -154,7 +154,7 @@ def main():
         model = create_structural_model(config)
 
         # 输出结构信息
-        print(f"节点数量: {len(model.nodes)}")
+        print(f"节点数量: {len(model.points)}")
         print(f"梁构件数量: {len(model.beams)}")
         print(f"结构总质量: {model.calculate_mass():.2f} kg")
 
@@ -164,7 +164,7 @@ def main():
 
         for beam in model.beams.values():
             beam_type_counts[beam.beam_type] += 1
-            beam_type_lengths[beam.beam_type] += beam.length(model.nodes)
+            beam_type_lengths[beam.beam_type] += beam.length(model.points)
 
         for beam_type in BeamType:
             print(

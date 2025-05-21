@@ -123,7 +123,7 @@ class StructuralModel:
 
     def __init__(self, params: StructuralParameters):
         self.params = params
-        self.nodes: Dict[int, Point] = {}  # 节点字典 {节点ID: 节点}
+        self.points: Dict[int, Point] = {}  # 节点字典 {节点ID: 节点}
         self.node_map = NodeMap()  # 节点坐标到节点ID的映射
         self.beams: Dict[int, Beam] = {}  # 梁构件字典 {梁ID: 梁}
         self.sections: Dict[str, Section] = {}  # 截面属性字典 {截面名: 截面属性}
@@ -194,7 +194,7 @@ class StructuralModel:
 
         # 如果不存在，创建新节点
         node_id = self.node_counter
-        self.nodes[node_id] = Point(id=node_id, x=x, y=y, z=z)
+        self.points[node_id] = Point(id=node_id, x=x, y=y, z=z)
         self.node_map.add_node(x, y, z, node_id)
         self.node_counter += 1
         return node_id
@@ -202,7 +202,7 @@ class StructuralModel:
     def add_beam(self, start_node: int, end_node: int, beam_type: BeamType, section: str) -> int:
         """添加梁构件并返回梁ID"""
         # 检查节点是否存在
-        if start_node not in self.nodes or end_node not in self.nodes:
+        if start_node not in self.points or end_node not in self.points:
             raise ValueError(f"Node {start_node} or {end_node} not found")
 
         # 检查是否已经存在相同的梁（同样的起止节点和类型）
@@ -228,11 +228,11 @@ class StructuralModel:
             Tuple[np.ndarray, np.ndarray]: (节点特征矩阵, 邻接矩阵)
         """
         # 构建节点特征矩阵
-        n_nodes = len(self.nodes)
+        n_nodes = len(self.points)
         node_features = np.zeros((n_nodes, 10))  # 节点特征:x,y,z坐标,是否为各类梁的端点等
 
         # 节点的基本特征：坐标
-        for node_id, node in self.nodes.items():
+        for node_id, node in self.points.items():
             node_features[node_id, 0] = node.x
             node_features[node_id, 1] = node.y
             node_features[node_id, 2] = node.z
@@ -244,15 +244,15 @@ class StructuralModel:
             node_features[beam.end_node, beam_type_index] = 1
 
             # 标记负载和边界条件（这里简化处理，下部节点固定）
-            if self.nodes[beam.start_node].z < 0.01:  # 接近地面的节点
+            if self.points[beam.start_node].z < 0.01:  # 接近地面的节点
                 node_features[beam.start_node, 7] = 1  # 固定约束
-            if self.nodes[beam.end_node].z < 0.01:  # 接近地面的节点
+            if self.points[beam.end_node].z < 0.01:  # 接近地面的节点
                 node_features[beam.end_node, 7] = 1  # 固定约束
 
             # 上表面受内压力
-            if self.nodes[beam.start_node].z > self.params.height - 0.01:
+            if self.points[beam.start_node].z > self.params.height - 0.01:
                 node_features[beam.start_node, 8] = 1  # 受压
-            if self.nodes[beam.end_node].z > self.params.height - 0.01:
+            if self.points[beam.end_node].z > self.params.height - 0.01:
                 node_features[beam.end_node, 8] = 1  # 受压
 
         # 构建邻接矩阵
@@ -276,7 +276,7 @@ class StructuralModel:
 
         for beam_id, beam in self.beams.items():
             # 获取梁的长度
-            length = beam.length(self.nodes)
+            length = beam.length(self.points)
 
             # 获取截面属性
             section = self.sections.get(beam.section)
@@ -290,7 +290,7 @@ class StructuralModel:
     def generate_grid_mesh(self):
         """使用网格法生成结构，将长直梁拆分成多段小梁段"""
         # 清空现有节点和构件
-        self.nodes = {}
+        self.points = {}
         self.beams = {}
         self.node_counter = 0
         self.beam_counter = 0

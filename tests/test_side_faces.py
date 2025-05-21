@@ -98,8 +98,8 @@ class StructureVisualizer:
     def _plot_beams(self, ax: plt.Axes, face_type: ViewType):
         """绘制梁构件"""
         for beam_id, beam in self.model.beams.items():
-            start_node = self.model.nodes[beam.start_node]
-            end_node = self.model.nodes[beam.end_node]
+            start_node = self.model.points[beam.start_node]
+            end_node = self.model.points[beam.end_node]
 
             if self._is_beam_in_face((start_node, end_node), face_type):
                 x = [start_node.x, end_node.x]
@@ -200,7 +200,7 @@ def test_side_faces():
 
     # 输出结构信息
     print("\n左右侧面测试:")
-    print(f"生成的节点数量: {len(model.nodes)}")
+    print(f"生成的节点数量: {len(model.points)}")
     print(f"生成的梁构件数量: {len(model.beams)}")
     print(f"结构总质量: {model.calculate_mass():.2f} kg")
 
@@ -210,7 +210,7 @@ def test_side_faces():
 
     for beam in model.beams.values():
         beam_type_counts[beam.beam_type] += 1
-        beam_type_lengths[beam.beam_type] += beam.length(model.nodes)
+        beam_type_lengths[beam.beam_type] += beam.length(model.points)
 
     for beam_type in BeamType:
         print(
