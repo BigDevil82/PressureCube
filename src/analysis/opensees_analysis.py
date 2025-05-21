@@ -420,7 +420,7 @@ if __name__ == "__main__":
     analyzer = OpenSeesAnalyzer()
     try:
         analyzer.perform_full_analysis_and_save(
-            model, num_modal_modes=3, output_dir="opensees_test_results_0idx"
+            model, num_modal_modes=6, output_dir="results/opensees_test_results_0idx"
         )
 
     except Exception as e:

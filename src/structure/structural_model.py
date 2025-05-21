@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+from src.structure.section_library import SectionLibrary, SteelSection
 from src.utils.util import is_close
 
 
@@ -16,21 +17,6 @@ class BeamType(Enum):
     MAIN = 1  # 环向主梁
     SECONDARY = 2  # 环向次梁
     BRACE = 3  # 支撑梁
-
-
-@dataclass
-class Section:
-    """截面属性类"""
-
-    name: str
-    area: float  # 截面积 (m^2)
-    Ix: float  # 惯性矩 (m^4)
-    Iy: float
-    Iz: float
-    Zx: float  # 截面模量 (m^3)
-    Zy: float
-    Zz: float
-    density: float = 7850.0  # 材料密度 (kg/m^3)
 
 
 @dataclass
@@ -98,6 +84,10 @@ class StructuralParameters:
     secondary_beam_spacing: float  # 环向次梁间距
     brace_spacing: float  # 支撑梁间距
     windows: List[Window] = field(default_factory=list)  # 窗户参数列表
+    frame_section_index: int = 0  # 方钢索引
+    main_beam_section_index: int = 0  # H型钢索引 (用于主梁)
+    secondary_beam_section_index: int = 0  # H型钢索引 (用于次梁)
+    brace_section_index: int = 0  # 槽钢索引
 
 
 class NodeMap:
@@ -121,69 +111,70 @@ class NodeMap:
 class StructuralModel:
     """舱体结构模型类"""
 
-    def __init__(self, params: StructuralParameters):
+    def __init__(self, params: StructuralParameters, section_library: SectionLibrary):
         self.params = params
+        self.section_library = section_library
         self.points: Dict[int, Point] = {}  # 节点字典 {节点ID: 节点}
         self.node_map = NodeMap()  # 节点坐标到节点ID的映射
         self.beams: Dict[int, Beam] = {}  # 梁构件字典 {梁ID: 梁}
-        self.sections: Dict[str, Section] = {}  # 截面属性字典 {截面名: 截面属性}
+        self.sections: Dict[str, SteelSection] = {}  # 截面属性字典 {截面名: 截面属性}
         self.node_counter = 0  # 节点ID计数器
         self.beam_counter = 0  # 梁ID计数器
         self._initialize_sections()  # 初始化截面属性
 
     def _initialize_sections(self):
         """初始化默认截面属性"""
-        # 方钢管 □150×6
-        self.sections["FRAME"] = Section(
-            name="□150×6",
-            area=3.384e-3,  # m^2
-            Ix=1.164e-5,  # m^4
-            Iy=1.164e-5,
-            Iz=2.328e-5,
-            Zx=1.55e-4,  # m^3
-            Zy=1.55e-4,
-            Zz=1.55e-4,
-            density=7850.0,  # kg/m^3
-        )
+        # FRAME section
+        frame_sec = self.section_library.get_section("方钢", self.params.frame_section_index)
+        if frame_sec:
+            self.sections["FRAME"] = frame_sec
+        else:
+            # Fallback or error handling if section not found
+            print(
+                f"Warning: Frame section (方钢, index {self.params.frame_section_index}) not found in library. Using default or placeholders."
+            )
+            # Add a default placeholder if necessary, or raise an error
+            self.sections["FRAME"] = SteelSection(
+                name="Default-Frame", area=1e-3, Ix=1e-5, Iy=1e-5, Iz=1e-5, Zx=1e-4, Zy=1e-4, Zz=1e-4
+            )
 
-        # H型钢 HW150×150
-        self.sections["MAIN"] = Section(
-            name="HW150×150",
-            area=3.982e-3,  # m^2
-            Ix=1.383e-5,  # m^4
-            Iy=4.763e-5,
-            Iz=1.383e-5,
-            Zx=1.842e-4,  # m^3
-            Zy=6.35e-4,
-            Zz=1.842e-4,
-            density=7850.0,  # kg/m^3
-        )
+        # MAIN beam section
+        main_beam_sec = self.section_library.get_section("H型钢", self.params.main_beam_section_index)
+        if main_beam_sec:
+            self.sections["MAIN"] = main_beam_sec
+        else:
+            print(
+                f"Warning: Main beam section (H型钢, index {self.params.main_beam_section_index}) not found. Using default."
+            )
+            self.sections["MAIN"] = SteelSection(
+                name="Default-Main", area=1e-3, Ix=1e-5, Iy=1e-5, Iz=1e-5, Zx=1e-4, Zy=1e-4, Zz=1e-4
+            )
 
-        # H型钢 HN100×50
-        self.sections["SECONDARY"] = Section(
-            name="HN100×50",
-            area=1.184e-3,  # m^2
-            Ix=1.32e-6,  # m^4
-            Iy=1.97e-6,
-            Iz=1.32e-6,
-            Zx=2.63e-5,  # m^3
-            Zy=3.94e-5,
-            Zz=2.63e-5,
-            density=7850.0,  # kg/m^3
+        # SECONDARY beam section
+        secondary_beam_sec = self.section_library.get_section(
+            "H型钢", self.params.secondary_beam_section_index
         )
+        if secondary_beam_sec:
+            self.sections["SECONDARY"] = secondary_beam_sec
+        else:
+            print(
+                f"Warning: Secondary beam section (H型钢, index {self.params.secondary_beam_section_index}) not found. Using default."
+            )
+            self.sections["SECONDARY"] = SteelSection(
+                name="Default-Secondary", area=1e-3, Ix=1e-5, Iy=1e-5, Iz=1e-5, Zx=1e-4, Zy=1e-4, Zz=1e-4
+            )
 
-        # 槽钢 C10
-        self.sections["BRACE"] = Section(
-            name="C10",
-            area=1.31e-3,  # m^2
-            Ix=1.5e-6,  # m^4
-            Iy=2.36e-5,
-            Iz=1.5e-6,
-            Zx=3.0e-5,  # m^3
-            Zy=4.72e-4,
-            Zz=3.0e-5,
-            density=7850.0,  # kg/m^3
-        )
+        # BRACE section
+        brace_sec = self.section_library.get_section("C型钢", self.params.brace_section_index)
+        if brace_sec:
+            self.sections["BRACE"] = brace_sec
+        else:
+            print(
+                f"Warning: Brace section (C型钢, index {self.params.brace_section_index}) not found. Using default."
+            )
+            self.sections["BRACE"] = SteelSection(
+                name="Default-Brace", area=1e-3, Ix=1e-5, Iy=1e-5, Iz=1e-5, Zx=1e-4, Zy=1e-4, Zz=1e-4
+            )
 
     def add_node(self, x: float, y: float, z: float) -> int:
         """添加节点并返回节点ID"""
@@ -262,13 +253,6 @@ class StructuralModel:
             adjacency_matrix[beam.end_node, beam.start_node] = 1  # 无向图
 
         return node_features, adjacency_matrix
-
-    def update_sections(self, section_params: Dict):
-        """更新构件截面"""
-        for section_name, params in section_params.items():
-            if section_name in self.sections:
-                for key, value in params.items():
-                    setattr(self.sections[section_name], key, value)
 
     def calculate_mass(self) -> float:
         """计算结构总质量"""

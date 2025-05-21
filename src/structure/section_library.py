@@ -1,0 +1,244 @@
+import json
+from dataclasses import dataclass, field
+from typing import Dict, List, Union
+
+# Conversion factors
+MM_TO_M = 0.001
+CM_TO_M = 0.01
+CM2_TO_M2 = CM_TO_M * CM_TO_M
+CM3_TO_M3 = CM_TO_M * CM_TO_M * CM_TO_M
+CM4_TO_M4 = CM_TO_M * CM_TO_M * CM_TO_M * CM_TO_M
+KG_M_TO_N_M3 = 9.80665  # Assuming g = 9.80665 m/s^2 for density calculation from linear weight
+
+
+@dataclass
+class SteelSection:
+    """基本截面属性"""
+
+    name: str
+    area: float  # 截面面积 (m^2)
+    Ix: float  # 惯性矩 (m^4)
+    Iy: float
+    Iz: float  # 扭转常数 J (m^4) , H型钢和方钢用Iz表示，槽钢用I表示
+    Zx: float  # 截面模量 (m^3)
+    Zy: float
+    Zz: float  # 扭转模量 Wt (m^3), H型钢和方钢用Zz表示
+    density: float  # 材料密度 (kg/m^3) - Removed default, will be set during instantiation
+
+
+@dataclass
+class RectangularTubeSection(SteelSection):
+    """方钢管截面属性"""
+
+    B: float  # 边长 (m)
+    t: float  # 壁厚 (m)
+
+
+@dataclass
+class HSection(SteelSection):
+    """H型钢截面属性"""
+
+    H: float  # 高度 (m)
+    B: float  # 宽度 (m)
+    t_web: float  # 腹板厚度 (m) - JSON中用 t
+    t_flange: float  # 翼缘厚度 (m) - JSON中用 l
+
+
+@dataclass
+class CSection(SteelSection):
+    """槽钢截面属性"""
+
+    H: float  # 高度 (m)
+    B: float  # 宽度 (m)
+    t_web: float  # 腹板厚度 (m) -  没有直接提供，但可以从规格中提取或估算
+    # 槽钢的惯性矩和截面模量在JSON中没有严格区分x,y轴，需要根据实际情况调整
+    # Iz for CSection corresponds to "扭转常数I" if available, or approximated
+    # Zz for CSection corresponds to "扭转常数C" if available, or approximated
+
+
+class SectionLibrary:
+    """截面库类"""
+
+    def __init__(self, file_path: str = "src/data/steel_sections.json"):
+        self.sections: Dict[str, List[Union[RectangularTubeSection, HSection, CSection]]] = {
+            "方钢": [],
+            "H型钢": [],
+            "C型钢": [],
+        }
+        self.load_sections(file_path)
+
+    def load_sections(self, file_path: str):
+        """从JSON文件加载截面数据"""
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            print(f"Error: Section file not found at {file_path}")
+            return
+        except json.JSONDecodeError:
+            print(f"Error: Could not decode JSON from {file_path}")
+            return
+
+        # 方钢
+        for item in data.get("方钢", []):
+            try:
+                name = f"方钢-{item['边长B mm']}x{item['壁厚t mm']}"
+                area = item["截面面积A cm²"] * CM2_TO_M2
+                Ix = item["惯性矩Ix=Iy cm⁴"] * CM4_TO_M4
+                Iy = item["惯性矩Ix=Iy cm⁴"] * CM4_TO_M4  # Assuming square section Ix = Iy
+                Iz = item["扭转常数I cm"] * CM4_TO_M4  # 扭转惯性矩
+                Zx = item["截面模数Wx=Wy cm³"] * CM3_TO_M3
+                Zy = item["截面模数Wx=Wy cm³"] * CM3_TO_M3  # Assuming square section Zx = Zy
+                Zz = item["扭转常数C cm³"] * CM3_TO_M3  # 扭转抵抗矩
+                density = 7850.0  # Default steel density
+
+                section = RectangularTubeSection(
+                    name=name,
+                    area=area,
+                    Ix=Ix,
+                    Iy=Iy,
+                    Iz=Iz,
+                    Zx=Zx,
+                    Zy=Zy,
+                    Zz=Zz,
+                    density=density,
+                    B=item["边长B mm"] * MM_TO_M,
+                    t=item["壁厚t mm"] * MM_TO_M,
+                )
+                self.sections["方钢"].append(section)
+            except KeyError as e:
+                print(f"方钢 section data missing key: {e} in item: {item}")
+            except Exception as e:
+                print(f"Error processing 方钢 section {item.get('name', 'Unknown')}: {e}")
+
+        # H型钢
+        for item in data.get("H型钢", []):
+            try:
+                name = item["H-型号(高度×宽度) mm×mm"]
+                area = item["截面面积cm²"] * CM2_TO_M2
+                Ix = item["惯性矩Ix cm⁴"] * CM4_TO_M4
+                Iy = item["惯性矩Iy cm⁴"] * CM4_TO_M4
+                # H型钢通常没有直接的Iz (扭转常数) 和 Zz (扭转模量) 在这种标准表中，
+                # 需要通过公式估算或从更详细的型钢手册获取。这里用Iy和Wy近似或设为0.
+                # Iz_approx = Iy # Placeholder, common approximation but not accurate for torsion
+                # Zz_approx = item["截面模数Wy cm³"] * CM3_TO_M3 # Placeholder
+
+                Iz = Iy  # Placeholder or requires specific calculation if critical
+                Zx = item["截面模数Wx cm³"] * CM3_TO_M3
+                Zy = item["截面模数Wy cm³"] * CM3_TO_M3
+                Zz = Zy  # Placeholder or requires specific calculation for torsional modulus
+
+                density = 7850.0
+
+                section = HSection(
+                    name=name,
+                    area=area,
+                    Ix=Ix,
+                    Iy=Iy,
+                    Iz=Iz,  # Placeholder for torsional constant
+                    Zx=Zx,
+                    Zy=Zy,
+                    Zz=Zz,  # Placeholder for torsional section modulus
+                    density=density,
+                    H=item["截面公称尺寸H mm"] * MM_TO_M,
+                    B=item["截面公称尺寸B mm"] * MM_TO_M,
+                    t_web=item["截面公称尺寸t mm"] * MM_TO_M,  # Assuming 't' is t_web
+                    t_flange=item["截面公称尺寸l mm"] * MM_TO_M,  # Assuming 'l' is t_flange
+                )
+                self.sections["H型钢"].append(section)
+            except KeyError as e:
+                print(f"H型钢 section data missing key: {e} in item: {item}")
+            except Exception as e:
+                print(f"Error processing H型钢 section {item.get('H-型号(高度×宽度) mm×mm', 'Unknown')}: {e}")
+
+        # C型钢
+        for item in data.get("C型钢", []):
+            try:
+                # C型钢的JSON结构比较简单，很多参数需要推断或从规格中解析
+                # "规格": "80×40×20×2.5" -> H x B x C x t
+                spec_parts = item["规格"].split("×")
+                H_val = float(spec_parts[0])
+                B_val = float(spec_parts[1])
+                # t_val = float(spec_parts[3]) # Wall thickness
+
+                name = f"C型钢-{item['规格']}"
+                # C型钢的详细截面参数（Area, Ix, Iy, Zx, Zy）通常需要从型钢手册或计算获得
+                # JSON只提供了重量，我们可以估算面积，但其他参数不直接提供。
+                # For demonstration, we'll set them to placeholder values.
+                # In a real application, these would need to be accurately sourced.
+                linear_weight = item["重量(kg/m)"]
+                estimated_area = linear_weight / 7850.0  # kg/m / (kg/m^3) = m^2
+
+                # Placeholder values for C-section properties other than area
+                # These would typically come from a detailed section properties table
+                # For C sections, Ix is usually the major axis, Iy the minor.
+                # Iz (torsional constant) and Zz (torsional modulus) are complex for C-sections.
+                Ix_placeholder = estimated_area * (H_val * MM_TO_M) ** 2 / 12  # Very rough approx.
+                Iy_placeholder = estimated_area * (B_val * MM_TO_M) ** 2 / 12  # Very rough approx.
+                Iz_placeholder = Iy_placeholder  # Even rougher placeholder for torsion
+                Zx_placeholder = Ix_placeholder / (H_val * MM_TO_M / 2)
+                Zy_placeholder = Iy_placeholder / (B_val * MM_TO_M / 2)
+                Zz_placeholder = Zy_placeholder  # Rough placeholder for torsion
+
+                section = CSection(
+                    name=name,
+                    area=estimated_area,
+                    Ix=Ix_placeholder,  # Placeholder - requires accurate data
+                    Iy=Iy_placeholder,  # Placeholder - requires accurate data
+                    Iz=Iz_placeholder,  # Placeholder for torsional constant
+                    Zx=Zx_placeholder,  # Placeholder - requires accurate data
+                    Zy=Zy_placeholder,  # Placeholder - requires accurate data
+                    Zz=Zz_placeholder,  # Placeholder for torsional modulus
+                    density=7850.0,
+                    H=H_val * MM_TO_M,
+                    B=B_val * MM_TO_M,
+                    t_web=(
+                        float(spec_parts[3]) * MM_TO_M if len(spec_parts) > 3 else 0.0025
+                    ),  # Assuming last part is thickness
+                )
+                self.sections["C型钢"].append(section)
+            except KeyError as e:
+                print(f"C型钢 section data missing key: {e} in item: {item}")
+            except Exception as e:
+                print(f"Error processing C型钢 section {item.get('规格', 'Unknown')}: {e}")
+
+    def get_section(
+        self, section_type: str, index: int
+    ) -> Union[RectangularTubeSection, HSection, CSection, None]:
+        """获取指定类型和索引的截面"""
+        if section_type in self.sections and 0 <= index < len(self.sections[section_type]):
+            return self.sections[section_type][index]
+        print(f"Warning: Section type '{section_type}' at index {index} not found.")
+        return None
+
+
+# Example Usage (optional, for testing)
+if __name__ == "__main__":
+    library = SectionLibrary(file_path="src/data/steel_sections.json")  # Adjust path for standalone run
+
+    print("Loaded 方钢 sections:")
+    for sec in library.sections["方钢"]:
+        print(
+            f"  {sec.name}: Area={sec.area:.2e} m^2, Ix={sec.Ix:.2e} m^4, Iy={sec.Iy:.2e} m^4, Iz={sec.Iz:.2e} m^4, Zx={sec.Zx:.2e} m^3, Zy={sec.Zy:.2e} m^3, Zz={sec.Zz:.2e} m^3"
+        )
+
+    print("Loaded H型钢 sections:")
+    for sec in library.sections["H型钢"]:
+        print(
+            f"  {sec.name}: Area={sec.area:.2e} m^2, Ix={sec.Ix:.2e} m^4, Iy={sec.Iy:.2e} m^4, Iz={sec.Iz:.2e} m^4, Zx={sec.Zx:.2e} m^3, Zy={sec.Zy:.2e} m^3, Zz={sec.Zz:.2e} m^3"
+        )
+
+    print("Loaded C型钢 sections:")
+    for sec in library.sections["C型钢"]:
+        print(
+            f"  {sec.name}: Area={sec.area:.2e} m^2, Ix={sec.Ix:.2e} m^4, Iy={sec.Iy:.2e} m^4, Iz={sec.Iz:.2e} m^4, Zx={sec.Zx:.2e} m^3, Zy={sec.Zy:.2e} m^3, Zz={sec.Zz:.2e} m^3"
+        )
+
+    # Test get_section
+    frame_section = library.get_section("方钢", 0)
+    if frame_section:
+        print(f"Selected frame section: {frame_section.name}")
+
+    main_beam_section = library.get_section("H型钢", 0)  # Assuming H型钢 has at least one entry
+    if main_beam_section:
+        print(f"Selected main beam section: {main_beam_section.name}")

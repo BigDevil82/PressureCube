@@ -2,6 +2,7 @@ import os
 
 import yaml
 
+from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import StructuralModel, StructuralParameters, Window
 
 
@@ -49,6 +50,7 @@ def create_structural_model(config):
             windows.append(Window(**window_dict))
 
     # 创建结构参数对象
+    section_library = SectionLibrary()
     params = StructuralParameters(
         length=params_dict["length"],
         width=params_dict["width"],
@@ -60,7 +62,7 @@ def create_structural_model(config):
     )
 
     # 创建结构模型并生成网格
-    model = StructuralModel(params)
+    model = StructuralModel(params, section_library)
 
     # 使用网格化建模方法
     model.generate_grid_mesh()
