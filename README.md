@@ -9,6 +9,7 @@
 - OpenSees结构分析集成
 - 自动约束校核
 - 多目标优化（质量最小化、满足强度刚度要求）
+- 智能钢板蒙皮生成
 
 ## 系统要求
 
@@ -51,13 +52,18 @@ python main.py --mode train --config config.yaml
 python main.py --mode test --config config.yaml
 ```
 
+5. 测试钢板生成功能：
+```bash
+python test_improved_plates.py
+```
+
 ## 项目结构
 
 ```
 .
 ├── src/
 │   ├── structure/         # 结构建模
-│   │   └── structural_model.py  # 参数化结构模型
+│   │   └── structural_model.py  # 参数化结构模型（含钢板生成）
 │   ├── graph/             # 图神经网络
 │   │   └── hebg.py        # 层次图嵌入模型
 │   │   └── structural_graph.py # 结构图表示模块
@@ -72,6 +78,7 @@ python main.py --mode test --config config.yaml
 │   ├── test_vertical_faces.py    # 前后立面测试
 │   └── test_side_faces.py        # 左右侧面测试
 ├── data/                  # 数据文件
+├── test_improved_plates.py # 钢板生成功能测试
 ├── main.py                # 主程序
 ├── config.yaml            # 配置文件
 └── requirements.txt       # 项目依赖
@@ -87,6 +94,7 @@ python main.py --mode test --config config.yaml
   - [x] 实现上下平面的智能网格生成
   - [x] 实现前后立面的智能网格生成，包含窗户适配
   - [x] 实现左右侧面的智能网格生成，支持窗户和门的适配
+  - [x] **智能钢板蒙皮生成系统**
 - [x] 实现HEBG层次图嵌入
   - [x] 完成分层图数据结构 (`BeamAsNodeGraph`)
   - [x] 实现层次化池化（Pooling）和反池化（Unpooling）操作
@@ -114,6 +122,62 @@ python main.py --mode test --config config.yaml
 2. **构件分段**：将长直梁按照与其他构件的交点分段，确保节点处构件的连接关系正确
 3. **构件类型划分**：根据构件在结构中的位置和功能，自动分配为框架梁、主梁、次梁或支撑梁
 4. **动态网格**：根据主梁和次梁间距参数，动态生成合理的网格布局
+
+### 智能钢板蒙皮生成系统
+
+**新增功能**：在生成梁构件的基础上，系统现在能够自动识别并生成钢板蒙皮，形成完整的舱体外壳。
+
+#### 核心特点
+
+1. **基于梁栅格的板生成**：
+   - 不是简单基于节点生成板，而是基于实际的梁构件布局
+   - 确保每块板的四条边都有对应的梁构件支撑
+   - 避免在没有梁的区域误生成钢板
+
+2. **智能网格识别**：
+   - 针对每个面（顶面、底面、前面、后面、左面、右面）分别处理
+   - 自动识别该面上的所有梁构件并按方向分类
+   - 基于正交梁构件形成的真实栅格确定板的位置
+
+3. **窗户区域避让**：
+   - 自动检测窗户和门的位置
+   - 在窗户区域不生成钢板
+   - 保持结构完整性的同时确保开口正确
+
+4. **节点顺序优化**：
+   - 所有钢板的节点按逆时针方向排列
+   - 不同面采用不同的排序策略，确保从外侧观看时的一致性
+   - 便于后续的渲染和分析
+
+#### 技术实现
+
+1. **Plate类设计**：
+   ```python
+   @dataclass
+   class Plate:
+       id: int
+       nodes: List[int]  # 4个节点ID，按逆时针方向排列
+       on_face: str      # 所在面
+       thickness: float  # 板厚，默认10mm
+   ```
+
+2. **智能生成算法**：
+   - `_generate_face_plates()`: 基于梁构件确定网格坐标线
+   - `_check_rectangle_has_beams()`: 验证矩形四边是否都有梁支撑
+   - `_is_in_window_area()`: 检查是否与窗户区域重叠
+   - `_order_nodes_counterclockwise()`: 按逆时针方向排序节点
+
+3. **质量计算集成**：
+   - 在结构总质量计算中包含钢板质量
+   - 考虑板厚、面积和钢材密度
+   - 提供详细的质量分解
+
+#### 应用效果
+
+- **准确性**：确保钢板只在有梁支撑的区域生成
+- **完整性**：自动处理复杂的窗户和门洞配置
+- **高效性**：简洁的算法实现，避免代码臃肿
+- **可扩展性**：易于添加新的板类型和特殊处理逻辑
 
 ### 前后立面建模
 

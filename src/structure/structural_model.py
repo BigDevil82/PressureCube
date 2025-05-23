@@ -62,6 +62,37 @@ class Beam:
 
 
 @dataclass
+class Plate:
+    """钢板类"""
+
+    id: int
+    nodes: List[int]  # 4个节点ID，按逆时针方向排列
+    on_face: str  # 所在面 ('top', 'bottom', 'front', 'back', 'left', 'right')
+    thickness: float = 0.01  # 板厚，默认10mm
+
+    def area(self, points: Dict[int, Point]) -> float:
+        """计算板的面积"""
+        if len(self.nodes) != 4:
+            raise ValueError("Plate must have exactly 4 nodes")
+
+        # 获取四个节点的坐标
+        coords = [points[node_id].coordinates() for node_id in self.nodes]
+
+        # 计算对角线向量
+        diag1 = coords[2] - coords[0]  # 第1个对角线
+        diag2 = coords[3] - coords[1]  # 第2个对角线
+
+        # 四边形面积 = 0.5 * |对角线1 × 对角线2|
+        cross_product = np.cross(diag1, diag2)
+        if isinstance(cross_product, np.ndarray):
+            area = 0.5 * np.linalg.norm(cross_product)
+        else:
+            area = 0.5 * abs(cross_product)
+
+        return area
+
+
+@dataclass
 class Window:
     """窗户类"""
 
@@ -117,9 +148,11 @@ class StructuralModel:
         self.points: Dict[int, Point] = {}  # 节点字典 {节点ID: 节点}
         self.node_map = NodeMap()  # 节点坐标到节点ID的映射
         self.beams: Dict[int, Beam] = {}  # 梁构件字典 {梁ID: 梁}
+        self.plates: Dict[int, Plate] = {}  # 钢板字典 {板ID: 钢板}
         self.sections: Dict[str, SteelSection] = {}  # 截面属性字典 {截面名: 截面属性}
         self.node_counter = 0  # 节点ID计数器
         self.beam_counter = 0  # 梁ID计数器
+        self.plate_counter = 0  # 钢板ID计数器
         self._initialize_sections()  # 初始化截面属性
 
     def _initialize_sections(self):
@@ -212,6 +245,28 @@ class StructuralModel:
         self.beam_counter += 1
         return beam_id
 
+    def add_plate(self, nodes: List[int], on_face: str, thickness: float = 0.01) -> int:
+        """添加钢板并返回钢板ID
+
+        Args:
+            nodes: 4个节点ID，按逆时针方向排列
+            on_face: 所在面 ('top', 'bottom', 'front', 'back', 'left', 'right')
+            thickness: 板厚，默认10mm
+        """
+        if len(nodes) != 4:
+            raise ValueError("Plate must have exactly 4 nodes")
+
+        # 检查节点是否存在
+        for node_id in nodes:
+            if node_id not in self.points:
+                raise ValueError(f"Node {node_id} not found")
+
+        # 创建新钢板
+        plate_id = self.plate_counter
+        self.plates[plate_id] = Plate(id=plate_id, nodes=nodes, on_face=on_face, thickness=thickness)
+        self.plate_counter += 1
+        return plate_id
+
     def get_structure_graph(self) -> Tuple[np.ndarray, np.ndarray]:
         """获取结构图表示
 
@@ -258,6 +313,7 @@ class StructuralModel:
         """计算结构总质量"""
         total_mass = 0.0
 
+        # 计算梁构件质量
         for beam_id, beam in self.beams.items():
             # 获取梁的长度
             length = beam.length(self.points)
@@ -269,15 +325,41 @@ class StructuralModel:
                 mass = section.area * length * section.density
                 total_mass += mass
 
+        # 计算钢板质量
+        steel_density = 7850.0  # kg/m³，钢材密度
+        for plate_id, plate in self.plates.items():
+            # 计算板的面积
+            area = plate.area(self.points)
+            # 计算板的质量: 面积 * 厚度 * 密度
+            mass = area * plate.thickness * steel_density
+            total_mass += mass
+
         return total_mass
+
+    def get_plate_statistics(self) -> Dict[str, int]:
+        """获取钢板统计信息
+
+        Returns:
+            Dict[str, int]: 各面钢板数量统计
+        """
+        stats = {"top": 0, "bottom": 0, "front": 0, "back": 0, "left": 0, "right": 0, "total": 0}
+
+        for plate in self.plates.values():
+            if plate.on_face in stats:
+                stats[plate.on_face] += 1
+            stats["total"] += 1
+
+        return stats
 
     def generate_grid_mesh(self):
         """使用网格法生成结构，将长直梁拆分成多段小梁段"""
         # 清空现有节点和构件
         self.points = {}
         self.beams = {}
+        self.plates = {}
         self.node_counter = 0
         self.beam_counter = 0
+        self.plate_counter = 0
 
         # 生成水平面的网格
         self._generate_horizontal_grids()
@@ -287,6 +369,9 @@ class StructuralModel:
 
         # 生成左右侧面的网格
         self._generate_side_grids()
+
+        # 生成钢板
+        self._generate_plates()
 
     def _generate_horizontal_grids(self):
         """生成上下平面的网格布置"""
@@ -384,10 +469,10 @@ class StructuralModel:
             win_top = -1
 
         # 生成左侧面的网格
-        self._generate_side_face_grid(0, left_windows, win_bottom, win_top)
+        self._generate_side_face_grid(0, windows, win_bottom, win_top)
 
         # 生成右侧面的网格
-        self._generate_side_face_grid(length, right_windows, win_bottom, win_top, has_door=True)
+        self._generate_side_face_grid(length, windows, win_bottom, win_top, has_door=True)
 
     def _generate_vertical_face_grid(self, x_coord: float, windows: List[Window]):
         """在指定x坐标位置生成前/后立面的网格
@@ -747,3 +832,203 @@ class StructuralModel:
                     raise ValueError(f"Invalid y coordinate: {y}")
 
                 self.add_beam(start_node, end_node, beam_type, section)
+
+    def _generate_plates(self):
+        """生成钢板"""
+        # 获取结构的几何参数
+        length = self.params.length
+        width = self.params.width
+        height = self.params.height
+
+        # 生成底面钢板 (z = 0)
+        self._generate_face_plates(fixed_coord="z", fixed_value=0.0, face_name="bottom")
+
+        # 生成顶面钢板 (z = height)
+        self._generate_face_plates(fixed_coord="z", fixed_value=height, face_name="top")
+
+        # 生成前面钢板 (x = 0)
+        self._generate_face_plates(fixed_coord="x", fixed_value=0.0, face_name="front")
+
+        # 生成后面钢板 (x = width)
+        self._generate_face_plates(fixed_coord="x", fixed_value=width, face_name="back")
+
+        # 生成左侧面钢板 (y = 0)
+        self._generate_face_plates(fixed_coord="y", fixed_value=0.0, face_name="left")
+
+        # 生成右侧面钢板 (y = length)
+        self._generate_face_plates(fixed_coord="y", fixed_value=length, face_name="right")
+
+    def _generate_face_plates(self, fixed_coord: str, fixed_value: float, face_name: str):
+        """在指定面上生成钢板
+
+        Args:
+            fixed_coord: 固定坐标轴 ('x', 'y', 'z')
+            fixed_value: 固定坐标值
+            face_name: 面名称 ('top', 'bottom', 'front', 'back', 'left', 'right')
+        """
+        # 获取该面上的所有梁构件
+        face_beams = []
+        for beam_id, beam in self.beams.items():
+            start_node = self.points[beam.start_node]
+            end_node = self.points[beam.end_node]
+
+            # 检查梁是否在该面上
+            if fixed_coord == "x":
+                if abs(start_node.x - fixed_value) < 1e-6 and abs(end_node.x - fixed_value) < 1e-6:
+                    face_beams.append(beam)
+            elif fixed_coord == "y":
+                if abs(start_node.y - fixed_value) < 1e-6 and abs(end_node.y - fixed_value) < 1e-6:
+                    face_beams.append(beam)
+            elif fixed_coord == "z":
+                if abs(start_node.z - fixed_value) < 1e-6 and abs(end_node.z - fixed_value) < 1e-6:
+                    face_beams.append(beam)
+
+        if len(face_beams) < 2:
+            return  # 梁数量不够，无法形成栅格
+
+        # 根据不同面的方向分类梁构件
+        coord1_lines = set()  # 第一方向的坐标线
+        coord2_lines = set()  # 第二方向的坐标线
+
+        for beam in face_beams:
+            start_node = self.points[beam.start_node]
+            end_node = self.points[beam.end_node]
+
+            if fixed_coord == "z":  # 水平面 (xy平面)
+                # 检查梁的方向
+                if abs(start_node.x - end_node.x) < 1e-6:  # 沿y方向的梁
+                    coord1_lines.add(round(start_node.x, 6))
+                elif abs(start_node.y - end_node.y) < 1e-6:  # 沿x方向的梁
+                    coord2_lines.add(round(start_node.y, 6))
+
+            elif fixed_coord == "x":  # 前后面 (yz平面)
+                # 检查梁的方向
+                if abs(start_node.y - end_node.y) < 1e-6:  # 沿z方向的梁
+                    coord1_lines.add(round(start_node.y, 6))
+                elif abs(start_node.z - end_node.z) < 1e-6:  # 沿y方向的梁
+                    coord2_lines.add(round(start_node.z, 6))
+
+            elif fixed_coord == "y":  # 左右面 (xz平面)
+                # 检查梁的方向
+                if abs(start_node.x - end_node.x) < 1e-6:  # 沿z方向的梁
+                    coord1_lines.add(round(start_node.x, 6))
+                elif abs(start_node.z - end_node.z) < 1e-6:  # 沿x方向的梁
+                    coord2_lines.add(round(start_node.z, 6))
+
+        # 转换为排序列表
+        coord1_values = sorted(list(coord1_lines))
+        coord2_values = sorted(list(coord2_lines))
+
+        if len(coord1_values) < 2 or len(coord2_values) < 2:
+            return  # 坐标线数量不够，无法形成栅格
+
+        # 创建坐标到节点ID的映射
+        coord_to_node = {}
+        for node_id, node in self.points.items():
+            if fixed_coord == "x" and abs(node.x - fixed_value) < 1e-6:
+                coord_to_node[(round(node.y, 6), round(node.z, 6))] = node_id
+            elif fixed_coord == "y" and abs(node.y - fixed_value) < 1e-6:
+                coord_to_node[(round(node.x, 6), round(node.z, 6))] = node_id
+            elif fixed_coord == "z" and abs(node.z - fixed_value) < 1e-6:
+                coord_to_node[(round(node.x, 6), round(node.y, 6))] = node_id
+
+        # 生成矩形网格单元
+        for i in range(len(coord1_values) - 1):
+            for j in range(len(coord2_values) - 1):
+                # 获取矩形的四个角节点坐标
+                c1_min, c1_max = coord1_values[i], coord1_values[i + 1]
+                c2_min, c2_max = coord2_values[j], coord2_values[j + 1]
+
+                # 检查四个角节点是否都存在
+                corners = [(c1_min, c2_min), (c1_max, c2_min), (c1_max, c2_max), (c1_min, c2_max)]
+
+                corner_nodes = []
+                for corner in corners:
+                    if corner in coord_to_node:
+                        corner_nodes.append(coord_to_node[corner])
+                    else:
+                        corner_nodes = []  # 如果任一角节点不存在，则跳过
+                        break
+
+                if len(corner_nodes) == 4:
+                    # 检查是否在窗户区域内，如果是则跳过
+                    if self._is_in_window_area(face_name, c1_min, c1_max, c2_min, c2_max, fixed_coord):
+                        continue
+
+                    # 按逆时针方向排列节点
+                    ordered_nodes = self._order_nodes_counterclockwise(corner_nodes, face_name, fixed_coord)
+
+                    # 创建钢板
+                    self.add_plate(ordered_nodes, face_name)
+
+    def _is_in_window_area(
+        self, face_name: str, c1_min: float, c1_max: float, c2_min: float, c2_max: float, fixed_coord: str
+    ) -> bool:
+        """检查矩形区域是否在窗户范围内"""
+        for window in self.params.windows:
+            if window.on_face != face_name:
+                continue
+
+            # 根据不同的面确定窗户的边界
+            if face_name in ["front", "back"]:
+                # 前后面：坐标1是y，坐标2是z
+                win_left = window.y_position - window.width / 2
+                win_right = window.y_position + window.width / 2
+                win_bottom = window.bottom_height
+                win_top = window.bottom_height + window.height
+
+                # 检查矩形是否与窗户区域重叠
+                if c1_min < win_right and c1_max > win_left and c2_min < win_top and c2_max > win_bottom:
+                    return True
+
+            elif face_name in ["left", "right"]:
+                # 左右面：坐标1是x，坐标2是z
+                win_left = window.y_position - window.width / 2
+                win_right = window.y_position + window.width / 2
+                win_bottom = 0 if window.is_door else window.bottom_height
+                win_top = window.bottom_height + window.height
+
+                # 检查矩形是否与窗户区域重叠
+                if c1_min < win_right and c1_max > win_left and c2_min < win_top and c2_max > win_bottom:
+                    return True
+
+        return False
+
+    def _order_nodes_counterclockwise(
+        self, corner_nodes: List[int], face_name: str, fixed_coord: str
+    ) -> List[int]:
+        """按逆时针方向排列节点"""
+        # 获取节点坐标
+        coords = [(node_id, self.points[node_id]) for node_id in corner_nodes]
+
+        if fixed_coord == "z":  # 水平面
+            # 按x, y坐标排序
+            coords.sort(key=lambda x: (x[1].x, x[1].y))
+            # 逆时针顺序：左下 -> 右下 -> 右上 -> 左上
+            if face_name == "top":
+                # 从上往下看，逆时针
+                return [coords[0][0], coords[1][0], coords[3][0], coords[2][0]]
+            else:  # bottom
+                # 从下往上看，逆时针
+                return [coords[0][0], coords[2][0], coords[3][0], coords[1][0]]
+
+        elif fixed_coord == "x":  # 前后面
+            # 按y, z坐标排序
+            coords.sort(key=lambda x: (x[1].y, x[1].z))
+            # 从外侧看，逆时针
+            if face_name == "front":
+                return [coords[0][0], coords[2][0], coords[3][0], coords[1][0]]
+            else:  # back
+                return [coords[0][0], coords[1][0], coords[3][0], coords[2][0]]
+
+        elif fixed_coord == "y":  # 左右面
+            # 按x, z坐标排序
+            coords.sort(key=lambda x: (x[1].x, x[1].z))
+            # 从外侧看，逆时针
+            if face_name == "left":
+                return [coords[0][0], coords[1][0], coords[3][0], coords[2][0]]
+            else:  # right
+                return [coords[0][0], coords[2][0], coords[3][0], coords[1][0]]
+
+        # 默认返回原顺序
+        return corner_nodes

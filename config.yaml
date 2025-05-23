@@ -17,8 +17,8 @@ structural_params:
     - y_position: 1.2 # 窗户中心在y轴的位置 (米)
       width: 1.2 # 窗户宽度 (米)
       height: 2.0 # 窗户高度 (米)
-      bottom_height: 1.0 # 窗户底部离地高度 (米)
-      on_face: "left" # 窗户所在面 ('front', 'back', 'left')
+      bottom_height: 0.0 # 窗户底部离地高度 (米)
+      on_face: "right" # 窗户所在面 ('front', 'back', 'left')
       is_door: true
     - y_position: 1.8 # 窗户中心在y轴的位置 (米)
       width: 1.2 # 窗户宽度 (米)
