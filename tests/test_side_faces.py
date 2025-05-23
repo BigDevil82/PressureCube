@@ -9,6 +9,7 @@ import numpy as np
 # 添加src目录到Python路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import BeamType, Point, StructuralModel, StructuralParameters, Window
 
 
@@ -193,7 +194,8 @@ def test_side_faces():
     )
 
     # 创建结构模型
-    model = StructuralModel(params)
+    section_library = SectionLibrary(file_path="src/data/steel_sections.json")
+    model = StructuralModel(params, section_library)
 
     # 生成结构网格
     model.generate_grid_mesh()

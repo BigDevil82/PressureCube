@@ -87,9 +87,11 @@ python main.py --mode test --config config.yaml
   - [x] 实现上下平面的智能网格生成
   - [x] 实现前后立面的智能网格生成，包含窗户适配
   - [x] 实现左右侧面的智能网格生成，支持窗户和门的适配
-- [ ] 实现HEBG层次图嵌入
-  - [ ] 完成池化和反池化操作
-  - [ ] 实现结构层次表示
+- [x] 实现HEBG层次图嵌入
+  - [x] 完成分层图数据结构 (`BeamAsNodeGraph`)
+  - [x] 实现层次化池化（Pooling）和反池化（Unpooling）操作
+  - [x] 实现类UNet的HEBG模型结构
+  - [x] 添加HEBG模型测试脚本
 - [x] 实现结构到图的转换 (Type 1: 梁为边，连接为节点)
 - [x] 实现结构到图的转换 (Type 2: 梁为节点，连接为边)
 - [x] 为Type 1图表达方式实现到PyG `Data`对象的转换 (节点：坐标, is_support; 边：端点坐标, 截面index, 方向)

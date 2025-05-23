@@ -185,4 +185,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    from src.graph.hebg import test_HEBG
+
+    test_HEBG()

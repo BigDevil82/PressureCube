@@ -373,9 +373,18 @@ class BeamAsNodeGraph:
         if not self.nodes:  # self.nodes in BeamAsNodeGraph are the beams
             return Data()
 
-        # Beam ID (which is the node ID in this graph) mapping to PyG dense 0..N-1 indices
-        # Ensure consistent order for node features and edge_index
-        sorted_beam_ids = sorted(list(self.nodes.keys()))
+        # 按梁类型分层排序：框架梁 -> 主梁 -> 次梁 -> 支撑梁
+        sorted_beam_ids = sorted(self.nodes.keys(), key=lambda bid: self.nodes[bid].beam_type.value)
+
+        # 记录各类型梁的索引范围
+        type_ranges = {}
+        current_idx = 0
+        for beam_type in [0, 1, 2, 3]:  # BeamType枚举值对应: 0-框架梁,1-主梁,2-次梁,3-支撑梁
+            type_ids = [bid for bid in sorted_beam_ids if self.nodes[bid].beam_type.value == beam_type]
+            if type_ids:
+                type_ranges[beam_type] = (current_idx, current_idx + len(type_ids) - 1)
+                current_idx += len(type_ids)
+
         beam_id_to_pyg_idx = {beam_id: i for i, beam_id in enumerate(sorted_beam_ids)}
 
         # 1. Node Features (x) - for each beam
@@ -423,7 +432,6 @@ class BeamAsNodeGraph:
         # 2. Edge Index (edge_index) and Edge Attributes (edge_attr)
         edge_list = []
         edge_attr_list = []
-        processed_edges = set()  # To handle undirected graph edges once
 
         # Re-iterate through shared structural nodes to find connections for edge attributes
         node_to_incident_beams: Dict[int, List[int]] = defaultdict(list)
@@ -433,6 +441,8 @@ class BeamAsNodeGraph:
             if beam_obj_iter.end_node in self.model.points:
                 node_to_incident_beams[beam_obj_iter.end_node].append(beam_id_iter)
 
+        # 生成边时记录连接类型
+        edge_types = []
         for structural_node_id, incident_beams in node_to_incident_beams.items():
             if len(incident_beams) > 1:
                 shared_point_coords = list(self.model.points[structural_node_id].coordinates())
@@ -440,6 +450,11 @@ class BeamAsNodeGraph:
                     for j in range(i + 1, len(incident_beams)):
                         beam1_id = incident_beams[i]
                         beam2_id = incident_beams[j]
+
+                        # 记录连接类型
+                        type1 = self.nodes[beam1_id].beam_type.value
+                        type2 = self.nodes[beam2_id].beam_type.value
+                        edge_types.extend([(type1, type2), (type2, type1)])
 
                         # Get PyG indices for these beams
                         u_pyg = beam_id_to_pyg_idx[beam1_id]
@@ -463,6 +478,8 @@ class BeamAsNodeGraph:
 
         data = Data(x=pyg_x, edge_index=pyg_edge_index, edge_attr=pyg_edge_attr)
         data.num_nodes = pyg_x.size(0)
+        data.node_type_ranges = type_ranges  # 各类型梁的索引范围
+        data.edge_types = torch.tensor(edge_types, dtype=torch.long)  # 添加连接类型
 
         return data
 
