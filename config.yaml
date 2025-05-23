@@ -2,12 +2,16 @@
 
 # 结构参数
 structural_params:
-  length: 9.5 # 舱体长度 (y方向，米)
-  width: 3.6 # 舱体宽度 (x方向，米)
+  length: 7.2 # 舱体长度 (y方向，米)
+  width: 3.7 # 舱体宽度 (x方向，米)
   height: 3.3 # 舱体高度 (z方向，米)
   main_beam_spacing: 1.2 # 环向主梁间距 (米)
   secondary_beam_spacing: 1.2 # 环向次梁间距 (米)
   brace_spacing: 0.6 # 支撑梁间距 (米)
+  frame_section_index: 3
+  main_beam_section_index: 10
+  secondary_beam_section_index: 2
+  brace_section_index: 4
   windows: # 窗户参数列表
     - y_position: 1.2 # 窗户中心在y轴的位置 (米)
       width: 1.2 # 窗户宽度 (米)

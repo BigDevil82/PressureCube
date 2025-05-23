@@ -324,6 +324,9 @@ class StructuralModel:
                 # 计算单个构件质量: 面积 * 长度 * 密度
                 mass = section.area * length * section.density
                 total_mass += mass
+            else:
+                print(f"Warning: Section {beam.section} not found")
+        print(f"梁构件质量: {total_mass} kg")
 
         # 计算钢板质量
         steel_density = 7850.0  # kg/m³，钢材密度
@@ -1032,3 +1035,23 @@ class StructuralModel:
 
         # 默认返回原顺序
         return corner_nodes
+
+
+if __name__ == "__main__":
+    from src.utils.model_utils import create_structural_model, load_config
+
+    config = load_config("config.yaml")
+    model = create_structural_model(config)
+
+    ## 打印结构相关信息
+    print(f"结构总质量: {model.calculate_mass()} kg")
+    print(f"节点数量: {len(model.points)}")
+    print(f"梁数量: {len(model.beams)}")
+    print(f"钢板数量: {len(model.plates)}")
+    print(f"钢板统计信息: {model.get_plate_statistics()}")
+
+    ## 打印钢板信息
+    total_plate_area = 0
+    for plate in model.plates.values():
+        total_plate_area += plate.area(model.points)
+    print(f"钢板总面积: {total_plate_area} m2")
