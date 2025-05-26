@@ -42,7 +42,7 @@ class OpenSeesAnalyzer:
         self.pressure_load_applied = False
 
     def _calculate_beam_local_axes_and_vecxz(
-        self, p1_coords_mm: np.ndarray, p2_coords_mm: np.ndarray
+        self, p1_coords_mm: np.ndarray, p2_coords_mm: np.ndarray, beam_id: int, beam_obj: Beam
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
         """
         Calculates local x, y, z axes for a beam and the vecxz for geomTransf.
@@ -57,34 +57,41 @@ class OpenSeesAnalyzer:
 
         x_local = dx_vec / length
 
-        # Default vecxz for vertical members (local x-z plane aligned with global X-Z)
-        if np.isclose(abs(x_local[2]), 1.0):  # Beam is vertical (aligned with global Z)
-            # Local z-axis can be chosen along global X to define the xz-plane
+        if np.isclose(abs(x_local[0]), 1.0) and beam_obj.on_face in ["top", "bottom"]:
+            vecxz = np.array([0.0, 1.0, 0.0])
+        elif np.isclose(abs(x_local[0]), 1.0) and beam_obj.on_face in ["left", "right"]:
+            vecxz = np.array([0.0, 0.0, 1.0])
+        elif np.isclose(abs(x_local[1]), 1.0) and beam_obj.on_face in ["top", "bottom"]:
             vecxz = np.array([1.0, 0.0, 0.0])
-            y_local = np.cross(vecxz, x_local)  # Should be -global Y or +global Y
-            y_local = y_local / np.linalg.norm(y_local)
-            z_local = np.cross(x_local, y_local)  # This will be the actual local z, aligned with vecxz
-        else:  # Beam is not vertical
-            global_z_axis = np.array([0.0, 0.0, 1.0])
-            # Try to make local z-axis point upwards in the plane perpendicular to beam's x-axis
-            # Project global Z onto the plane normal to x_local
-            proj_global_z_on_x_local = np.dot(global_z_axis, x_local) * x_local
-            z_local_component_in_plane = global_z_axis - proj_global_z_on_x_local
+        elif np.isclose(abs(x_local[1]), 1.0) and beam_obj.on_face in ["front", "back"]:
+            vecxz = np.array([0.0, 0.0, 1.0])
+        elif np.isclose(abs(x_local[2]), 1.0) and beam_obj.on_face in ["front", "back"]:
+            vecxz = np.array([0.0, 1.0, 0.0])
+        elif np.isclose(abs(x_local[2]), 1.0) and beam_obj.on_face in ["left", "right"]:
+            vecxz = np.array([1.0, 0.0, 0.0])
+            # global_z_axis = np.array([0.0, 0.0, 1.0])
+            # # Try to make local z-axis point upwards in the plane perpendicular to beam's x-axis
+            # # Project global Z onto the plane normal to x_local
+            # proj_global_z_on_x_local = np.dot(global_z_axis, x_local) * x_local
+            # z_local_component_in_plane = global_z_axis - proj_global_z_on_x_local
 
-            if np.linalg.norm(z_local_component_in_plane) < 1e-6:
-                # Beam is horizontal (x_local is in XY plane). Local z is along global Z.
-                # Or beam is aligned with global Z (already handled by the first `if`)
-                # This case means x_local is in XY plane, so local z is global Z.
-                z_local = global_z_axis
-                # vecxz is typically the local z-axis vector
-                vecxz = z_local
-                y_local = np.cross(z_local, x_local)
-            else:
-                z_local = z_local_component_in_plane / np.linalg.norm(z_local_component_in_plane)
-                # vecxz is typically the local z-axis vector
-                vecxz = z_local
-                y_local = np.cross(z_local, x_local)
+            # if np.linalg.norm(z_local_component_in_plane) < 1e-6:
+            #     # Beam is horizontal (x_local is in XY plane). Local z is along global Z.
+            #     # Or beam is aligned with global Z (already handled by the first `if`)
+            #     # This case means x_local is in XY plane, so local z is global Z.
+            #     z_local = global_z_axis
+            #     # vecxz is typically the local z-axis vector
+            #     vecxz = z_local
+            #     y_local = np.cross(z_local, x_local)
+            # else:
+            #     z_local = z_local_component_in_plane / np.linalg.norm(z_local_component_in_plane)
+            #     # vecxz is typically the local z-axis vector
+            #     vecxz = z_local
+            #     y_local = np.cross(z_local, x_local)
 
+        y_local = np.cross(vecxz, x_local)  # Should be -global Y or +global Y
+        y_local = y_local / np.linalg.norm(y_local)
+        z_local = np.cross(x_local, y_local)  # This will be the actual local z, aligned with vecxz
         return x_local, y_local, z_local, vecxz
 
     def setup_opensees_model(self, model: StructuralModel, plate_thickness_mm: float = 10.0):
@@ -122,7 +129,9 @@ class OpenSeesAnalyzer:
             p1_coords = node_coords_mm_map[start_node_id]
             p2_coords = node_coords_mm_map[end_node_id]
 
-            x_loc, y_loc, z_loc, vecxz = self._calculate_beam_local_axes_and_vecxz(p1_coords, p2_coords)
+            x_loc, y_loc, z_loc, vecxz = self._calculate_beam_local_axes_and_vecxz(
+                p1_coords, p2_coords, beam_id, beam_obj
+            )
             if vecxz is None:
                 print(f"Warning: Skipping zero-length beam (model ID {beam_id}).")
                 continue
@@ -623,10 +632,10 @@ class OpenSeesAnalyzer:
         face_pressure_directions = {
             "top": np.array([0.0, 0.0, 1.0]),  # 向上
             "bottom": np.array([0.0, 0.0, -1.0]),  # 向下
-            "left": np.array([0.0, -1.0, 0.0]),  # 向前 (Y负方向)
-            "right": np.array([0.0, 1.0, 0.0]),  # 向后 (Y正方向)
-            "front": np.array([1.0, 0.0, 0.0]),  # 向左 (X负方向)
-            "back": np.array([-1.0, 0.0, 0.0]),  # 向右 (X正方向)
+            "left": np.array([0.0, -1.0, 0.0]),  # 向左 (Y负方向)
+            "right": np.array([0.0, 1.0, 0.0]),  # 向右 (Y正方向)
+            "front": np.array([1.0, 0.0, 0.0]),  # 向前 (X正方向)
+            "back": np.array([-1.0, 0.0, 0.0]),  # 向后 (X负方向)
         }
 
         print(f"Converting plate pressure loads to equivalent beam line loads...")

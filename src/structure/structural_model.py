@@ -46,6 +46,7 @@ class Beam:
     end_node: int  # 终止节点ID
     beam_type: BeamType  # 梁类型
     section: str  # 截面类型
+    on_face: str  # 处于哪个面上（left, right, top, bottom, front, back)
 
     def length(self, nodes: Dict[int, Point]) -> float:
         """计算梁长度"""
@@ -223,7 +224,7 @@ class StructuralModel:
         self.node_counter += 1
         return node_id
 
-    def add_beam(self, start_node: int, end_node: int, beam_type: BeamType, section: str) -> int:
+    def add_beam(self, start_node: int, end_node: int, beam_type: BeamType, section: str, face: str) -> int:
         """添加梁构件并返回梁ID"""
         # 检查节点是否存在
         if start_node not in self.points or end_node not in self.points:
@@ -240,7 +241,12 @@ class StructuralModel:
         # 创建新梁
         beam_id = self.beam_counter
         self.beams[beam_id] = Beam(
-            id=beam_id, start_node=start_node, end_node=end_node, beam_type=beam_type, section=section
+            id=beam_id,
+            start_node=start_node,
+            end_node=end_node,
+            beam_type=beam_type,
+            section=section,
+            on_face=face,
         )
         self.beam_counter += 1
         return beam_id
@@ -436,10 +442,10 @@ class StructuralModel:
         all_y = sorted(all_y)
 
         # 生成底部面的网格
-        self._generate_plane_grid(all_x, all_y, 0, secondary_x, support_x, primary_y)
+        self._generate_plane_grid(all_x, all_y, 0, secondary_x, support_x, primary_y, "bottom")
 
         # 生成顶部面的网格
-        self._generate_plane_grid(all_x, all_y, height, secondary_x, support_x, primary_y)
+        self._generate_plane_grid(all_x, all_y, height, secondary_x, support_x, primary_y, "top")
 
     def _generate_vertical_grids(self):
         """生成前后面的网格布置"""
@@ -450,10 +456,10 @@ class StructuralModel:
         back_windows = [window for window in self.params.windows if window.on_face == "back"]
 
         # 生成前面的网格
-        self._generate_vertical_face_grid(0, front_windows)
+        self._generate_vertical_face_grid(0, front_windows, "front")
 
         # 生成后面的网格
-        self._generate_vertical_face_grid(width, back_windows)
+        self._generate_vertical_face_grid(width, back_windows, "back")
 
     def _generate_side_grids(self):
         """生成左右侧面的网格布置"""
@@ -472,12 +478,12 @@ class StructuralModel:
             win_top = -1
 
         # 生成左侧面的网格
-        self._generate_side_face_grid(0, windows, win_bottom, win_top)
+        self._generate_side_face_grid(0, windows, win_bottom, win_top, "left")
 
         # 生成右侧面的网格
-        self._generate_side_face_grid(length, windows, win_bottom, win_top, has_door=True)
+        self._generate_side_face_grid(length, windows, win_bottom, win_top, "right", has_door=True)
 
-    def _generate_vertical_face_grid(self, x_coord: float, windows: List[Window]):
+    def _generate_vertical_face_grid(self, x_coord: float, windows: List[Window], face: str):
         """在指定x坐标位置生成前/后立面的网格
 
         Args:
@@ -583,7 +589,7 @@ class StructuralModel:
                             beam_type = BeamType.BRACE
                             section = "BRACE"
 
-                        self.add_beam(start_node, end_node, beam_type, section)
+                        self.add_beam(start_node, end_node, beam_type, section, face)
 
         # 生成竖直方向的梁段（沿z方向）
         for y in all_y:
@@ -596,7 +602,7 @@ class StructuralModel:
                 if y == 0 or y == length:  # 左右边界上的梁
                     beam_type = BeamType.FRAME
                     section = "FRAME"
-                    self.add_beam(start_node, end_node, beam_type, section)
+                    self.add_beam(start_node, end_node, beam_type, section, face)
                 else:
                     # 检查是否在窗户区域内
                     in_window = False
@@ -619,10 +625,10 @@ class StructuralModel:
                         else:
                             raise ValueError(f"Invalid y coordinate: {y}")
 
-                    self.add_beam(start_node, end_node, beam_type, section)
+                    self.add_beam(start_node, end_node, beam_type, section, face)
 
     def _generate_side_face_grid(
-        self, y_coord: float, windows: List[Window], win_bottom, win_top, has_door: bool = False
+        self, y_coord: float, windows: List[Window], win_bottom, win_top, face: str, has_door: bool = False
     ):
         """在指定y坐标位置生成左/右侧面的网格
 
@@ -739,7 +745,7 @@ class StructuralModel:
                             beam_type = BeamType.BRACE
                             section = "BRACE"
 
-                        self.add_beam(start_node, end_node, beam_type, section)
+                        self.add_beam(start_node, end_node, beam_type, section, face)
 
         # 生成竖直方向的梁段（沿z方向）
         for x in all_x:
@@ -752,7 +758,7 @@ class StructuralModel:
                 if x == 0 or x == width:  # 左右边界上的梁
                     beam_type = BeamType.FRAME
                     section = "FRAME"
-                    self.add_beam(start_node, end_node, beam_type, section)
+                    self.add_beam(start_node, end_node, beam_type, section, face)
                 else:
                     # 检查是否在窗户/门区域内
                     in_window = False
@@ -776,9 +782,9 @@ class StructuralModel:
                         else:
                             raise ValueError(f"Invalid x coordinate: {x}")
 
-                    self.add_beam(start_node, end_node, beam_type, section)
+                    self.add_beam(start_node, end_node, beam_type, section, face)
 
-    def _generate_plane_grid(self, all_x, all_y, z, secondary_x, support_x, primary_y):
+    def _generate_plane_grid(self, all_x, all_y, z, secondary_x, support_x, primary_y, face):
         """在指定z平面生成网格
 
         Args:
@@ -815,7 +821,7 @@ class StructuralModel:
                 else:
                     raise ValueError(f"Invalid x coordinate: {x}")
 
-                self.add_beam(start_node, end_node, beam_type, section)
+                self.add_beam(start_node, end_node, beam_type, section, face)
 
         # 生成垂直方向的梁段（x方向，框架梁、主梁）
         for y in all_y:
@@ -834,7 +840,7 @@ class StructuralModel:
                 else:  # 这种情况不应该发生，为了安全起见，当作次梁处理
                     raise ValueError(f"Invalid y coordinate: {y}")
 
-                self.add_beam(start_node, end_node, beam_type, section)
+                self.add_beam(start_node, end_node, beam_type, section, face)
 
     def _generate_plates(self):
         """生成钢板"""

@@ -173,8 +173,8 @@ class SectionLibrary:
                 # These would typically come from a detailed section properties table
                 # For C sections, Ix is usually the major axis, Iy the minor.
                 # Iz (torsional constant) and Zz (torsional modulus) are complex for C-sections.
-                Ix_placeholder = estimated_area * (H_val * MM_TO_M) ** 2 / 12  # Very rough approx.
-                Iy_placeholder = estimated_area * (B_val * MM_TO_M) ** 2 / 12  # Very rough approx.
+                Ix_placeholder = 4.05 * 1e6 * 1e-12  # Very rough approx.
+                Iy_placeholder = 4.05 * 1e6 * 1e-12  # Very rough approx.
                 Iz_placeholder = Iy_placeholder  # Even rougher placeholder for torsion
                 Zx_placeholder = Ix_placeholder / (H_val * MM_TO_M / 2)
                 Zy_placeholder = Iy_placeholder / (B_val * MM_TO_M / 2)
