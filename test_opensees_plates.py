@@ -61,18 +61,18 @@ def test_opensees_plate_modeling():
         # },
         {
             "name": "高压增压分析",
-            "plate_thickness_mm": 10.0,
+            "plate_thickness_mm": 5.0,
             "internal_pressure_pa": 30000.0,  # 30 kPa
             "include_pressure": True,
             "output_dir": "results/opensees_plate_test_high_pressure",
         },
-        # {
-        #     "name": "仅重力荷载分析",
-        #     "plate_thickness_mm": 10.0,
-        #     "internal_pressure_pa": 0.0,
-        #     "include_pressure": False,
-        #     "output_dir": "results/opensees_plate_test_gravity_only",
-        # },
+        {
+            "name": "仅重力荷载分析",
+            "plate_thickness_mm": 10.0,
+            "internal_pressure_pa": 0.0,
+            "include_pressure": False,
+            "output_dir": "results/opensees_plate_test_gravity_only",
+        },
     ]
 
     # 执行测试场景
@@ -108,11 +108,15 @@ def test_opensees_plate_modeling():
                         deform_data = plate_analysis["plate_deformation_analysis"]
                         if "performance_indicators" in deform_data:
                             indicators = deform_data["performance_indicators"]
-                            print(f"  最大钢板位移: {indicators.get('max_plate_displacement_mm', 0):.4f} mm")
                             print(
-                                f"  平均钢板位移: {indicators.get('average_plate_displacement_mm', 0):.4f} mm"
+                                f"  最大钢板位移: {indicators.get('max_plate_nodal_displacement_mm', 0):.4f} mm"
                             )
-                            print(f"  位移标准差: {indicators.get('displacement_std_mm', 0):.4f} mm")
+                            print(
+                                f"  平均钢板位移: {indicators.get('average_plate_center_displacement_mm', 0):.4f} mm"
+                            )
+                            print(
+                                f"  位移标准差: {indicators.get('plate_center_displacement_std_mm', 0):.4f} mm"
+                            )
 
                 print(f"  分析结果已保存到: {scenario['output_dir']}")
             else:
@@ -182,7 +186,7 @@ def test_opensees_plate_modeling():
                 plate_analysis = results["plate_analysis"]
                 deform_data = plate_analysis.get("plate_deformation_analysis", {})
                 indicators = deform_data.get("performance_indicators", {})
-                max_disp = indicators.get("max_plate_displacement_mm", 0)
+                max_disp = indicators.get("max_plate_nodal_displacement_mm", 0)
                 max_displacements.append(max_disp)
 
         if max_displacements:

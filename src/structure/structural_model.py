@@ -173,7 +173,7 @@ class StructuralModel:
             )
 
         # MAIN beam section
-        main_beam_sec = self.section_library.get_section("H型钢", self.params.main_beam_section_index)
+        main_beam_sec = self.section_library.get_section("H型钢-主梁", self.params.main_beam_section_index)
         if main_beam_sec:
             self.sections["MAIN"] = main_beam_sec
         else:
@@ -186,7 +186,7 @@ class StructuralModel:
 
         # SECONDARY beam section
         secondary_beam_sec = self.section_library.get_section(
-            "H型钢", self.params.secondary_beam_section_index
+            "H型钢-次梁", self.params.secondary_beam_section_index
         )
         if secondary_beam_sec:
             self.sections["SECONDARY"] = secondary_beam_sec
@@ -248,6 +248,8 @@ class StructuralModel:
             section=section,
             on_face=face,
         )
+        if self.beams[beam_id].length(self.points) < 0.1:
+            print(f"Warning: Beam {beam_id} has length {self.beams[beam_id].length(self.points)}")
         self.beam_counter += 1
         return beam_id
 
@@ -415,8 +417,15 @@ class StructuralModel:
             x_start = sorted_secondary[i]
             x_end = sorted_secondary[i + 1]
 
-            n = math.ceil((x_end - x_start) / brace_spacing)
+            # 计算新的支撑梁间距，确保不大于原间距且不小于原间距的0.8倍
+            min_spacing = brace_spacing * 0.8
+            n = math.ceil((x_end - x_start) / brace_spacing)  # 至少需要的支撑梁数量
             _new_brace_spacing = (x_end - x_start) / n
+
+            # 如果新间距小于最小允许间距，减少支撑梁数量
+            while _new_brace_spacing < min_spacing and n > 1:
+                n -= 1
+                _new_brace_spacing = (x_end - x_start) / n
 
             x_current = x_start + _new_brace_spacing
             while x_current < x_end:
@@ -438,8 +447,11 @@ class StructuralModel:
         all_y = all_y.union(primary_y)
 
         # 排序坐标线，便于后续处理
-        all_x = sorted(all_x)
-        all_y = sorted(all_y)
+        all_x = sorted(set(map(lambda x: round(x, 3), all_x)))
+        all_y = sorted(set(map(lambda y: round(y, 3), all_y)))
+        secondary_x = sorted(set(map(lambda x: round(x, 3), secondary_x)))
+        support_x = sorted(set(map(lambda x: round(x, 3), support_x)))
+        primary_y = sorted(set(map(lambda y: round(y, 3), primary_y)))
 
         # 生成底部面的网格
         self._generate_plane_grid(all_x, all_y, 0, secondary_x, support_x, primary_y, "bottom")
@@ -520,8 +532,14 @@ class StructuralModel:
             z += brace_spacing
 
         # 窗户之间的支撑梁
-        n = math.ceil(window.height / brace_spacing)
+        min_spacing = brace_spacing * 0.8
+        n = math.ceil(window.height / brace_spacing)  # 至少需要的支撑梁数量
         _new_brace_spacing = window.height / n
+
+        # 如果新间距小于最小允许间距，减少支撑梁数量
+        while _new_brace_spacing < min_spacing and n > 1:
+            n -= 1
+            _new_brace_spacing = window.height / n
         for i in range(n - 1):
             z = window_bottom + (i + 1) * _new_brace_spacing
             all_z.add(z)
@@ -535,12 +553,13 @@ class StructuralModel:
         while y < length:
             primary_y.add(y)
             y += main_spacing
+        primary_y = sorted(set(map(lambda y: round(y, 3), primary_y)))
 
         all_y = all_y.union(primary_y)
 
         # 排序所有坐标点
-        all_y = sorted(all_y)
-        all_z = sorted(all_z)
+        all_y = sorted(set(map(lambda y: round(y, 3), all_y)))
+        all_z = sorted(set(map(lambda z: round(z, 3), all_z)))
 
         # 生成节点
         for y in all_y:
@@ -711,6 +730,7 @@ class StructuralModel:
                 self.add_node(x, y_coord, z)
 
         # 生成水平方向的梁段（沿x方向）
+        count = 0
         for z in all_z:
             for i in range(len(all_x) - 1):
                 x1, x2 = all_x[i], all_x[i + 1]
@@ -746,8 +766,10 @@ class StructuralModel:
                             section = "BRACE"
 
                         self.add_beam(start_node, end_node, beam_type, section, face)
+                        count += 1
 
         # 生成竖直方向的梁段（沿z方向）
+        count = 0
         for x in all_x:
             for i in range(len(all_z) - 1):
                 z1, z2 = all_z[i], all_z[i + 1]
@@ -783,6 +805,7 @@ class StructuralModel:
                             raise ValueError(f"Invalid x coordinate: {x}")
 
                     self.add_beam(start_node, end_node, beam_type, section, face)
+                    count += 1
 
     def _generate_plane_grid(self, all_x, all_y, z, secondary_x, support_x, primary_y, face):
         """在指定z平面生成网格

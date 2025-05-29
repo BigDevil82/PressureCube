@@ -108,6 +108,13 @@ class OpenSeesAnalyzer:
         ops.wipe()
         ops.model("basic", "-ndm", 3, "-ndf", 6)  # 3 dimensions, 6 DOFs per node
 
+        # 确保节点数与梁包含的节点数相同
+        beam_nodes = set()
+        for beam_id, beam_obj in model.beams.items():
+            beam_nodes.add(beam_obj.start_node)
+            beam_nodes.add(beam_obj.end_node)
+        assert len(beam_nodes) == len(model.points), "节点数与梁构件数量不一致"
+
         # Create Nodes
         node_coords_mm_map: Dict[int, np.ndarray] = {}  # node_id -> coords_mm
         for node_id, point_obj in model.points.items():
@@ -417,7 +424,7 @@ class OpenSeesAnalyzer:
         num_modal_modes: int = 5,
         output_dir: str = "opensees_results",
         plate_thickness_mm: float = 10.0,
-        internal_pressure_pa: float = 2000.0,
+        internal_pressure_pa: float = 30000.0,
         include_pressure_loads: bool = True,
     ):
         """
@@ -455,12 +462,14 @@ class OpenSeesAnalyzer:
                 if model.plates:
                     print("Analyzing steel plate deformation...")
                     plate_displacements = self.get_plate_displacements(model)
-                    plate_stresses = self.get_plate_stresses(model)
-                    plate_deformation_analysis = self.analyze_plate_deformation(model)
+                    plate_stresses_results = self.get_plate_stresses(model)
+                    plate_deformation_analysis = self.analyze_plate_deformation(
+                        model, plate_displacements, plate_stresses_results
+                    )
 
                     plate_analysis_results = {
                         "plate_displacements": plate_displacements,
-                        "plate_stresses": plate_stresses,
+                        "plate_stresses": plate_stresses_results,
                         "plate_deformation_analysis": plate_deformation_analysis,
                         "analysis_parameters": {
                             "plate_thickness_mm": plate_thickness_mm,
@@ -487,12 +496,21 @@ class OpenSeesAnalyzer:
                     if "performance_indicators" in deform_analysis:
                         indicators = deform_analysis["performance_indicators"]
                         print("\n=== Steel Plate Analysis Summary ===")
-                        print(f"Total plates analyzed: {indicators.get('plates_analyzed', 0)}")
                         print(
-                            f"Maximum plate displacement: {indicators.get('max_plate_displacement_mm', 0):.3f} mm"
+                            f"Total plates analyzed (displacement): {indicators.get('plates_analyzed_displacement', 0)}"
                         )
                         print(
-                            f"Average plate displacement: {indicators.get('average_plate_displacement_mm', 0):.3f} mm"
+                            f"Total plates with stress results: {indicators.get('plates_analyzed_stress', 0)}"
+                        )
+                        print(
+                            f"Maximum plate nodal displacement: {indicators.get('max_plate_nodal_displacement_mm', 0):.3f} mm"
+                        )
+                        if indicators.get("max_overall_normal_stress_mpa") is not None:
+                            print(
+                                f"Maximum overall absolute normal stress: {indicators.get('max_overall_normal_stress_mpa', 0):.3f} MPa (Plate ID: {indicators.get('plate_with_max_normal_stress', 'N/A')})"
+                            )
+                        print(
+                            f"Average plate center displacement: {indicators.get('average_plate_center_displacement_mm', 0):.3f} mm"
                         )
                         if include_pressure_loads:
                             print(f"Internal pressure applied: {internal_pressure_pa} Pa")
@@ -603,7 +621,7 @@ class OpenSeesAnalyzer:
 
         return nodal_plate_masses
 
-    def apply_pressure_loads(self, model: StructuralModel, internal_pressure_pa: float = 2000.0):
+    def apply_pressure_loads(self, model: StructuralModel, internal_pressure_pa: float = 30000.0):
         """
         Applies internal pressure loads to steel plates by converting them to equivalent
         line loads on the boundary beams of each plate.
@@ -743,7 +761,7 @@ class OpenSeesAnalyzer:
         print(f"Total equivalent force: {total_equivalent_force:.2f} N")
         print(f"Pressure magnitude: {internal_pressure_pa} Pa ({pressure_mpa:.6f} MPa)")
 
-    def apply_gravity_and_pressure_loads(self, model: StructuralModel, internal_pressure_pa: float = 2000.0):
+    def apply_gravity_and_pressure_loads(self, model: StructuralModel, internal_pressure_pa: float = 30000.0):
         """
         Applies both gravity loads (on beams) and internal pressure loads (on plates).
         This is the recommended method for pressurized building analysis.
@@ -804,9 +822,11 @@ class OpenSeesAnalyzer:
         if not model.plates:
             return {}
 
-        plate_stresses = {}
+        plate_stresses_results = {}  # Renamed to avoid conflict with the 'stresses' key
 
-        for plate_id, plate_obj in model.plates.items():
+        for plate_model_id, plate_obj in model.plates.items():  # plate_model_id is the key from model.plates
+            ele_tag = self.PLATE_ELE_TAG_START + plate_model_id  # Calculate the OpenSees element tag
+            current_plate_data = {}
             try:
                 # Get element stress/force response
                 # For ShellMITC4, common response types are:
@@ -814,81 +834,188 @@ class OpenSeesAnalyzer:
 
                 # Try to get element forces (membrane forces and moments)
                 try:
-                    forces = ops.eleResponse(plate_id, "forces")
-                    plate_stresses[plate_id] = {"forces": np.array(forces) if forces else None}
-                except:
-                    plate_stresses[plate_id] = {"forces": None}
+                    forces = ops.eleResponse(ele_tag, "forces")  # Use ele_tag
+                    current_plate_data["forces"] = np.array(forces) if forces is not None else None
+                except Exception as e:
+                    print(
+                        f"Warning: Could not get forces for plate element {ele_tag} (model plate ID {plate_model_id}): {e}"
+                    )
+                    current_plate_data["forces"] = None
 
                 # Try to get element stresses
                 try:
-                    stresses = ops.eleResponse(plate_id, "stresses")
-                    if stresses:
-                        plate_stresses[plate_id]["stresses"] = np.array(stresses)
+                    stresses_response = ops.eleResponse(ele_tag, "stresses")  # Use ele_tag
+                    if stresses_response is not None:
+                        current_plate_data["stresses"] = np.array(stresses_response)
                     else:
-                        plate_stresses[plate_id]["stresses"] = None
-                except:
-                    plate_stresses[plate_id]["stresses"] = None
+                        # print(f"Warning: No stresses found for plate element {ele_tag} (model plate ID {plate_model_id})\")
+                        current_plate_data["stresses"] = None
+                except Exception as e:
+                    print(
+                        f"Warning: Could not get stresses for plate element {ele_tag} (model plate ID {plate_model_id}): {e}"
+                    )
+                    current_plate_data["stresses"] = None
+
+                plate_stresses_results[plate_model_id] = current_plate_data
 
             except Exception as e:
-                print(f"Error getting plate {plate_id} stresses: {e}")
-                plate_stresses[plate_id] = {"forces": None, "stresses": None}
+                print(
+                    f"Error getting responses for plate element {ele_tag} (model plate ID {plate_model_id}): {e}"
+                )
+                plate_stresses_results[plate_model_id] = {"forces": None, "stresses": None}
 
-        return plate_stresses
+        return plate_stresses_results
 
-    def analyze_plate_deformation(self, model: StructuralModel) -> Dict[str, any]:
+    def analyze_plate_deformation(
+        self,
+        model: StructuralModel,
+        plate_displacements: Dict[int, Dict[str, np.ndarray]],
+        plate_stresses_results: Dict[int, Dict[str, Optional[np.ndarray]]],
+    ) -> Dict[str, any]:
         """
         Analyzes plate deformation characteristics including maximum displacements,
         stress concentrations, and structural performance indicators.
+        Now also calculates maximum normal stress from plate_stresses_results.
         """
-        if not model.plates:
-            return {"message": "No plates in model"}
+        if not model.plates:  # Should not happen if plate_displacements/stresses are populated
+            return {"message": "No plates in model to analyze"}
 
-        plate_displacements = self.get_plate_displacements(model)
-        plate_stresses = self.get_plate_stresses(model)
-
+        # Initialize analysis_results structure
         analysis_results = {
             "total_plates": len(model.plates),
             "max_displacement": {"value": 0.0, "plate_id": None, "direction": None},
-            "plate_summary": {},
+            "plate_summary": {},  # Will be populated with per-plate data
             "performance_indicators": {},
         }
 
-        # Analyze displacements
+        # Populate plate_summary with basic entries first
+        for plate_id in model.plates.keys():
+            analysis_results["plate_summary"][plate_id] = {}
+
+        # Analyze displacements (using the provided plate_displacements)
         max_disp_magnitude = 0.0
-        for plate_id, plate_data in plate_displacements.items():
-            displacements = plate_data["displacements"]
-            center_disp = plate_data["center_displacement"]
+        all_center_disp_magnitudes = []  # For calculating average and std dev
+
+        for plate_id, disp_data in plate_displacements.items():
+            if plate_id not in analysis_results["plate_summary"]:  # Should exist from above
+                analysis_results["plate_summary"][plate_id] = {}
+
+            displacements = disp_data.get("displacements")  # Nodal displacements (num_nodes, 6)
+            center_disp_vector = disp_data.get("center_displacement")  # Average displacement (6,)
+
+            if displacements is None or center_disp_vector is None:
+                analysis_results["plate_summary"][plate_id].update(
+                    {
+                        "max_nodal_displacement_mm": None,
+                        "center_displacement_mm": None,
+                        "center_displacement_vector": None,
+                    }
+                )
+                continue
 
             # Calculate maximum displacement magnitude for translational DOFs (0,1,2)
             trans_disps = displacements[:, :3]  # Translation displacements only
-            max_trans_disp = np.max(np.abs(trans_disps))
-            center_trans_disp = np.linalg.norm(center_disp[:3])
+            max_nodal_trans_disp_for_plate = (
+                np.max(np.linalg.norm(trans_disps, axis=1)) if trans_disps.size > 0 else 0.0
+            )
+            center_trans_disp_magnitude = (
+                np.linalg.norm(center_disp_vector[:3]) if center_disp_vector.size >= 3 else 0.0
+            )
 
-            analysis_results["plate_summary"][plate_id] = {
-                "max_nodal_displacement_mm": max_trans_disp,
-                "center_displacement_mm": center_trans_disp,
-                "center_displacement_vector": center_disp[:3].tolist(),
-            }
+            all_center_disp_magnitudes.append(center_trans_disp_magnitude)
 
-            if max_trans_disp > max_disp_magnitude:
-                max_disp_magnitude = max_trans_disp
+            analysis_results["plate_summary"][plate_id].update(
+                {
+                    "max_nodal_displacement_mm": max_nodal_trans_disp_for_plate,
+                    "center_displacement_mm": center_trans_disp_magnitude,
+                    "center_displacement_vector": (
+                        center_disp_vector[:3].tolist() if center_disp_vector.size >= 3 else None
+                    ),
+                }
+            )
+
+            if max_nodal_trans_disp_for_plate > max_disp_magnitude:
+                max_disp_magnitude = max_nodal_trans_disp_for_plate
                 analysis_results["max_displacement"] = {
-                    "value": max_trans_disp,
+                    "value": max_nodal_trans_disp_for_plate,
                     "plate_id": plate_id,
-                    "direction": "translation",
+                    "direction": "translation_nodal",  # Clarify it's max nodal
                 }
 
-        # Calculate performance indicators
-        if plate_displacements:
-            all_center_disps = [
-                data["center_displacement_mm"] for data in analysis_results["plate_summary"].values()
-            ]
+        # Displacement-based performance indicators
+        if all_center_disp_magnitudes:
             analysis_results["performance_indicators"] = {
-                "max_plate_displacement_mm": max_disp_magnitude,
-                "average_plate_displacement_mm": np.mean(all_center_disps),
-                "displacement_std_mm": np.std(all_center_disps),
-                "plates_analyzed": len(plate_displacements),
+                "max_plate_nodal_displacement_mm": max_disp_magnitude,  # Renamed for clarity
+                "average_plate_center_displacement_mm": np.mean(all_center_disp_magnitudes),
+                "plate_center_displacement_std_mm": np.std(all_center_disp_magnitudes),
+                "plates_analyzed_displacement": len(plate_displacements),
             }
+        else:
+            analysis_results["performance_indicators"] = {
+                "max_plate_nodal_displacement_mm": 0.0,
+                "average_plate_center_displacement_mm": 0.0,
+                "plate_center_displacement_std_mm": 0.0,
+                "plates_analyzed_displacement": 0,
+            }
+
+        # Analyze stresses for maximum normal stress
+        max_overall_abs_normal_stress = -1.0
+        plate_id_with_max_stress = None
+        stresses_processed_count = 0
+
+        for plate_model_id, stress_data in plate_stresses_results.items():
+            stresses_array = stress_data.get("stresses")
+
+            if plate_model_id not in analysis_results["plate_summary"]:  # Should exist
+                analysis_results["plate_summary"][plate_model_id] = {}
+
+            if (
+                stresses_array is None
+                or not isinstance(stresses_array, np.ndarray)
+                or stresses_array.size != 32
+            ):
+                analysis_results["plate_summary"][plate_model_id]["max_normal_stress_mpa"] = None
+                continue
+
+            stresses_processed_count += 1
+
+            # Indices for s_xx: 0, 4, 8, 12, 16, 20, 24, 28 (at each of 8 stress points: 4 GPs x 2 surfaces)
+            # Indices for s_yy: 1, 5, 9, 13, 17, 21, 25, 29
+            # The 32 values are [GP1_Top(sxx,syy,sxy,szz), GP1_Bot(sxx,syy,sxy,szz), GP2_Top(...), ...]
+            # So, s_xx are at indices 0, 4, 8, 12, 16, 20, 24, 28
+            # And s_yy are at indices 1, 5, 9, 13, 17, 21, 25, 29
+
+            s_xx_indices = np.array([i * 4 for i in range(8)])  # 0, 4, 8, ..., 28
+            s_yy_indices = np.array([i * 4 + 1 for i in range(8)])  # 1, 5, 9, ..., 29
+
+            current_plate_s_xx = stresses_array[s_xx_indices]
+            current_plate_s_yy = stresses_array[s_yy_indices]
+
+            current_plate_normal_stresses = np.concatenate((current_plate_s_xx, current_plate_s_yy))
+
+            max_abs_stress_for_this_plate_val = 0.0
+            if current_plate_normal_stresses.size > 0:
+                max_abs_stress_for_this_plate_val = np.max(np.abs(current_plate_normal_stresses))
+
+            analysis_results["plate_summary"][plate_model_id][
+                "max_abs_normal_stress_mpa"
+            ] = max_abs_stress_for_this_plate_val
+
+            if max_abs_stress_for_this_plate_val > max_overall_abs_normal_stress:
+                max_overall_abs_normal_stress = max_abs_stress_for_this_plate_val
+                plate_id_with_max_stress = plate_model_id
+
+        analysis_results["performance_indicators"]["plates_analyzed_stress"] = stresses_processed_count
+        if stresses_processed_count > 0 and plate_id_with_max_stress is not None:
+            analysis_results["performance_indicators"][
+                "max_overall_normal_stress_mpa"
+            ] = max_overall_abs_normal_stress
+            analysis_results["performance_indicators"][
+                "plate_with_max_normal_stress"
+            ] = plate_id_with_max_stress
+        else:
+            analysis_results["performance_indicators"]["max_overall_normal_stress_mpa"] = None
+            analysis_results["performance_indicators"]["plate_with_max_normal_stress"] = None
 
         return analysis_results
 

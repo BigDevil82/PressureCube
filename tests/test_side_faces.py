@@ -98,6 +98,7 @@ class StructureVisualizer:
 
     def _plot_beams(self, ax: plt.Axes, face_type: ViewType):
         """绘制梁构件"""
+        total_beams = 0
         for beam_id, beam in self.model.beams.items():
             start_node = self.model.points[beam.start_node]
             end_node = self.model.points[beam.end_node]
@@ -108,6 +109,8 @@ class StructureVisualizer:
                 z = [start_node.z, end_node.z]
 
                 ax.plot(x, y, z, color=self.colors[beam.beam_type], linewidth=1.5)
+                total_beams += 1
+        print(f"绘制梁构件数量: {total_beams}")
 
     def _add_legend(self, ax: plt.Axes):
         """添加图例"""
@@ -144,62 +147,63 @@ class StructureVisualizer:
 def test_side_faces():
     """测试左右侧面生成"""
     # 创建结构参数，包含窗户和门
-    params = StructuralParameters(
-        length=9.5,  # 舱体长度 (y方向)
-        width=3.6,  # 舱体宽度 (x方向)
-        height=3.3,  # 舱体高度 (z方向)
-        main_beam_spacing=1.2,  # 环向主梁间距
-        secondary_beam_spacing=1.2,  # 环向次梁间距
-        brace_spacing=0.6,  # 支撑梁间距
-        windows=[
-            # 左侧面窗户
-            Window(
-                y_position=1.2,  # 窗户中心在x轴的位置(对于侧面)
-                width=1.2,  # 窗户宽度
-                height=1.0,  # 窗户高度
-                bottom_height=1.0,  # 窗户底部离地高度
-                on_face="left",  # 窗户所在面
-            ),
-            # 右侧面门
-            Window(
-                y_position=1.2,
-                width=1.2,
-                height=2.0,
-                bottom_height=0,  # 门从地面开始
-                on_face="right",
-                is_door=True,  # 这是一个门
-            ),
-            # 保留前后面的窗户，确保完整性
-            Window(
-                y_position=1.8,
-                width=1.2,
-                height=1.0,
-                bottom_height=1.0,
-                on_face="front",
-            ),
-            Window(
-                y_position=3.0,
-                width=1.2,
-                height=1.0,
-                bottom_height=1.0,
-                on_face="back",
-            ),
-            Window(
-                y_position=4.2,
-                width=1.2,
-                height=1.0,
-                bottom_height=1.0,
-                on_face="back",
-            ),
-        ],
-    )
+    # params = StructuralParameters(
+    #     length=9.5,  # 舱体长度 (y方向)
+    #     width=3.6,  # 舱体宽度 (x方向)
+    #     height=3.3,  # 舱体高度 (z方向)
+    #     main_beam_spacing=1.2,  # 环向主梁间距
+    #     secondary_beam_spacing=1.2,  # 环向次梁间距
+    #     brace_spacing=0.6,  # 支撑梁间距
+    #     windows=[
+    #         # 左侧面窗户
+    #         Window(
+    #             y_position=1.2,  # 窗户中心在x轴的位置(对于侧面)
+    #             width=1.2,  # 窗户宽度
+    #             height=1.0,  # 窗户高度
+    #             bottom_height=1.0,  # 窗户底部离地高度
+    #             on_face="left",  # 窗户所在面
+    #         ),
+    #         # 右侧面门
+    #         Window(
+    #             y_position=1.2,
+    #             width=1.2,
+    #             height=2.0,
+    #             bottom_height=0,  # 门从地面开始
+    #             on_face="right",
+    #             is_door=True,  # 这是一个门
+    #         ),
+    #         # 保留前后面的窗户，确保完整性
+    #         Window(
+    #             y_position=1.8,
+    #             width=1.2,
+    #             height=1.0,
+    #             bottom_height=1.0,
+    #             on_face="front",
+    #         ),
+    #         Window(
+    #             y_position=3.0,
+    #             width=1.2,
+    #             height=1.0,
+    #             bottom_height=1.0,
+    #             on_face="back",
+    #         ),
+    #         Window(
+    #             y_position=4.2,
+    #             width=1.2,
+    #             height=1.0,
+    #             bottom_height=1.0,
+    #             on_face="back",
+    #         ),
+    #     ],
+    # )
 
-    # 创建结构模型
-    section_library = SectionLibrary(file_path="src/data/steel_sections.json")
-    model = StructuralModel(params, section_library)
+    # # 创建结构模型
+    # section_library = SectionLibrary(file_path="src/data/steel_sections.json")
+    # model = StructuralModel(params, section_library)
+    from src.utils.model_utils import create_structural_model, load_config
 
-    # 生成结构网格
-    model.generate_grid_mesh()
+    config = load_config("config.yaml")
+    model = create_structural_model(config)
 
     # 输出结构信息
     print("\n左右侧面测试:")
@@ -231,7 +235,7 @@ if __name__ == "__main__":
 
     # 创建可视化器并显示所有视图
     visualizer = StructureVisualizer(model)
-    # visualizer.show_all_views()
-    fig, ax = visualizer.show_face(ViewType.FULL_3D)
+    visualizer.show_all_views()
+    # fig, ax = visualizer.show_face(ViewType.FULL_3D)
     # save plot to file
-    fig.savefig("results/side_faces.png", dpi=300, bbox_inches="tight")
+    # fig.savefig("results/side_faces.png", dpi=300, bbox_inches="tight")
