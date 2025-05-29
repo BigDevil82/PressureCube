@@ -122,6 +122,7 @@ class StructureVisualizer:
         self._add_legend(ax)
         plt.axis("equal")
         plt.show()
+        return fig, ax
 
     def show_all_views(self):
         """显示所有视图"""
@@ -230,4 +231,7 @@ if __name__ == "__main__":
 
     # 创建可视化器并显示所有视图
     visualizer = StructureVisualizer(model)
-    visualizer.show_all_views()
+    # visualizer.show_all_views()
+    fig, ax = visualizer.show_face(ViewType.FULL_3D)
+    # save plot to file
+    fig.savefig("results/side_faces.png", dpi=300, bbox_inches="tight")

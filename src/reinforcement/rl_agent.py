@@ -1,37 +1,71 @@
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch_geometric.data import Data
+from torch_geometric.nn import global_mean_pool
+
+from src.graph.hebg import HEBG
 
 
 class Actor(nn.Module):
     """Actor网络"""
 
-    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
+    def __init__(self, hebg_config: Dict[str, int], action_dim: int, hidden_dim: int = 256):
         super().__init__()
-        self.fc1 = nn.Linear(state_dim, hidden_dim)
+        self.hebg = HEBG(
+            in_channels=hebg_config["in_channels"],
+            hidden_channels=hebg_config["hidden_channels"],
+            out_channels=hebg_config["out_channels"],
+            num_beam_types=hebg_config.get("num_beam_types", 4),
+        )
+        self.fc1 = nn.Linear(hebg_config["out_channels"], hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.fc3 = nn.Linear(hidden_dim, action_dim)
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
-        x = F.relu(self.fc1(state))
+    def forward(self, data: Data) -> torch.Tensor:
+        node_features = self.hebg(data)
+
+        if hasattr(data, "batch") and data.batch is not None:
+            batch_vector = data.batch
+        else:
+            batch_vector = torch.zeros(node_features.size(0), dtype=torch.long, device=node_features.device)
+
+        graph_embedding = global_mean_pool(node_features, batch_vector)
+
+        x = F.relu(self.fc1(graph_embedding))
         x = F.relu(self.fc2(x))
-        return torch.tanh(self.fc3(x))  # 输出范围[-1,1]
+        return torch.tanh(self.fc3(x))
 
 
 class Critic(nn.Module):
     """Critic网络"""
 
-    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
+    def __init__(self, hebg_config: Dict[str, int], action_dim: int, hidden_dim: int = 256):
         super().__init__()
-        self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim)
+        self.hebg = HEBG(
+            in_channels=hebg_config["in_channels"],
+            hidden_channels=hebg_config["hidden_channels"],
+            out_channels=hebg_config["out_channels"],
+            num_beam_types=hebg_config.get("num_beam_types", 4),
+        )
+        self.fc1 = nn.Linear(hebg_config["out_channels"] + action_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.fc3 = nn.Linear(hidden_dim, 1)
 
-    def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        x = torch.cat([state, action], dim=1)
+    def forward(self, data: Data, action: torch.Tensor) -> torch.Tensor:
+        node_features = self.hebg(data)
+
+        if hasattr(data, "batch") and data.batch is not None:
+            batch_vector = data.batch
+        else:
+            batch_vector = torch.zeros(node_features.size(0), dtype=torch.long, device=node_features.device)
+
+        graph_embedding = global_mean_pool(node_features, batch_vector)
+
+        x = torch.cat([graph_embedding, action], dim=-1)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         return self.fc3(x)
@@ -42,41 +76,40 @@ class DDPGAgent:
 
     def __init__(
         self,
-        state_dim: int,
+        hebg_config: Dict[str, int],
         action_dim: int,
         actor_lr: float = 1e-4,
         critic_lr: float = 1e-3,
         gamma: float = 0.99,
         tau: float = 0.001,
+        hidden_dim_fc: int = 256,
     ):
-        self.actor = Actor(state_dim, action_dim)
-        self.actor_target = Actor(state_dim, action_dim)
+        self.actor = Actor(hebg_config, action_dim, hidden_dim=hidden_dim_fc)
+        self.actor_target = Actor(hebg_config, action_dim, hidden_dim=hidden_dim_fc)
         self.actor_target.load_state_dict(self.actor.state_dict())
 
-        self.critic = Critic(state_dim, action_dim)
-        self.critic_target = Critic(state_dim, action_dim)
+        self.critic = Critic(hebg_config, action_dim, hidden_dim=hidden_dim_fc)
+        self.critic_target = Critic(hebg_config, action_dim, hidden_dim=hidden_dim_fc)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
 
-        self.gamma = gamma  # 折扣因子
-        self.tau = tau  # 目标网络软更新参数
+        self.gamma = gamma
+        self.tau = tau
 
-    def select_action(self, state: torch.Tensor) -> torch.Tensor:
-        """选择动作"""
+    def select_action(self, state_data: Data) -> torch.Tensor:
         with torch.no_grad():
-            return self.actor(state)
+            action = self.actor(state_data)
+        return action
 
-    def update(self, batch: Dict[str, torch.Tensor]):
-        """更新网络参数"""
+    def update(self, batch: Dict[str, Any]):
         state = batch["state"]
         action = batch["action"]
         reward = batch["reward"]
         next_state = batch["next_state"]
         done = batch["done"]
 
-        # 更新Critic
         with torch.no_grad():
             next_action = self.actor_target(next_state)
             target_q = self.critic_target(next_state, next_action)
@@ -89,18 +122,15 @@ class DDPGAgent:
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        # 更新Actor
         actor_loss = -self.critic(state, self.actor(state)).mean()
 
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
 
-        # 软更新目标网络
         self._soft_update(self.actor_target, self.actor)
         self._soft_update(self.critic_target, self.critic)
 
     def _soft_update(self, target: nn.Module, source: nn.Module):
-        """软更新目标网络"""
         for target_param, param in zip(target.parameters(), source.parameters()):
             target_param.data.copy_(target_param.data * (1.0 - self.tau) + param.data * self.tau)

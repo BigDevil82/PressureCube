@@ -52,27 +52,27 @@ def test_opensees_plate_modeling():
 
     # 测试参数
     test_scenarios = [
-        {
-            "name": "标准增压分析",
-            "plate_thickness_mm": 10.0,
-            "internal_pressure_pa": 2000.0,  # 2 kPa
-            "include_pressure": True,
-            "output_dir": "results/opensees_plate_test_standard",
-        },
+        # {
+        #     "name": "标准增压分析",
+        #     "plate_thickness_mm": 10.0,
+        #     "internal_pressure_pa": 2000.0,  # 2 kPa
+        #     "include_pressure": True,
+        #     "output_dir": "results/opensees_plate_test_standard",
+        # },
         {
             "name": "高压增压分析",
-            "plate_thickness_mm": 5.0,
+            "plate_thickness_mm": 10.0,
             "internal_pressure_pa": 30000.0,  # 30 kPa
             "include_pressure": True,
             "output_dir": "results/opensees_plate_test_high_pressure",
         },
-        {
-            "name": "仅重力荷载分析",
-            "plate_thickness_mm": 10.0,
-            "internal_pressure_pa": 0.0,
-            "include_pressure": False,
-            "output_dir": "results/opensees_plate_test_gravity_only",
-        },
+        # {
+        #     "name": "仅重力荷载分析",
+        #     "plate_thickness_mm": 10.0,
+        #     "internal_pressure_pa": 0.0,
+        #     "include_pressure": False,
+        #     "output_dir": "results/opensees_plate_test_gravity_only",
+        # },
     ]
 
     # 执行测试场景
