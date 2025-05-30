@@ -155,7 +155,8 @@ class SectionLibrary:
                 print(f"Error processing 方钢 section {item.get('name', 'Unknown')}: {e}")
 
         # H型钢
-        for item in data.get("H型钢", []):
+        H_sections = data["H型钢-主梁"] + data["H型钢-次梁"]
+        for item in H_sections:
             try:
                 name = item["H-型号(高度×宽度) mm×mm"]
                 area = item["截面面积cm²"] * CM2_TO_M2
