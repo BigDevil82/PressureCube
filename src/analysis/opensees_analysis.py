@@ -36,7 +36,6 @@ class OpenSeesAnalyzer:
         # model_beam_id -> (x_loc, y_loc, z_loc)
         self.beam_local_coord_systems: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         # Plate-related attributes
-        self.PLATE_ELE_TAG_START = 10000
         self.plate_material_tag = 1000  # Starting tag for plate materials
         self.plate_section_tag = 2000  # Starting tag for plate sections
         self.pressure_load_applied = False
@@ -585,8 +584,7 @@ class OpenSeesAnalyzer:
             try:
                 # Create ShellMITC4 element
                 # element ShellMITC4 $eleTag $iNode $jNode $kNode $lNode $secTag
-                ele_id = self.PLATE_ELE_TAG_START + plate_id
-                ops.element("ShellMITC4", ele_id, *node_ids, self.plate_section_tag)
+                ops.element("ShellMITC4", plate_id, *node_ids, self.plate_section_tag)
                 # print(f"Created plate element {plate_id} with nodes {node_ids}")
 
             except Exception as e:
@@ -825,7 +823,7 @@ class OpenSeesAnalyzer:
         plate_stresses_results = {}  # Renamed to avoid conflict with the 'stresses' key
 
         for plate_model_id, plate_obj in model.plates.items():  # plate_model_id is the key from model.plates
-            ele_tag = self.PLATE_ELE_TAG_START + plate_model_id  # Calculate the OpenSees element tag
+            ele_tag = plate_model_id  # Calculate the OpenSees element tag
             current_plate_data = {}
             try:
                 # Get element stress/force response

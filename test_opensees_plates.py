@@ -141,7 +141,7 @@ def test_opensees_plate_modeling():
                 plate_analysis = results["plate_analysis"]
                 deform_data = plate_analysis.get("plate_deformation_analysis", {})
                 indicators = deform_data.get("performance_indicators", {})
-                max_disp = indicators.get("max_plate_displacement_mm", 0)
+                max_disp = indicators.get("max_plate_nodal_displacement_mm", 0)
                 pressure = plate_analysis.get("analysis_parameters", {}).get("internal_pressure_pa", 0)
                 print(f"  {scenario_name:25s}: {max_disp:8.4f} mm (压力: {pressure:4.0f} Pa)")
 
@@ -181,17 +181,22 @@ def test_opensees_plate_modeling():
     if all_results:
         # 分析结果并提供建议
         max_displacements = []
+        max_stresses = []
         for scenario_name, results in all_results.items():
             if "plate_analysis" in results:
                 plate_analysis = results["plate_analysis"]
                 deform_data = plate_analysis.get("plate_deformation_analysis", {})
                 indicators = deform_data.get("performance_indicators", {})
                 max_disp = indicators.get("max_plate_nodal_displacement_mm", 0)
+                max_stress = indicators.get("max_overall_normal_stress_mpa", 0)
                 max_displacements.append(max_disp)
+                max_stresses.append(max_stress)
 
         if max_displacements:
             overall_max_disp = max(max_displacements)
             print(f"整体最大钢板位移: {overall_max_disp:.4f} mm")
+            overall_max_stress = max(max_stresses)
+            print(f"整体最大钢板应力: {overall_max_stress:.4f} MPa")
 
             # 给出工程建议
             if overall_max_disp < 5.0:

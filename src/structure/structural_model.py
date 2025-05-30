@@ -143,6 +143,8 @@ class NodeMap:
 class StructuralModel:
     """舱体结构模型类"""
 
+    __PLATE_START_ID = 10000  # 避免OpenSees建模时与梁ID冲突
+
     def __init__(self, params: StructuralParameters, section_library: SectionLibrary):
         self.params = params
         self.section_library = section_library
@@ -153,7 +155,8 @@ class StructuralModel:
         self.sections: Dict[str, SteelSection] = {}  # 截面属性字典 {截面名: 截面属性}
         self.node_counter = 0  # 节点ID计数器
         self.beam_counter = 0  # 梁ID计数器
-        self.plate_counter = 0  # 钢板ID计数器
+        self.plate_counter = self.__PLATE_START_ID  # 钢板ID计数器
+        self._mesh_generated = False  # 是否已经生成网格
         self._initialize_sections()  # 初始化截面属性
 
     def _initialize_sections(self):
@@ -364,13 +367,17 @@ class StructuralModel:
 
     def generate_grid_mesh(self):
         """使用网格法生成结构，将长直梁拆分成多段小梁段"""
+        if self._mesh_generated:
+            print("网格已经生成，跳过生成网格")
+            return
+
         # 清空现有节点和构件
         self.points = {}
         self.beams = {}
         self.plates = {}
         self.node_counter = 0
         self.beam_counter = 0
-        self.plate_counter = 0
+        self.plate_counter = self.__PLATE_START_ID
 
         # 生成水平面的网格
         self._generate_horizontal_grids()
@@ -383,6 +390,8 @@ class StructuralModel:
 
         # 生成钢板
         self._generate_plates()
+
+        self._mesh_generated = True
 
     def _generate_horizontal_grids(self):
         """生成上下平面的网格布置"""
