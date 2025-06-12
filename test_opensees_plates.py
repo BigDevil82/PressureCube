@@ -61,7 +61,7 @@ def test_opensees_plate_modeling():
         # },
         {
             "name": "高压增压分析",
-            "plate_thickness_mm": 5.0,
+            "plate_thickness_mm": 10.0,
             "internal_pressure_pa": 30000.0,  # 30 kPa
             "include_pressure": True,
             "output_dir": "results/opensees_plate_test_high_pressure",
@@ -89,7 +89,6 @@ def test_opensees_plate_modeling():
                 model=model,
                 num_modal_modes=6,
                 output_dir=scenario["output_dir"],
-                plate_thickness_mm=scenario["plate_thickness_mm"],
                 internal_pressure_pa=scenario["internal_pressure_pa"],
                 include_pressure_loads=scenario["include_pressure"],
             )

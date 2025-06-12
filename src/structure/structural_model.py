@@ -120,6 +120,9 @@ class StructuralParameters:
     main_beam_section_index: int = 0  # H型钢索引 (用于主梁)
     secondary_beam_section_index: int = 0  # H型钢索引 (用于次梁)
     brace_section_index: int = 0  # 槽钢索引
+    win_bottom: float = 1.0  # 窗户底部离地高度
+    win_height: float = 1.5  # 窗户高度
+    plate_thickness: float = 0.01  # 钢板厚度
 
 
 class NodeMap:
@@ -158,6 +161,9 @@ class StructuralModel:
         self.plate_counter = self.__PLATE_START_ID  # 钢板ID计数器
         self._mesh_generated = False  # 是否已经生成网格
         self._initialize_sections()  # 初始化截面属性
+
+        # for section_name, section in self.sections.items():
+        #     print(section)  # 使用完整的print语句，会自动调用__repr__
 
     def _initialize_sections(self):
         """初始化默认截面属性"""
@@ -256,7 +262,7 @@ class StructuralModel:
         self.beam_counter += 1
         return beam_id
 
-    def add_plate(self, nodes: List[int], on_face: str, thickness: float = 0.01) -> int:
+    def add_plate(self, nodes: List[int], on_face: str) -> int:
         """添加钢板并返回钢板ID
 
         Args:
@@ -274,6 +280,7 @@ class StructuralModel:
 
         # 创建新钢板
         plate_id = self.plate_counter
+        thickness = self.params.plate_thickness
         self.plates[plate_id] = Plate(id=plate_id, nodes=nodes, on_face=on_face, thickness=thickness)
         self.plate_counter += 1
         return plate_id
@@ -337,7 +344,7 @@ class StructuralModel:
                 total_mass += mass
             else:
                 print(f"Warning: Section {beam.section} not found")
-        print(f"梁构件质量: {total_mass} kg")
+        # print(f"梁构件质量: {total_mass} kg")
 
         # 计算钢板质量
         steel_density = 7850.0  # kg/m³，钢材密度
@@ -1006,17 +1013,26 @@ class StructuralModel:
         self, face_name: str, c1_min: float, c1_max: float, c2_min: float, c2_max: float, fixed_coord: str
     ) -> bool:
         """检查矩形区域是否在窗户范围内"""
-        for window in self.params.windows:
+        if not self.params.windows:
+            return False
+
+        windows = [window for window in self.params.windows if not window.is_door]
+        if not windows:
+            return False
+
+        win_top = round(windows[0].bottom_height + windows[0].height, 6)
+
+        for window in windows:
             if window.on_face != face_name:
                 continue
 
             # 根据不同的面确定窗户的边界
             if face_name in ["front", "back"]:
                 # 前后面：坐标1是y，坐标2是z
-                win_left = window.y_position - window.width / 2
-                win_right = window.y_position + window.width / 2
-                win_bottom = window.bottom_height
-                win_top = window.bottom_height + window.height
+                win_left = round(window.y_position - window.width / 2, 6)
+                win_right = round(window.y_position + window.width / 2, 6)
+                win_bottom = round(window.bottom_height, 6)
+                # win_top = round(window.bottom_height + window.height, 6)
 
                 # 检查矩形是否与窗户区域重叠
                 if c1_min < win_right and c1_max > win_left and c2_min < win_top and c2_max > win_bottom:
@@ -1024,10 +1040,10 @@ class StructuralModel:
 
             elif face_name in ["left", "right"]:
                 # 左右面：坐标1是x，坐标2是z
-                win_left = window.y_position - window.width / 2
-                win_right = window.y_position + window.width / 2
+                win_left = round(window.y_position - window.width / 2, 6)
+                win_right = round(window.y_position + window.width / 2, 6)
                 win_bottom = 0 if window.is_door else window.bottom_height
-                win_top = window.bottom_height + window.height
+                # win_top = round(window.bottom_height + window.height, 6)
 
                 # 检查矩形是否与窗户区域重叠
                 if c1_min < win_right and c1_max > win_left and c2_min < win_top and c2_max > win_bottom:

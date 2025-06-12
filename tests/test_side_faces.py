@@ -235,7 +235,10 @@ if __name__ == "__main__":
 
     # 创建可视化器并显示所有视图
     visualizer = StructureVisualizer(model)
-    visualizer.show_all_views()
-    # fig, ax = visualizer.show_face(ViewType.FULL_3D)
+    # visualizer.show_all_views()
+    fig, ax = visualizer.show_face(ViewType.FULL_3D)
+    # set xlim, ylim, zlim
+    # ax.set_xlim(-1, 5)
+    # ax.set_zlim(-2, 5)
     # save plot to file
-    # fig.savefig("results/side_faces.png", dpi=300, bbox_inches="tight")
+    fig.savefig("results/side_faces.png", dpi=300, bbox_inches="tight")

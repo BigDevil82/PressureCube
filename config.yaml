@@ -5,40 +5,62 @@ structural_params:
   length: 7.2 # 舱体长度 (y方向，米)
   width: 3.6 # 舱体宽度 (x方向，米)
   height: 3.3 # 舱体高度 (z方向，米)
-  main_beam_spacing: 1.2 # 环向主梁间距 (米)
-  secondary_beam_spacing: 1.2 # 环向次梁间距 (米)
-  brace_spacing: 0.6 # 支撑梁间距 (米)
-  frame_section_index: 3
-  main_beam_section_index: 20
-  secondary_beam_section_index: 20
-  brace_section_index: 15
+  main_beam_spacing: 1.05 # 环向主梁间距 (米)
+  secondary_beam_spacing: 1.05 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
+  brace_spacing: 0.5 # 支撑梁间距 (米)
+  frame_section_index: 2
+  main_beam_section_index: 5
+  secondary_beam_section_index: 7
+  brace_section_index: 4
+  win_bottom: 1.0
+  win_height: 1.5
+  plate_thickness: 0.005
   windows: # 窗户参数列表
-    - y_position: 1.2 # 窗户中心在y轴的位置 (米)
-      width: 1.2 # 窗户宽度 (米)
-      height: 1.0 # 窗户高度 (米)
-      bottom_height: 1.0 # 窗户底部离地高度 (米)
+    - y_position: 1.275 # 窗户中心在y轴的位置 (米)
       on_face: "left" # 窗户所在面 ('front', 'back', 'left')
-    - y_position: 1.2 # 窗户中心在y轴的位置 (米)
-      width: 1.2 # 窗户宽度 (米)
-      height: 2.0 # 窗户高度 (米)
-      bottom_height: 0.0 # 窗户底部离地高度 (米)
+    - y_position: 1.275 # 窗户中心在y轴的位置 (米)
       on_face: "right" # 窗户所在面 ('front', 'back', 'left')
       is_door: true
-    - y_position: 1.8 # 窗户中心在y轴的位置 (米)
-      width: 1.2 # 窗户宽度 (米)
-      height: 1.0 # 窗户高度 (米)
-      bottom_height: 1.0 # 窗户底部离地高度 (米)
+    - y_position: 1.575 # 窗户中心在y轴的位置 (米)
       on_face: "front" # 窗户所在面
-    - y_position: 3.0 # 窗户中心在y轴的位置 (米)
-      width: 1.2 # 窗户宽度 (米)
-      height: 1.0 # 窗户高度 (米)
-      bottom_height: 1.0 # 窗户底部离地高度 (米)
+    - y_position: 2.625 # 窗户中心在y轴的位置 (米)
       on_face: "back" # 窗户所在面
-    # - y_position: 4.2 # 窗户中心在y轴的位置 (米)
-    #   width: 1.2 # 窗户宽度 (米)
-    #   height: 1.0 # 窗户高度 (米)
-    #   bottom_height: 1.0 # 窗户底部离地高度 (米)
-    #   on_face: "back" # 窗户所在面
+
+# 环境动作参数
+env_action_config:
+  action_dim: 4
+  parameter_action_mapping:
+    frame_section_index:
+      action_idx: 0
+      type: discrete
+      num_options: 4 # Example: 4 choices for frame sections
+    main_beam_section_index:
+      action_idx: 1
+      type: discrete
+      num_options: 11 # Example: 21 choices for main beam sections
+    secondary_beam_section_index:
+      action_idx: 2
+      type: discrete
+      num_options: 10
+    brace_section_index:
+      action_idx: 3
+      type: discrete
+      num_options: 20
+    main_beam_spacing:
+      action_idx: 4
+      type: continuous
+      bounds: [1.0, 3.0]
+      module: 0.1
+    secondary_beam_spacing:
+      action_idx: 5
+      type: continuous
+      bounds: [0.5, 2.0]
+      module: 0.1
+    brace_spacing:
+      action_idx: 6
+      type: continuous
+      bounds: [0.5, 2.0]
+      module: 0.1
 
 # 强化学习参数
 rl_params:
@@ -46,12 +68,16 @@ rl_params:
   critic_lr: 1.0e-3 # Critic网络学习率
   gamma: 0.99 # 折扣因子
   tau: 0.005 # 目标网络软更新参数
-  batch_size: 64 # 批次大小
+  sigma: 0.1 # 探索高斯噪声的标准差
+  min_replay_buffer_fill: 32
+  batch_size: 2 # 批次大小
   buffer_size: 10000 # 经验回放缓冲区大小
   update_interval: 5 # 更新间隔
-  noise_scale: 0.1 # 探索噪声
+  ddpg_fc_hidden_dim: 256 # 隐藏层大小
   max_episodes: 1000 # 最大训练回合数
-  max_steps: 100 # 每个回合的最大步数
+  max_steps_per_episode: 50 # 每个回合的最大步数
+  save_interval: 10 # 模型保存间隔
+  plot_interval: 1 # 训练指标绘制间隔
 
 # 图神经网络参数
 gnn_params:

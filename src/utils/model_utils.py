@@ -72,6 +72,7 @@ def create_structural_model(config):
         main_beam_section_index=params_dict["main_beam_section_index"],
         secondary_beam_section_index=params_dict["secondary_beam_section_index"],
         brace_section_index=params_dict["brace_section_index"],
+        plate_thickness=params_dict["plate_thickness"],
         windows=windows,
     )
 
