@@ -1,4 +1,5 @@
 import json
+import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Union
 
@@ -26,6 +27,9 @@ class SteelSection:
     Zz: float  # 扭转模量 Wt (m^3), H型钢和方钢用Zz表示
     density: float  # 材料密度 (kg/m^3) - Removed default, will be set during instantiation
 
+    def __repr__(self) -> str:
+        return f"{self.name}: Area={self.area:.2e} m^2, Ix={self.Ix:.2e} m^4, Iy={self.Iy:.2e} m^4, Iz={self.Iz:.2e} m^4"
+
 
 @dataclass
 class RectangularTubeSection(SteelSection):
@@ -33,6 +37,9 @@ class RectangularTubeSection(SteelSection):
 
     B: float  # 边长 (m)
     t: float  # 壁厚 (m)
+
+    def __repr__(self) -> str:
+        return f"{self.name}: B={self.B*1000:.1f}mm, t={self.t*1000:.1f}mm, A={self.area:.2e}m², Ix={self.Ix:.2e}m⁴, Iy={self.Iy:.2e}m⁴, Iz={self.Iz:.2e}m⁴"
 
 
 @dataclass
@@ -244,6 +251,8 @@ class SectionLibrary:
         # 按照Ix排序
         for section_type in self.sections:
             self.sections[section_type].sort(key=lambda x: x.Ix)
+            # shuffle
+            # random.shuffle(self.sections[section_type])
 
     def get_section(
         self, section_type: str, index: int
