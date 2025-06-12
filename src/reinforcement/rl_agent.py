@@ -37,7 +37,7 @@ class Actor(nn.Module):
 
         x = F.relu(self.fc1(graph_embedding))
         x = F.relu(self.fc2(x))
-        return torch.tanh(self.fc3(x))
+        return torch.sigmoid(self.fc3(x))
 
 
 class Critic(nn.Module):
@@ -82,14 +82,21 @@ class DDPGAgent:
         critic_lr: float = 1e-3,
         gamma: float = 0.99,
         tau: float = 0.001,
+        sigma: float = 0.01,
         hidden_dim_fc: int = 256,
+        device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     ):
-        self.actor = Actor(hebg_config, action_dim, hidden_dim=hidden_dim_fc)
-        self.actor_target = Actor(hebg_config, action_dim, hidden_dim=hidden_dim_fc)
+        self.hebg_config = hebg_config
+        self.device = device
+        self.action_dim = action_dim
+        self.sigma = sigma
+
+        self.actor = Actor(hebg_config, action_dim, hidden_dim=hidden_dim_fc).to(device)
+        self.actor_target = Actor(hebg_config, action_dim, hidden_dim=hidden_dim_fc).to(device)
         self.actor_target.load_state_dict(self.actor.state_dict())
 
-        self.critic = Critic(hebg_config, action_dim, hidden_dim=hidden_dim_fc)
-        self.critic_target = Critic(hebg_config, action_dim, hidden_dim=hidden_dim_fc)
+        self.critic = Critic(hebg_config, action_dim, hidden_dim=hidden_dim_fc).to(device)
+        self.critic_target = Critic(hebg_config, action_dim, hidden_dim=hidden_dim_fc).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
@@ -101,6 +108,7 @@ class DDPGAgent:
     def select_action(self, state_data: Data) -> torch.Tensor:
         with torch.no_grad():
             action = self.actor(state_data)
+            action = action + self.sigma * torch.randn_like(action)
         return action
 
     def update(self, batch: Dict[str, Any]):
@@ -134,3 +142,23 @@ class DDPGAgent:
     def _soft_update(self, target: nn.Module, source: nn.Module):
         for target_param, param in zip(target.parameters(), source.parameters()):
             target_param.data.copy_(target_param.data * (1.0 - self.tau) + param.data * self.tau)
+
+    def save_model(self, path: str):
+        torch.save(
+            {
+                "actor_state_dict": self.actor.state_dict(),
+                "critic_state_dict": self.critic.state_dict(),
+                "actor_optimizer_state_dict": self.actor_optimizer.state_dict(),
+                "critic_optimizer_state_dict": self.critic_optimizer.state_dict(),
+                "hebg_config": self.hebg_config,  # Save HEBG config used for this agent
+            },
+            path,
+        )
+
+    def load_model(self, path: str):
+        checkpoint = torch.load(path)
+        self.actor.load_state_dict(checkpoint["actor_state_dict"])
+        self.critic.load_state_dict(checkpoint["critic_state_dict"])
+        self.actor_optimizer.load_state_dict(checkpoint["actor_optimizer_state_dict"])
+        self.critic_optimizer.load_state_dict(checkpoint["critic_optimizer_state_dict"])
+        self.hebg_config = checkpoint["hebg_config"]

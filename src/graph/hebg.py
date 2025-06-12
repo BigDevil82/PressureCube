@@ -108,29 +108,29 @@ class HEBG(nn.Module):
             node_masks[type_val] = torch.zeros(num_total_nodes, dtype=torch.bool, device=data.x.device)
 
         if hasattr(data, "num_graphs") and data.num_graphs > 1:  # Check if it's a Batch object
-            raise NotImplementedError("Batch objects are not supported yet.")
-            # # It's a Batch object, iterate through individual graphs
-            # # We need to know the starting index of each graph in the batch
-            # # data.ptr gives [0, num_nodes_graph1, num_nodes_graph1+num_nodes_graph2, ...]
-            # current_node_offset = 0
-            # for i in range(data.num_graphs):
-            #     # data.ptr gives the starting index for each graph in the batch.
-            #     # Example: data_list = [graph0, graph1], graph0 has N0 nodes, graph1 has N1 nodes.
-            #     # data.ptr = [0, N0, N0+N1]
-            #     num_nodes_in_this_graph = data.ptr[i + 1] - data.ptr[i]
-            #     original_graph_data = data.to_data_list()[i]  # Get the original Data object
+            # raise NotImplementedError("Batch objects are not supported yet.")
+            # It's a Batch object, iterate through individual graphs
+            # We need to know the starting index of each graph in the batch
+            # data.ptr gives [0, num_nodes_graph1, num_nodes_graph1+num_nodes_graph2, ...]
+            current_node_offset = 0
+            for i in range(1):
+                # data.ptr gives the starting index for each graph in the batch.
+                # Example: data_list = [graph0, graph1], graph0 has N0 nodes, graph1 has N1 nodes.
+                # data.ptr = [0, N0, N0+N1]
+                num_nodes_in_this_graph = data.ptr[i + 1] - data.ptr[i]
+                original_graph_data = data.to_data_list()[i]  # Get the original Data object
 
-            #     if hasattr(original_graph_data, "node_type_ranges") and original_graph_data.node_type_ranges:
-            #         for type_val_graph, (
-            #             start_idx_graph,
-            #             end_idx_graph,
-            #         ) in original_graph_data.node_type_ranges.items():
-            #             if isinstance(type_val_graph, int) and 0 <= type_val_graph < self.num_beam_types:
-            #                 # Apply offset for the current graph in the batch
-            #                 batch_start_idx = data.ptr[i] + start_idx_graph
-            #                 batch_end_idx = data.ptr[i] + end_idx_graph
-            #                 node_masks[type_val_graph][batch_start_idx : batch_end_idx + 1] = True
-            #     current_node_offset += num_nodes_in_this_graph
+                if hasattr(original_graph_data, "node_type_ranges") and original_graph_data.node_type_ranges:
+                    for type_val_graph, (
+                        start_idx_graph,
+                        end_idx_graph,
+                    ) in original_graph_data.node_type_ranges.items():
+                        if isinstance(type_val_graph, int) and 0 <= type_val_graph < self.num_beam_types:
+                            # Apply offset for the current graph in the batch
+                            batch_start_idx = data.ptr[i] + start_idx_graph
+                            batch_end_idx = data.ptr[i] + end_idx_graph
+                            node_masks[type_val_graph][batch_start_idx : batch_end_idx + 1] = True
+                current_node_offset += num_nodes_in_this_graph
 
         elif hasattr(data, "node_type_ranges") and data.node_type_ranges:  # Single Data object
             for type_val, (start_idx, end_idx) in data.node_type_ranges.items():
