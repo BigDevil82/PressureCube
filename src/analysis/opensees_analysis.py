@@ -2,10 +2,14 @@ import json
 import os
 from typing import Dict, List, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import openseespy.opensees as ops
+import opsvis as opsv
 
+from src.structure.section_library import RectangularTubeSection
 from src.structure.structural_model import Beam, Plate, StructuralModel  # For type hinting
+from src.utils.logger import Logger
 
 # Conversion Factors and Constants
 M_TO_MM = 1000.0
@@ -25,17 +29,22 @@ RHO_STEEL_TONNE_MM3 = RHO_STEEL_KG_M3 * KG_M3_TO_TONNE_MM3  # Density in tonne/m
 G_MM_S2 = 9806.65  # Gravitational acceleration in mm/s^2
 G_M_S2 = 9.80665
 
+logger = Logger("opensees_analysis", disable=True)
+
 
 class OpenSeesAnalyzer:
     """OpenSees分析接口类, using N, mm, s, tonne units."""
 
     def __init__(self):
+        self._model: Optional[StructuralModel] = None
         self.model_built = False
+        self._static_analysis_success = False
         self.loads_applied = False
         self.support_node_ids: List[int] = []  # Stores original model node IDs
         # model_beam_id -> (x_loc, y_loc, z_loc)
         self.beam_local_coord_systems: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         # Plate-related attributes
+        self.plate_thickness_mm = None
         self.plate_material_tag = 1000  # Starting tag for plate materials
         self.plate_section_tag = 2000  # Starting tag for plate sections
         self.pressure_load_applied = False
@@ -93,7 +102,7 @@ class OpenSeesAnalyzer:
         z_local = np.cross(x_local, y_local)  # This will be the actual local z, aligned with vecxz
         return x_local, y_local, z_local, vecxz
 
-    def setup_opensees_model(self, model: StructuralModel, plate_thickness_mm: float = 10.0):
+    def setup_opensees_model(self, model: StructuralModel):
         """
         Creates the OpenSees model including nodes, materials, elements,
         boundary conditions, and nodal masses for modal analysis.
@@ -104,6 +113,8 @@ class OpenSeesAnalyzer:
             model: StructuralModel object containing beams and plates
             plate_thickness_mm: Thickness of steel plates in mm (default 10mm)
         """
+        # model.plates = None
+        self.plate_thickness_mm = model.params.plate_thickness * M_TO_MM
         ops.wipe()
         ops.model("basic", "-ndm", 3, "-ndf", 6)  # 3 dimensions, 6 DOFs per node
 
@@ -123,7 +134,7 @@ class OpenSeesAnalyzer:
 
         # Create plate materials and sections
         if model.plates:
-            self._create_plate_materials_and_sections(plate_thickness_mm)
+            self._create_plate_materials_and_sections(self.plate_thickness_mm)
 
         # Geometric Transformations and Beam Elements
         geom_transf_counter = 0  # Start geomTransf tags from 0 (or 1 if preferred)
@@ -139,7 +150,7 @@ class OpenSeesAnalyzer:
                 p1_coords, p2_coords, beam_id, beam_obj
             )
             if vecxz is None:
-                print(f"Warning: Skipping zero-length beam (model ID {beam_id}).")
+                logger.warning(f"Warning: Skipping zero-length beam (model ID {beam_id}).")
                 continue
 
             self.beam_local_coord_systems[beam_id] = (x_loc, y_loc, z_loc)
@@ -150,7 +161,9 @@ class OpenSeesAnalyzer:
 
             section_props = model.sections.get(beam_obj.section)
             if not section_props:
-                print(f"Warning: Section {beam_obj.section} for beam {beam_id} not found. Skipping beam.")
+                logger.warning(
+                    f"Warning: Section {beam_obj.section} for beam {beam_id} not found. Skipping beam."
+                )
                 continue
 
             A_mm2 = section_props.area * M2_TO_MM2
@@ -211,6 +224,7 @@ class OpenSeesAnalyzer:
 
             # Select up to 4 unique corners, prioritizing the exact corner matches
             # This simple selection takes the first few found; more robust selection might be needed for complex bases
+            print(f"potential_corners: {potential_corners}")
             for node_id in potential_corners:
                 if corner_nodes_found < 4 and node_id not in self.support_node_ids:
                     ops.fix(node_id, 1, 1, 1, 1, 1, 1)  # Fix all 6 DOFs, using model node_id
@@ -218,7 +232,7 @@ class OpenSeesAnalyzer:
                     corner_nodes_found += 1
 
         if corner_nodes_found != 4 and len(model.points) > 0:  # Check if any nodes exist
-            print(
+            logger.warning(
                 f"Warning: Expected to find 4 corner support nodes, but fixed {corner_nodes_found}. Bottom nodes found: {len(bottom_nodes_data)}. "
             )
 
@@ -260,11 +274,12 @@ class OpenSeesAnalyzer:
                 ops.mass(node_id, *mass_values)  # Use model node_id directly
 
         self.model_built = True
-        print("OpenSees model setup complete.")
+        self._model = model
+        logger.info("OpenSees model setup complete.")
         if model.plates:
-            print(f"Model includes {len(model.plates)} steel plates with ShellMITC4 elements.")
+            logger.info(f"Model includes {len(model.plates)} steel plates with ShellMITC4 elements.")
 
-    def apply_gravity_loads(self, model: StructuralModel):
+    def apply_gravity_loads(self):
         """Applies gravity load as uniform beam loads in OpenSees."""
         if not self.model_built:
             raise RuntimeError("Model not built. Call setup_opensees_model first.")
@@ -272,8 +287,8 @@ class OpenSeesAnalyzer:
         ops.timeSeries("Linear", 1)  # Load Pattern TimeSeries Tag
         ops.pattern("Plain", 1, 1)  # Load Pattern Tag, TimeSeries Tag
 
-        for beam_id, beam_obj in model.beams.items():
-            section_props = model.sections.get(beam_obj.section)
+        for beam_id, beam_obj in self._model.beams.items():
+            section_props = self._model.sections.get(beam_obj.section)
             if not section_props:
                 continue
 
@@ -282,7 +297,7 @@ class OpenSeesAnalyzer:
             w_N_per_mm = w_N_per_m * N_M_TO_N_MM
 
             if beam_id not in self.beam_local_coord_systems:
-                print(f"Warning: Local axes not found for beam {beam_id}. Skipping gravity load.")
+                logger.warning(f"Warning: Local axes not found for beam {beam_id}. Skipping gravity load.")
                 continue
 
             x_loc, y_loc, z_loc = self.beam_local_coord_systems[beam_id]
@@ -300,14 +315,14 @@ class OpenSeesAnalyzer:
             )
 
         self.loads_applied = True
-        print("Gravity loads applied.")
+        logger.info("Gravity loads applied.")
 
     def run_static_analysis(self) -> bool:
         """Performs static analysis under the applied loads."""
         if not self.model_built:
             raise RuntimeError("Model not built.")
         if not self.loads_applied:
-            print("Warning: No loads seem to have been applied before static analysis.")
+            logger.warning("Warning: No loads seem to have been applied before static analysis.")
 
         ops.system("BandSPD")
         ops.numberer("RCM")
@@ -316,37 +331,93 @@ class OpenSeesAnalyzer:
         ops.algorithm("Linear")
         ops.analysis("Static")
 
-        print("Running static analysis...")
+        logger.info("Running static analysis...")
         result = ops.analyze(1)
         if result == 0:
-            print("Static analysis successful.")
+            logger.info("Static analysis successful.")
+            ops.reactions()  # Ensure reactions are calculated/updated
+            self._static_analysis_success = True
         else:
-            print(f"Static analysis FAILED. Result code: {result}")
-        return result == 0
+            logger.error(f"Static analysis FAILED. Result code: {result}")
+            self._static_analysis_success = False
+        return self._static_analysis_success
 
     def run_modal_analysis(self, num_modes: int) -> Optional[List[float]]:
         """Performs modal analysis."""
         if not self.model_built:
             raise RuntimeError("Model not built.")
 
-        print(f"Running modal analysis for {num_modes} modes...")
+        logger.info(f"Running modal analysis for {num_modes} modes...")
         eigenvalues_omega_sq = ops.eigen(num_modes)
         if (
             eigenvalues_omega_sq is None
             or not isinstance(eigenvalues_omega_sq, list)
             or len(eigenvalues_omega_sq) == 0
         ):
-            print("Modal analysis failed or returned no eigenvalues.")
+            logger.error("Modal analysis failed or returned no eigenvalues.")
             return None
 
-        print("Modal analysis successful.")
+        logger.info("Modal analysis successful.")
         return eigenvalues_omega_sq
+
+    def _process_modal_analysis_results(
+        self, eigenvalues_rad2_s2: List[float]
+    ) -> Tuple[List[float], List[float]]:
+        """Processes modal analysis results to return frequencies in Hz and periods in seconds."""
+        if not eigenvalues_rad2_s2:
+            return [], []
+
+        frequencies_hz = [np.sqrt(val) / (2 * np.pi) for val in eigenvalues_rad2_s2 if val > 0]
+        periods_s = [1 / f for f in frequencies_hz if f > 0]
+        return frequencies_hz, periods_s
+
+    def calculate_modal_participation_factors(self, numModes: int) -> List[float]:
+        # 获取所有节点标签
+        allNodes = ops.getNodeTags()
+
+        # 计算总质量 (X和Y方向)
+        totalMassX = sum(ops.nodeMass(node)[0] for node in allNodes)
+        totalMassY = sum(ops.nodeMass(node)[1] for node in allNodes)
+        totalMassZ = sum(ops.nodeMass(node)[2] for node in allNodes)
+
+        print(f"Total Mass - X: {totalMassX}, Y: {totalMassY}")
+
+        # 初始化结果存储
+        modal_participation = np.zeros((numModes, 3))  # 存储X和Y方向的质量参与系数
+
+        # 逐模态计算
+        for mode in range(numModes):
+            GammaX, GammaY, GammaZ = 0.0, 0.0, 0.0
+            for node in allNodes:
+                # 获取节点质量和振型分量 (X, Y, RZ)
+                massX, massY, massZ, massRx, massRy, massRz = ops.nodeMass(node)
+                phi = ops.nodeEigenvector(node, mode + 1)  # 注意：OpenSeesPy中模态编号从1开始
+                phi_X, phi_Y, phi_Z = phi[0], phi[1], phi[2]  # 提取XYZ方向分量
+
+                # 计算参与因子
+                GammaX += massX * phi_X
+                GammaY += massY * phi_Y
+                GammaZ += massZ * phi_Z
+            # 计算有效质量和参与系数
+            effectiveMassX = GammaX**2
+            effectiveMassY = GammaY**2
+            effectiveMassZ = GammaZ**2
+
+            modal_participation[mode, 0] = effectiveMassX / totalMassX * 100  # X方向百分比
+            modal_participation[mode, 1] = effectiveMassY / totalMassY * 100  # Y方向百分比
+            modal_participation[mode, 2] = effectiveMassZ / totalMassZ * 100  # Z方向百分比
+
+        return modal_participation
 
     def get_node_displacements(self, query_node_ids: Optional[List[int]] = None) -> Dict[int, np.ndarray]:
         """
         Retrieves displacements for specified model node IDs (or all if None).
         Returns Dict[model_node_id, np.array_of_6_displacements_mm_rad]
         """
+        if not self._static_analysis_success:
+            logger.warning("Warning: Static analysis not run or failed.")
+            return {}
+
         displacements: Dict[int, np.ndarray] = {}
         target_node_ids_to_query = []
 
@@ -363,7 +434,7 @@ class OpenSeesAnalyzer:
                 disp_mm_rad = np.array(ops.nodeDisp(node_id))
                 displacements[node_id] = disp_mm_rad
             except Exception as e:
-                print(f"Could not get displacement for OpenSees node tag {node_id}: {e}")
+                logger.error(f"Could not get displacement for OpenSees node tag {node_id}: {e}")
         return displacements
 
     def get_support_reactions(self) -> Dict[int, np.ndarray]:
@@ -373,10 +444,8 @@ class OpenSeesAnalyzer:
         """
         reactions: Dict[int, np.ndarray] = {}
         if not self.support_node_ids:
-            print("Warning: No support nodes defined/found to get reactions from.")
+            logger.warning("Warning: No support nodes defined/found to get reactions from.")
             return reactions
-
-        ops.reactions()  # Ensure reactions are calculated/updated
 
         for node_id in self.support_node_ids:  # Iterate original model IDs stored
             try:
@@ -384,7 +453,7 @@ class OpenSeesAnalyzer:
                 react_N_Nmm = np.array(ops.nodeReaction(node_id))
                 reactions[node_id] = react_N_Nmm
             except Exception as e:
-                print(f"Could not get reaction for OpenSees support node tag {node_id}: {e}")
+                logger.error(f"Could not get reaction for OpenSees support node tag {node_id}: {e}")
         return reactions
 
     def save_results(self, data: Dict, filename: str, output_dir: str = "results"):
@@ -415,14 +484,13 @@ class OpenSeesAnalyzer:
 
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(serializable_data, f, indent=4, ensure_ascii=False)
-        print(f"Results saved to {filepath}")
+        logger.info(f"Results saved to {filepath}")
 
     def perform_full_analysis_and_save(
         self,
         model: StructuralModel,
         num_modal_modes: int = 5,
         output_dir: str = "opensees_results",
-        plate_thickness_mm: float = 10.0,
         internal_pressure_pa: float = 30000.0,
         include_pressure_loads: bool = True,
     ):
@@ -434,21 +502,20 @@ class OpenSeesAnalyzer:
             model: StructuralModel object
             num_modal_modes: Number of modal modes to analyze
             output_dir: Output directory for results
-            plate_thickness_mm: Steel plate thickness in mm
             internal_pressure_pa: Internal pressure for pressurized building in Pa
             include_pressure_loads: Whether to apply pressure loads to plates
         """
-        print("Starting OpenSees full analysis workflow with steel plate modeling...")
-        self.setup_opensees_model(model, plate_thickness_mm)
+        logger.info("Starting OpenSees full analysis workflow with steel plate modeling...")
+        self.setup_opensees_model(model)
 
         if self.model_built:
             # Apply loads based on analysis type
             if model.plates and include_pressure_loads:
                 # For pressurized buildings: apply both gravity and pressure loads
-                self.apply_gravity_and_pressure_loads(model, internal_pressure_pa)
+                self.apply_pressure_loads(internal_pressure_pa)
             else:
                 # Traditional analysis: gravity loads only
-                self.apply_gravity_loads(model)
+                self.apply_gravity_loads()
 
             static_success = self.run_static_analysis()
             if static_success:
@@ -459,11 +526,11 @@ class OpenSeesAnalyzer:
                 # Get plate-specific results
                 plate_analysis_results = {}
                 if model.plates:
-                    print("Analyzing steel plate deformation...")
-                    plate_displacements = self.get_plate_displacements(model)
-                    plate_stresses_results = self.get_plate_stresses(model)
-                    plate_deformation_analysis = self.analyze_plate_deformation(
-                        model, plate_displacements, plate_stresses_results
+                    logger.info("Analyzing steel plate deformation...")
+                    plate_displacements = self.get_plate_displacements()
+                    plate_stresses_results = self.get_plate_stresses()
+                    plate_deformation_analysis = self.get_analysis_result(
+                        plate_displacements, plate_stresses_results
                     )
 
                     plate_analysis_results = {
@@ -471,7 +538,7 @@ class OpenSeesAnalyzer:
                         "plate_stresses": plate_stresses_results,
                         "plate_deformation_analysis": plate_deformation_analysis,
                         "analysis_parameters": {
-                            "plate_thickness_mm": plate_thickness_mm,
+                            "plate_thickness_mm": self.plate_thickness_mm,
                             "internal_pressure_pa": internal_pressure_pa if include_pressure_loads else 0,
                             "pressure_applied": include_pressure_loads,
                         },
@@ -494,26 +561,26 @@ class OpenSeesAnalyzer:
                     deform_analysis = plate_analysis_results["plate_deformation_analysis"]
                     if "performance_indicators" in deform_analysis:
                         indicators = deform_analysis["performance_indicators"]
-                        print("\n=== Steel Plate Analysis Summary ===")
-                        print(
+                        logger.info("\n=== Steel Plate Analysis Summary ===")
+                        logger.info(
                             f"Total plates analyzed (displacement): {indicators.get('plates_analyzed_displacement', 0)}"
                         )
-                        print(
+                        logger.info(
                             f"Total plates with stress results: {indicators.get('plates_analyzed_stress', 0)}"
                         )
-                        print(
+                        logger.info(
                             f"Maximum plate nodal displacement: {indicators.get('max_plate_nodal_displacement_mm', 0):.3f} mm"
                         )
                         if indicators.get("max_overall_normal_stress_mpa") is not None:
-                            print(
+                            logger.info(
                                 f"Maximum overall absolute normal stress: {indicators.get('max_overall_normal_stress_mpa', 0):.3f} MPa (Plate ID: {indicators.get('plate_with_max_normal_stress', 'N/A')})"
                             )
-                        print(
+                        logger.info(
                             f"Average plate center displacement: {indicators.get('average_plate_center_displacement_mm', 0):.3f} mm"
                         )
                         if include_pressure_loads:
-                            print(f"Internal pressure applied: {internal_pressure_pa} Pa")
-                        print("=====================================\n")
+                            logger.info(f"Internal pressure applied: {internal_pressure_pa} Pa")
+                        logger.info("=====================================\n")
 
             # Modal analysis
             eigenvalues_rad2_s2 = self.run_modal_analysis(num_modal_modes)
@@ -527,7 +594,7 @@ class OpenSeesAnalyzer:
                 }
                 self.save_results(modal_results_data, "modal_analysis_results.json", output_dir)
 
-        print("OpenSees full analysis workflow finished.")
+        logger.info("OpenSees full analysis workflow finished.")
 
     def _create_plate_materials_and_sections(self, plate_thickness_mm: float = 10.0):
         """
@@ -549,36 +616,38 @@ class OpenSeesAnalyzer:
             E_STEEL_MPA,
             NU_STEEL,
             plate_thickness_mm,
-            RHO_STEEL_TONNE_MM3,
+            # RHO_STEEL_TONNE_MM3,
         )
 
-        print(
+        logger.info(
             f"Created plate material (tag: {self.plate_material_tag}) and section (tag: {self.plate_section_tag})"
         )
-        print(f"Plate thickness: {plate_thickness_mm} mm")
+        logger.info(f"Plate thickness: {plate_thickness_mm} mm")
 
     def _add_plate_elements(self, model: StructuralModel):
         """
         Add ShellMITC4 plate elements to the OpenSees model.
         """
         if not model.plates:
-            print("No plates found in the model. Skipping plate element creation.")
+            logger.warning("No plates found in the model. Skipping plate element creation.")
             return
 
-        print(f"Adding {len(model.plates)} plate elements...")
+        logger.info(f"Adding {len(model.plates)} plate elements...")
 
         for plate_id, plate_obj in model.plates.items():
             # Get the four node IDs in counter-clockwise order
             node_ids = plate_obj.nodes
 
             if len(node_ids) != 4:
-                print(f"Warning: Plate {plate_id} does not have exactly 4 nodes. Skipping.")
+                logger.warning(f"Warning: Plate {plate_id} does not have exactly 4 nodes. Skipping.")
                 continue
 
             # Verify all nodes exist in the model
             missing_nodes = [nid for nid in node_ids if nid not in model.points]
             if missing_nodes:
-                print(f"Warning: Plate {plate_id} references missing nodes {missing_nodes}. Skipping.")
+                logger.warning(
+                    f"Warning: Plate {plate_id} references missing nodes {missing_nodes}. Skipping."
+                )
                 continue
 
             try:
@@ -588,7 +657,7 @@ class OpenSeesAnalyzer:
                 # print(f"Created plate element {plate_id} with nodes {node_ids}")
 
             except Exception as e:
-                print(f"Error creating plate element {plate_id}: {e}")
+                logger.error(f"Error creating plate element {plate_id}: {e}")
 
     def _calculate_plate_nodal_masses(self, model: StructuralModel) -> Dict[int, float]:
         """
@@ -619,7 +688,7 @@ class OpenSeesAnalyzer:
 
         return nodal_plate_masses
 
-    def apply_pressure_loads(self, model: StructuralModel, internal_pressure_pa: float = 30000.0):
+    def apply_pressure_loads(self, internal_pressure_pa: float = 30000.0):
         """
         Applies internal pressure loads to steel plates by converting them to equivalent
         line loads on the boundary beams of each plate.
@@ -631,8 +700,8 @@ class OpenSeesAnalyzer:
         if not self.model_built:
             raise RuntimeError("Model not built. Call setup_opensees_model first.")
 
-        if not model.plates:
-            print("No plates found in the model. Skipping pressure load application.")
+        if not self._model.plates:
+            logger.warning("No plates found in the model. Skipping pressure load application.")
             return
 
         # Convert pressure from Pa to N/mm^2 (MPa)
@@ -650,16 +719,18 @@ class OpenSeesAnalyzer:
             "bottom": np.array([0.0, 0.0, -1.0]),  # 向下
             "left": np.array([0.0, -1.0, 0.0]),  # 向左 (Y负方向)
             "right": np.array([0.0, 1.0, 0.0]),  # 向右 (Y正方向)
-            "front": np.array([1.0, 0.0, 0.0]),  # 向前 (X正方向)
-            "back": np.array([-1.0, 0.0, 0.0]),  # 向后 (X负方向)
+            "front": np.array([-1.0, 0.0, 0.0]),  # 向前 (X正方向)
+            "back": np.array([1.0, 0.0, 0.0]),  # 向后 (X负方向)
         }
 
-        print(f"Converting plate pressure loads to equivalent beam line loads...")
+        logger.info("Converting plate pressure loads to equivalent beam line loads...")
 
-        for plate_id, plate_obj in model.plates.items():
+        for plate_id, plate_obj in self._model.plates.items():
+            # if plate_obj.on_face != "back":
+            #     continue
             try:
                 # Calculate plate area
-                plate_area_m2 = plate_obj.area(model.points)
+                plate_area_m2 = plate_obj.area(self._model.points)
                 plate_area_mm2 = plate_area_m2 * M2_TO_MM2
 
                 # Total force on the plate
@@ -669,7 +740,7 @@ class OpenSeesAnalyzer:
                 # Get pressure direction for this plate's face
                 plate_face = plate_obj.on_face
                 if plate_face not in face_pressure_directions:
-                    print(
+                    logger.warning(
                         f"Warning: Unknown face '{plate_face}' for plate {plate_id}, using default upward direction"
                     )
                     pressure_direction = np.array([0.0, 0.0, 1.0])
@@ -682,13 +753,13 @@ class OpenSeesAnalyzer:
                 plate_node_ids = set(plate_obj.nodes)
                 boundary_beams = []
 
-                for beam_id, beam_obj in model.beams.items():
+                for beam_id, beam_obj in self._model.beams.items():
                     beam_nodes = {beam_obj.start_node, beam_obj.end_node}
                     # Check if both beam nodes are in the plate nodes (i.e., beam is on plate boundary)
                     if beam_nodes.issubset(plate_node_ids):
                         # Calculate beam length
-                        start_point = model.points[beam_obj.start_node]
-                        end_point = model.points[beam_obj.end_node]
+                        start_point = self._model.points[beam_obj.start_node]
+                        end_point = self._model.points[beam_obj.end_node]
                         beam_length_m = start_point.distance_to(end_point)
                         beam_length_mm = beam_length_m * M_TO_MM
 
@@ -697,14 +768,14 @@ class OpenSeesAnalyzer:
                         )
 
                 if not boundary_beams:
-                    print(f"Warning: No boundary beams found for plate {plate_id}")
+                    logger.warning(f"Warning: No boundary beams found for plate {plate_id}")
                     continue
 
                 # Calculate total perimeter length
                 total_perimeter_mm = sum(beam["length_mm"] for beam in boundary_beams)
 
                 if total_perimeter_mm <= 0:
-                    print(f"Warning: Zero perimeter length for plate {plate_id}")
+                    logger.warning(f"Warning: Zero perimeter length for plate {plate_id}")
                     continue
 
                 # Distribute the total force to boundary beams proportionally
@@ -721,7 +792,9 @@ class OpenSeesAnalyzer:
 
                     # Apply pressure load in the correct direction for this face
                     if beam_id not in self.beam_local_coord_systems:
-                        print(f"Warning: Local axes not found for beam {beam_id}. Skipping pressure load.")
+                        logger.warning(
+                            f"Warning: Local axes not found for beam {beam_id}. Skipping pressure load."
+                        )
                         continue
 
                     x_loc, y_loc, z_loc = self.beam_local_coord_systems[beam_id]
@@ -749,17 +822,17 @@ class OpenSeesAnalyzer:
                         pressure_loads_applied += 1
 
                     except Exception as e:
-                        print(f"Warning: Could not apply pressure load to beam {beam_id}: {e}")
+                        logger.warning(f"Warning: Could not apply pressure load to beam {beam_id}: {e}")
 
             except Exception as e:
-                print(f"Error processing pressure load for plate {plate_id}: {e}")
+                logger.error(f"Error processing pressure load for plate {plate_id}: {e}")
 
         self.pressure_load_applied = True
-        print(f"Pressure loads converted and applied to {pressure_loads_applied} boundary beams.")
-        print(f"Total equivalent force: {total_equivalent_force:.2f} N")
-        print(f"Pressure magnitude: {internal_pressure_pa} Pa ({pressure_mpa:.6f} MPa)")
+        logger.info(f"Pressure loads converted and applied to {pressure_loads_applied} boundary beams.")
+        logger.info(f"Total equivalent force: {total_equivalent_force:.2f} N")
+        logger.info(f"Pressure magnitude: {internal_pressure_pa} Pa ({pressure_mpa:.6f} MPa)")
 
-    def apply_gravity_and_pressure_loads(self, model: StructuralModel, internal_pressure_pa: float = 30000.0):
+    def apply_gravity_and_pressure_loads(self, internal_pressure_pa: float = 30000.0):
         """
         Applies both gravity loads (on beams) and internal pressure loads (on plates).
         This is the recommended method for pressurized building analysis.
@@ -769,25 +842,29 @@ class OpenSeesAnalyzer:
             internal_pressure_pa: Internal pressure in Pa
         """
         # Apply gravity loads to beams
-        self.apply_gravity_loads(model)
+        self.apply_gravity_loads()
 
         # Apply pressure loads to plates
-        if model.plates:
-            self.apply_pressure_loads(model, internal_pressure_pa)
+        if self._model.plates:
+            self.apply_pressure_loads(internal_pressure_pa)
 
-        print("Combined gravity and pressure loads applied.")
+        logger.info("Combined gravity and pressure loads applied.")
 
-    def get_plate_displacements(self, model: StructuralModel) -> Dict[int, Dict[str, np.ndarray]]:
+    def get_plate_displacements(self) -> Dict[int, Dict[str, np.ndarray]]:
         """
         Retrieves plate element nodal displacements and calculates plate-specific results.
         Returns: Dict[plate_id, {'nodes': node_ids, 'displacements': displacements_array}]
         """
-        if not model.plates:
+        if not self._static_analysis_success:
+            logger.warning("Warning: Static analysis not run or failed.")
+            return {}
+
+        if not self._model.plates:
             return {}
 
         plate_displacements = {}
 
-        for plate_id, plate_obj in model.plates.items():
+        for plate_id, plate_obj in self._model.plates.items():
             try:
                 # Get nodal displacements for the plate nodes
                 node_disps = []
@@ -796,7 +873,7 @@ class OpenSeesAnalyzer:
                         disp = np.array(ops.nodeDisp(node_id))
                         node_disps.append(disp)
                     except Exception as e:
-                        print(f"Could not get displacement for node {node_id}: {e}")
+                        logger.error(f"Could not get displacement for node {node_id}: {e}")
                         node_disps.append(np.zeros(6))
 
                 plate_displacements[plate_id] = {
@@ -808,65 +885,109 @@ class OpenSeesAnalyzer:
                 }
 
             except Exception as e:
-                print(f"Error getting plate {plate_id} displacements: {e}")
+                logger.error(f"Error getting plate {plate_id} displacements: {e}")
 
         return plate_displacements
 
-    def get_plate_stresses(self, model: StructuralModel) -> Dict[int, Dict[str, np.ndarray]]:
+    def get_plate_stresses(self) -> Dict[int, np.ndarray]:
         """
         Retrieves plate element stresses and forces.
         Returns: Dict[plate_id, stress/force data]
         """
-        if not model.plates:
+        if not self._static_analysis_success:
+            logger.warning("Warning: Static analysis not run or failed.")
+            return {}
+
+        if not self._model.plates:
             return {}
 
         plate_stresses_results = {}  # Renamed to avoid conflict with the 'stresses' key
 
-        for plate_model_id, plate_obj in model.plates.items():  # plate_model_id is the key from model.plates
-            ele_tag = plate_model_id  # Calculate the OpenSees element tag
-            current_plate_data = {}
+        for plate_model_id in self._model.plates.keys():  # plate_model_id is the key from model.plates
             try:
                 # Get element stress/force response
                 # For ShellMITC4, common response types are:
                 # 'forces', 'stresses', 'material' responses
 
-                # Try to get element forces (membrane forces and moments)
-                try:
-                    forces = ops.eleResponse(ele_tag, "forces")  # Use ele_tag
-                    current_plate_data["forces"] = np.array(forces) if forces is not None else None
-                except Exception as e:
-                    print(
-                        f"Warning: Could not get forces for plate element {ele_tag} (model plate ID {plate_model_id}): {e}"
-                    )
-                    current_plate_data["forces"] = None
+                # forces = ops.eleResponse(ele_tag, "forces")  # Use ele_tag
+                # current_plate_data["forces"] = np.array(forces) if forces is not None else None
 
-                # Try to get element stresses
-                try:
-                    stresses_response = ops.eleResponse(ele_tag, "stresses")  # Use ele_tag
-                    if stresses_response is not None:
-                        current_plate_data["stresses"] = np.array(stresses_response)
-                    else:
-                        # print(f"Warning: No stresses found for plate element {ele_tag} (model plate ID {plate_model_id})\")
-                        current_plate_data["stresses"] = None
-                except Exception as e:
-                    print(
-                        f"Warning: Could not get stresses for plate element {ele_tag} (model plate ID {plate_model_id}): {e}"
-                    )
-                    current_plate_data["stresses"] = None
-
-                plate_stresses_results[plate_model_id] = current_plate_data
+                stresses_response = ops.eleResponse(plate_model_id, "stresses")  # Use ele_tag
+                if stresses_response is not None:
+                    plate_stresses_results[plate_model_id] = np.array(stresses_response)
+                else:
+                    plate_stresses_results[plate_model_id] = None
 
             except Exception as e:
-                print(
-                    f"Error getting responses for plate element {ele_tag} (model plate ID {plate_model_id}): {e}"
-                )
-                plate_stresses_results[plate_model_id] = {"forces": None, "stresses": None}
+                logger.error(f"Error getting responses for plate element {plate_model_id}: {e}")
+                plate_stresses_results[plate_model_id] = None
 
         return plate_stresses_results
 
-    def analyze_plate_deformation(
+    def get_beam_stresses(self) -> Dict[int, np.ndarray]:
+        """
+        Retrieves beam element stresses and forces.
+        Returns: Dict[beam_id, stress/force data]
+        """
+        if not self._static_analysis_success:
+            logger.warning("Warning: Static analysis not run or failed.")
+            return {}
+
+        beam_stresses_results = {}
+
+        def calc_one_end(N, Mz, A, Iz, h):
+            y_top = -h / 2  # 上缘
+            y_bottom = h / 2  # 下缘
+
+            # 轴向应力
+            sigma_n = N / A
+
+            # 弯曲应力 (上缘和下缘)
+            sigma_m_top = (Mz * y_top) / Iz
+            sigma_m_bottom = (Mz * y_bottom) / Iz
+
+            # 总应力
+            sigma_top = sigma_n + sigma_m_top
+            sigma_bottom = sigma_n + sigma_m_bottom
+
+            return sigma_top, sigma_bottom
+
+        for beam_id, beam_obj in self._model.beams.items():
+            forces = ops.eleResponse(beam_id, "force")
+            if forces is None:
+                beam_stresses_results[beam_id] = None
+                continue
+
+            N1, My1, Mz1 = forces[0], forces[4], forces[5]
+            N2, My2, Mz2 = forces[6], forces[10], forces[11]
+
+            section = self._model.sections[beam_obj.section]
+            A = section.area * M2_TO_MM2
+            Iz = section.Ix * M4_TO_MM4
+            Iy = section.Iy * M4_TO_MM4
+            hz = section.B if isinstance(section, RectangularTubeSection) else section.H
+            hy = section.B if isinstance(section, RectangularTubeSection) else section.B
+
+            sigma_top1, sigma_bottom1 = calc_one_end(N1, Mz1, A, Iz, hz)
+            sigma_top2, sigma_bottom2 = calc_one_end(N2, Mz2, A, Iz, hz)
+            sigma_top3, sigma_bottom3 = calc_one_end(N1, My1, A, Iy, hy)
+            sigma_top4, sigma_bottom4 = calc_one_end(N2, My2, A, Iy, hy)
+
+            beam_stresses_results[beam_id] = [
+                sigma_top1,
+                sigma_bottom1,
+                sigma_top2,
+                sigma_bottom2,
+                sigma_top3,
+                sigma_bottom3,
+                sigma_top4,
+                sigma_bottom4,
+            ]
+
+        return beam_stresses_results
+
+    def get_analysis_result(
         self,
-        model: StructuralModel,
         plate_displacements: Dict[int, Dict[str, np.ndarray]],
         plate_stresses_results: Dict[int, Dict[str, Optional[np.ndarray]]],
     ) -> Dict[str, any]:
@@ -875,19 +996,19 @@ class OpenSeesAnalyzer:
         stress concentrations, and structural performance indicators.
         Now also calculates maximum normal stress from plate_stresses_results.
         """
-        if not model.plates:  # Should not happen if plate_displacements/stresses are populated
+        if not self._model.plates:  # Should not happen if plate_displacements/stresses are populated
             return {"message": "No plates in model to analyze"}
 
         # Initialize analysis_results structure
         analysis_results = {
-            "total_plates": len(model.plates),
+            "total_plates": len(self._model.plates),
             "max_displacement": {"value": 0.0, "plate_id": None, "direction": None},
             "plate_summary": {},  # Will be populated with per-plate data
             "performance_indicators": {},
         }
 
         # Populate plate_summary with basic entries first
-        for plate_id in model.plates.keys():
+        for plate_id in self._model.plates.keys():
             analysis_results["plate_summary"][plate_id] = {}
 
         # Analyze displacements (using the provided plate_displacements)
@@ -962,7 +1083,7 @@ class OpenSeesAnalyzer:
         stresses_processed_count = 0
 
         for plate_model_id, stress_data in plate_stresses_results.items():
-            stresses_array = stress_data.get("stresses")
+            stresses_array = stress_data
 
             if plate_model_id not in analysis_results["plate_summary"]:  # Should exist
                 analysis_results["plate_summary"][plate_model_id] = {}
@@ -1017,24 +1138,138 @@ class OpenSeesAnalyzer:
 
         return analysis_results
 
+    def get_max_indicators(self) -> Dict[str, float]:
+        """
+        Retrieves the maximum values of the performance indicators.
+        """
+        displacements = self.get_node_displacements()
+        max_disp_abs = 0.0
+        max_disp_abs_idx = None
+        max_node_disp = None
+        for node_id, disp in displacements.items():
+            disp_np = np.array(disp)
+            current_max_disp_abs = np.max(np.abs(disp_np[:3]))
+            if current_max_disp_abs > max_disp_abs:
+                max_disp_abs = current_max_disp_abs
+                max_disp_abs_idx = node_id
+                max_node_disp = disp_np[:3]
+
+        beams_stresses = self.get_beam_stresses()
+        max_beam_stress_abs = 0.0
+        max_beam_stress_abs_idx = None
+        max_beam_stress = None
+        for beam_id, stresses in beams_stresses.items():
+            if stresses is None:
+                continue
+            current_max_beam_stress_abs = np.max(np.abs(stresses))
+            if current_max_beam_stress_abs > max_beam_stress_abs:
+                max_beam_stress_abs = current_max_beam_stress_abs
+                max_beam_stress_abs_idx = beam_id
+                max_beam_stress = stresses
+
+        if self._model.plates:
+            t = self.plate_thickness_mm
+            stresses = self.get_plate_stresses()
+            max_plate_stress_abs = 0.0
+            max_plate_stress_abs_idx = None
+            all_stresses = []
+            for plate_id, stress_data in stresses.items():
+                if stress_data is None:
+                    continue
+
+                # 按高斯点分组 (4 Gauss points × 8 components)
+                stress_data = stress_data.reshape(4, 8)
+                all_stresses.append(stress_data)
+
+            all_stresses = np.concatenate(all_stresses, axis=0)
+            max_force = np.max(all_stresses, axis=0)
+            min_force = np.min(all_stresses, axis=0)
+            print("max force:")
+            print((max_force / 1e3).tolist(), "kN")
+            print((min_force / 1e3).tolist(), "kN")
+            max_stress = np.zeros_like(max_force)
+            min_stress = np.zeros_like(max_force)
+            for i in range(max_force.shape[0]):
+                if 3 < i < 6:
+                    max_stress[i] = 6 * max_force[i] / t**2
+                    min_stress[i] = 6 * min_force[i] / t**2
+                else:
+                    max_stress[i] = max_force[i] / t
+                min_stress[i] = min_force[i] / t
+            print("max, min stress:")
+            print((max_stress).tolist(), "MPa")
+            print((min_stress).tolist(), "MPa")
+
+        return {
+            "max_abs_displacement": max_disp_abs,
+            "max_abs_displacement_idx": max_disp_abs_idx,
+            "max_abs_disp_node_coord": self._model.points[max_disp_abs_idx].coordinates(),
+            "max_displacement_vector": max_node_disp,
+            "max_abs_beam_stress": max_beam_stress_abs,
+            "max_abs_beam_stress_idx": max_beam_stress_abs_idx,
+            "max_beam_stress": max_beam_stress,
+            "max_abs_plate_stress": max_plate_stress_abs,
+            "max_abs_plate_stress_idx": max_plate_stress_abs_idx,
+        }
+
+    def visualize_model(self):
+        b = 75
+        h = 150
+        fig_wi_he = (15, 15)
+        ele_shapes = {1: ["circ", [h]], 2: ["rect", [b, h]], 3: ["I", [b, h, b / 10.0, h / 6.0]]}
+        # opsv.plot_model(node_labels=0, element_labels=0, axis_off=1, fig_wi_he=fig_wi_he)
+        # opsv.plot_extruded_shapes_3d(ele_shapes, fig_wi_he=fig_wi_he)
+        opsv.plot_load(6)
+        plt.show()
+
 
 # Example Usage (can be in a main script or a test file)
 if __name__ == "__main__":
     from src.utils.model_utils import create_structural_model, load_config
 
-    print("Testing OpenSeesAnalyzer...")
+    logger.info("Testing OpenSeesAnalyzer...")
     config_path = "config.yaml"
     config = load_config(config_path)
     model = create_structural_model(config)
+    print("结构总质量: ", model.calculate_mass() / 1000, "t")
 
     analyzer = OpenSeesAnalyzer()
     try:
-        analyzer.perform_full_analysis_and_save(
-            model, num_modal_modes=6, output_dir="results/opensees_test_results_0idx"
-        )
+        # analyzer.perform_full_analysis_and_save(
+        #     model, num_modal_modes=6, plate_thickness_mm=5, output_dir="results/opensees_test_results_0idx"
+        # )
+        analyzer.setup_opensees_model(model)
+        analyzer.apply_pressure_loads(internal_pressure_pa=30000.0)
+        analyzer.run_static_analysis()
+        max_indicators = analyzer.get_max_indicators()
+        print("max_indicators: ", max_indicators)
+
+        # max_nodal_idx
+        max_nodal_idx = max_indicators["max_abs_displacement_idx"]
+        # coordinates of the max nodal
+        max_nodal_coord = model.points[max_nodal_idx].coordinates()
+        print("max_nodal_coord: ", max_nodal_coord)
+
+        # modal analysis
+        num_modes = 12
+        modal_results = analyzer.run_modal_analysis(num_modes=num_modes)
+        frequencies_hz, periods_s = analyzer._process_modal_analysis_results(modal_results)
+        print("frequencies_hz: ", frequencies_hz)
+        print("periods_s: ", periods_s)
+        # analyzer.visualize_model()
+        modal_participation = analyzer.calculate_modal_participation_factors(numModes=num_modes)
+        for i in range(num_modes):
+            print(
+                f"Mode {i+1}: X: {modal_participation[i, 0]:.2f}%, Y: {modal_participation[i, 1]:.2f}%, Z: {modal_participation[i, 2]:.2f}%"
+            )
+
+        disp_83 = analyzer.get_node_displacements([83])
+        print("disp_83: ", disp_83)
+
+        # analyzer.visualize_model()
 
     except Exception as e:
-        print(f"An error occurred during OpenSees analysis: {e}")
+        logger.error(f"An error occurred during OpenSees analysis: {e}")
         import traceback
 
         traceback.print_exc()
