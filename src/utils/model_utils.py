@@ -179,24 +179,77 @@ class StructureVisualizer:
                 y = [start_node.y, end_node.y]
                 z = [start_node.z, end_node.z]
 
-                ax.plot(x, y, z, color=self.colors[beam.beam_type], linewidth=1.5)
+                ax.plot(x, y, z, color=self.colors[beam.beam_type], linewidth=1.5, zorder=10)
+
+    def _plot_plates(self, ax: plt.Axes, face_type: ViewType):
+        """绘制钢板"""
+        for plate_id, plate in self.model.plates.items():
+            # 获取板的四个角点坐标
+            corner_points = [self.model.points[node_id] for node_id in plate.nodes]
+
+            # 添加第一个点以闭合多边形
+            corner_points.append(corner_points[0])
+
+            # 提取x, y, z坐标
+            x = [point.x for point in corner_points]
+            y = [point.y for point in corner_points]
+            z = [point.z for point in corner_points]
+
+            # 根据板所在面判断是否需要显示
+            if face_type == ViewType.FULL_3D or plate.on_face.lower() == face_type.value:
+                # 使用灰色虚线绘制板, 置于底层
+                ax.plot(x, y, z, color="gray", linestyle="-", linewidth=0.7, alpha=0.8, zorder=0)
+
+    def _plot_nodes(self, ax: plt.Axes, face_type: ViewType):
+        """绘制节点"""
+        # 收集所有节点的坐标
+        x, y, z = [], [], []
+        for node_id, point in self.model.points.items():
+            # 对于2D视图，只显示在对应面上的节点
+            if face_type == ViewType.FULL_3D:
+                x.append(point.x)
+                y.append(point.y)
+                z.append(point.z)
+            elif (
+                (face_type == ViewType.LEFT and abs(point.y) < 0.01)
+                or (face_type == ViewType.RIGHT and abs(point.y - self.model.params.length) < 0.01)
+                or (face_type == ViewType.FRONT and abs(point.x) < 0.01)
+                or (face_type == ViewType.BACK and abs(point.x - self.model.params.width) < 0.01)
+                or (face_type == ViewType.TOP and abs(point.z - self.model.params.height) < 0.01)
+                or (face_type == ViewType.BOTTOM and abs(point.z) < 0.01)
+            ):
+                x.append(point.x)
+                y.append(point.y)
+                z.append(point.z)
+
+        # 绘制节点
+        if x:  # 只在有节点时绘制
+            ax.scatter(x, y, z, color="gray", s=5, marker="o", alpha=0.6, zorder=1, label="Node")
 
     def _add_legend(self, ax: plt.Axes):
         """添加图例"""
         for beam_type, color in self.colors.items():
             ax.plot([], [], [], color=color, label=beam_type.name)
+        # 添加板的图例
+        ax.plot([], [], [], color="gray", linestyle="-", label="Plate")
+        # 添加节点的图例（只添加一次）
+        if not any(item.get_label() == "Node" for item in ax.get_legend_handles_labels()[0]):
+            ax.scatter([], [], [], color="gray", s=5, marker="o", alpha=0.6, label="Node")
         ax.legend()
 
-    def show_face(self, face_type: ViewType):
+    def show_face(self, face_type: ViewType, grid: bool = True):
         """显示指定面的视图"""
         fig, ax = self._create_plot(face_type)
-        self._plot_beams(ax, face_type)
+        self._plot_plates(ax, face_type)  # 先绘制板（在底层）
+        self._plot_beams(ax, face_type)  # 再绘制梁
+        self._plot_nodes(ax, face_type)  # 最后绘制节点（在顶层）
         self._add_legend(ax)
         plt.axis("equal")
+        ax.grid(grid)
         plt.show()
         return fig, ax
 
-    def show_all_views(self):
+    def show_all_views(self, grid: bool = True):
         """显示所有视图"""
         # 显示六个面的视图
         for face_type in [
@@ -207,7 +260,7 @@ class StructureVisualizer:
             ViewType.TOP,
             ViewType.BOTTOM,
         ]:
-            self.show_face(face_type)
+            self.show_face(face_type, grid)
 
         # 显示3D视图
-        self.show_face(ViewType.FULL_3D)
+        self.show_face(ViewType.FULL_3D, grid)

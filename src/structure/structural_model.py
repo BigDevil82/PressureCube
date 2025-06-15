@@ -67,8 +67,9 @@ class Plate:
     """钢板类"""
 
     id: int
-    nodes: List[int]  # 4个节点ID，按逆时针方向排列
+    nodes: List[int]  # 4个角点节点ID，按逆时针方向排列
     on_face: str  # 所在面 ('top', 'bottom', 'front', 'back', 'left', 'right')
+    boundary_beams: List[int]  # 边界梁ID列表
     thickness: float = 0.01  # 板厚，默认10mm
 
     def area(self, points: Dict[int, Point]) -> float:
@@ -158,6 +159,7 @@ class StructuralModel:
         self.sections: Dict[str, SteelSection] = {}  # 截面属性字典 {截面名: 截面属性}
         self.node_counter = 0  # 节点ID计数器
         self.beam_counter = 0  # 梁ID计数器
+        self._beam_id_map: Dict[Tuple[int, int], int] = {}  # 梁端节点ID到梁ID的映射
         self.plate_counter = self.__PLATE_START_ID  # 钢板ID计数器
         self._mesh_generated = False  # 是否已经生成网格
         self._initialize_sections()  # 初始化截面属性
@@ -257,12 +259,14 @@ class StructuralModel:
             section=section,
             on_face=face,
         )
+        self._beam_id_map[(start_node, end_node)] = beam_id
+        self._beam_id_map[(end_node, start_node)] = beam_id
         if self.beams[beam_id].length(self.points) < 0.1:
             print(f"Warning: Beam {beam_id} has length {self.beams[beam_id].length(self.points)}")
         self.beam_counter += 1
         return beam_id
 
-    def add_plate(self, nodes: List[int], on_face: str) -> int:
+    def add_plate(self, nodes: List[int], on_face: str, boundary_beams: List[int]) -> int:
         """添加钢板并返回钢板ID
 
         Args:
@@ -281,7 +285,9 @@ class StructuralModel:
         # 创建新钢板
         plate_id = self.plate_counter
         thickness = self.params.plate_thickness
-        self.plates[plate_id] = Plate(id=plate_id, nodes=nodes, on_face=on_face, thickness=thickness)
+        self.plates[plate_id] = Plate(
+            id=plate_id, nodes=nodes, on_face=on_face, thickness=thickness, boundary_beams=boundary_beams
+        )
         self.plate_counter += 1
         return plate_id
 
@@ -1005,9 +1011,94 @@ class StructuralModel:
 
                     # 按逆时针方向排列节点
                     ordered_nodes = self._order_nodes_counterclockwise(corner_nodes, face_name, fixed_coord)
+                    boundary_beams = self._find_plate_boundary_beams(ordered_nodes, fixed_coord)
 
                     # 创建钢板
-                    self.add_plate(ordered_nodes, face_name)
+                    self.add_plate(ordered_nodes, face_name, boundary_beams)
+
+    def _find_plate_boundary_beams(self, nodes: List[int], fixed_coord: str) -> List[int]:
+        """找到构成钢板的边界梁"""
+        if fixed_coord == "x":
+            fix_idx = 0
+        elif fixed_coord == "y":
+            fix_idx = 1
+        elif fixed_coord == "z":
+            fix_idx = 2
+
+        boundary_beams = []
+
+        for i in range(len(nodes)):
+            node_a = nodes[i]
+            node_b = nodes[(i + 1) % len(nodes)]
+            if (node_a, node_b) not in self._beam_id_map and (node_b, node_a) not in self._beam_id_map:
+                inserted_node = self.find_point_on_line_between(node_a, node_b, fix_idx)
+                if inserted_node is not None:
+                    beam1 = self._beam_id_map[(node_a, inserted_node)]
+                    beam2 = self._beam_id_map[(inserted_node, node_b)]
+                    boundary_beams.append(beam1)
+                    boundary_beams.append(beam2)
+                else:
+                    raise ValueError(f"No point found on the line between {node_a} and {node_b}")
+            else:
+                beam = self._beam_id_map[(node_a, node_b)]
+                boundary_beams.append(beam)
+        return boundary_beams
+
+    def find_point_on_line_between(
+        self, point_a_id: int, point_b_id: int, fix_idx: int, tolerance: float = 1e-6
+    ) -> Optional[int]:
+        """
+        找到严格位于两个给定点连线上的点
+
+        Args:
+            point_a_id: 第一个点的ID
+            point_b_id: 第二个点的ID
+            fix_idx: 固定坐标轴的索引
+            tolerance: 判断点是否共线的容差值
+
+        Returns:
+            找到的在连线上的点ID，如果没找到则返回None
+        """
+        # 获取两个端点
+        point_a = self.points[point_a_id]
+        point_b = self.points[point_b_id]
+
+        # 计算两点之间的向量
+        vector_ab = point_b.coordinates() - point_a.coordinates()
+        distance_ab = np.linalg.norm(vector_ab)
+
+        # 如果两点重合，返回None
+        if distance_ab < tolerance:
+            return None
+
+        # 归一化向量
+        unit_vector = vector_ab / distance_ab
+
+        for point_id, point in self.points.items():
+            if point.coordinates()[fix_idx] != point_a.coordinates()[fix_idx]:
+                continue
+
+            # 跳过端点
+            if point_id in (point_a_id, point_b_id):
+                continue
+
+            # 计算当前点到A点的向量
+            vector_ac = point.coordinates() - point_a.coordinates()
+
+            # 检查三点是否共线：使用叉积判断
+            # 如果两个向量平行（共线），它们的叉积应该接近于0
+            cross_product = np.cross(vector_ab, vector_ac)
+            if np.linalg.norm(cross_product) > tolerance:
+                continue
+
+            # 计算当前点在AB向量上的投影长度
+            projection_length = np.dot(vector_ac, unit_vector)
+
+            # 检查点是否严格在两端点之间
+            if 0 < projection_length < distance_ab:
+                return point_id
+
+        return None
 
     def _is_in_window_area(
         self, face_name: str, c1_min: float, c1_max: float, c2_min: float, c2_max: float, fixed_coord: str
