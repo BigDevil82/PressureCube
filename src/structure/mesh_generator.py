@@ -12,16 +12,14 @@ if TYPE_CHECKING:
 class MeshParameters:
     """网格划分参数"""
 
-    def __init__(self, beam_max_length: float, plate_max_length: float):
+    def __init__(self, max_grid_size: float):
         """
         初始化网格参数.
 
         Args:
-            beam_max_length (float): 梁单元的最大允许长度.
-            plate_max_length (float): 板单元在边上的最大允许长度.
+            max_grid_size (float): 网格单元的最大允许边长.
         """
-        self.beam_max_length = beam_max_length
-        self.plate_max_length = plate_max_length
+        self.max_grid_size = max_grid_size
 
 
 class MeshGenerator:
@@ -162,7 +160,7 @@ class MeshGenerator:
         beam_divisions: Dict[int, int] = {}
         for beam in self.original_model.beams.values():
             length = beam.length(self.original_model.points)
-            min_divs = math.ceil(length / self.mesh_params.beam_max_length) if length > 0 else 1
+            min_divs = math.ceil(length / self.mesh_params.max_grid_size) if length > 0 else 1
             beam_divisions[beam.id] = min_divs
 
         for i in range(10):  # Convergence loop with safety break
@@ -368,19 +366,21 @@ class MeshGenerator:
                     + u * (1 - v) * np.array(P10)
                     + u * v * np.array(P11)
                 )
-                point_coord = term1 + term2 + term3 + term4 - corner_term
+                point_coord = (term1 + term2 + term3 + term4 - corner_term).tolist()
                 node_id = self.meshed_model.add_node(point_coord[0], point_coord[1], point_coord[2])
                 node_grid[i, j] = node_id
 
         for i in range(n_nodes_u - 1):
             for j in range(n_nodes_v - 1):
-                node_ids = [
-                    node_grid[i, j],
-                    node_grid[i + 1, j],
-                    node_grid[i + 1, j + 1],
-                    node_grid[i, j + 1],
-                ]
-                self._add_plate(node_ids, original_plate)
+                node_ids = np.array(
+                    [
+                        node_grid[i, j],
+                        node_grid[i + 1, j],
+                        node_grid[i + 1, j + 1],
+                        node_grid[i, j + 1],
+                    ]
+                )
+                self._add_plate(node_ids.tolist(), original_plate)
 
     def _add_beam(self, start_id: int, end_id: int, original_beam: Beam) -> int:
         """向新模型中添加梁"""
@@ -416,7 +416,7 @@ if __name__ == "__main__":
     from src.utils.model_utils import StructureVisualizer, create_structural_model, load_config
 
     model = create_structural_model(load_config("config.yaml"))
-    mesh_params = MeshParameters(beam_max_length=0.1, plate_max_length=0.1)
+    mesh_params = MeshParameters(max_grid_size=0.1)
     mesh_generator = MeshGenerator(model, mesh_params)
     meshed_model = mesh_generator.generate_mesh()
     visualizer = StructureVisualizer(meshed_model)

@@ -147,7 +147,7 @@ class NodeMap:
 class StructuralModel:
     """舱体结构模型类"""
 
-    __PLATE_START_ID = 10000  # 避免OpenSees建模时与梁ID冲突
+    __PLATE_START_ID = 50000  # 避免OpenSees建模时与梁ID冲突
 
     def __init__(self, params: StructuralParameters, section_library: SectionLibrary):
         self.params = params

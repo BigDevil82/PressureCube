@@ -7,6 +7,7 @@ import numpy as np
 import openseespy.opensees as ops
 import opsvis as opsv
 
+from src.analysis.fem_utils import calc_basic_stresses, fmt_display_components
 from src.structure.section_library import RectangularTubeSection
 from src.structure.structural_model import Beam, Plate, StructuralModel  # For type hinting
 from src.utils.logger import Logger
@@ -29,7 +30,7 @@ RHO_STEEL_TONNE_MM3 = RHO_STEEL_KG_M3 * KG_M3_TO_TONNE_MM3  # Density in tonne/m
 G_MM_S2 = 9806.65  # Gravitational acceleration in mm/s^2
 G_M_S2 = 9.80665
 
-logger = Logger("opensees_analysis", disable=True)
+logger = Logger("opensees_analysis", disable=False)
 
 
 class OpenSeesAnalyzer:
@@ -117,13 +118,6 @@ class OpenSeesAnalyzer:
         self.plate_thickness_mm = model.params.plate_thickness * M_TO_MM
         ops.wipe()
         ops.model("basic", "-ndm", 3, "-ndf", 6)  # 3 dimensions, 6 DOFs per node
-
-        # 确保节点数与梁包含的节点数相同
-        beam_nodes = set()
-        for beam_id, beam_obj in model.beams.items():
-            beam_nodes.add(beam_obj.start_node)
-            beam_nodes.add(beam_obj.end_node)
-        assert len(beam_nodes) == len(model.points), "节点数与梁构件数量不一致"
 
         # Create Nodes
         node_coords_mm_map: Dict[int, np.ndarray] = {}  # node_id -> coords_mm
@@ -224,7 +218,7 @@ class OpenSeesAnalyzer:
 
             # Select up to 4 unique corners, prioritizing the exact corner matches
             # This simple selection takes the first few found; more robust selection might be needed for complex bases
-            print(f"potential_corners: {potential_corners}")
+            # print(f"potential_corners: {potential_corners}")
             for node_id in potential_corners:
                 if corner_nodes_found < 4 and node_id not in self.support_node_ids:
                     ops.fix(node_id, 1, 1, 1, 1, 1, 1)  # Fix all 6 DOFs, using model node_id
@@ -380,7 +374,7 @@ class OpenSeesAnalyzer:
         totalMassY = sum(ops.nodeMass(node)[1] for node in allNodes)
         totalMassZ = sum(ops.nodeMass(node)[2] for node in allNodes)
 
-        print(f"Total Mass - X: {totalMassX}, Y: {totalMassY}")
+        print(f"Total Mass - X: {totalMassX}, Y: {totalMassY}, Z: {totalMassZ}")
 
         # 初始化结果存储
         modal_participation = np.zeros((numModes, 3))  # 存储X和Y方向的质量参与系数
@@ -653,8 +647,12 @@ class OpenSeesAnalyzer:
             try:
                 # Create ShellMITC4 element
                 # element ShellMITC4 $eleTag $iNode $jNode $kNode $lNode $secTag
-                ops.element("ShellMITC4", plate_id, *node_ids, self.plate_section_tag)
+                # ops.element("ShellMITC4", plate_id, *node_ids, self.plate_section_tag)
                 # print(f"Created plate element {plate_id} with nodes {node_ids}")
+
+                # create ShellDKGQ element
+                # element ShellDKGQ $eleTag $iNode $jNode $kNode $lNode $secTag
+                ops.element("ShellDKGQ", plate_id, *node_ids, self.plate_section_tag)
 
             except Exception as e:
                 logger.error(f"Error creating plate element {plate_id}: {e}")
@@ -678,7 +676,7 @@ class OpenSeesAnalyzer:
             plate_mass_tonne = plate_mass_kg / 1000.0
 
             # Distribute mass equally to 4 nodes
-            mass_per_node = plate_mass_tonne / 4.0
+            mass_per_node = plate_mass_tonne / len(plate_obj.nodes)
 
             for node_id in plate_obj.nodes:
                 if node_id in nodal_plate_masses:
@@ -726,7 +724,7 @@ class OpenSeesAnalyzer:
         logger.info("Converting plate pressure loads to equivalent beam line loads...")
 
         for plate_id, plate_obj in self._model.plates.items():
-            # if plate_obj.on_face != "back":
+            # if plate_obj.on_face != "left":
             #     continue
             try:
                 # Calculate plate area
@@ -749,86 +747,81 @@ class OpenSeesAnalyzer:
 
                 # print(f"  Plate {plate_id} on {plate_face} face: pressure direction {pressure_direction}")
 
-                # Find beams that form the boundary of this plate
-                plate_node_ids = set(plate_obj.nodes)
-                boundary_beams = []
+                # distribute the force on plate nodes
+                force_dir = np.concatenate([pressure_direction, np.zeros(3)])
+                nodal_force = total_force_n * force_dir / len(plate_obj.nodes)
+                for node_id in plate_obj.nodes:
+                    ops.load(node_id, *nodal_force)
+                    pressure_loads_applied += 1
 
-                for beam_id, beam_obj in self._model.beams.items():
-                    beam_nodes = {beam_obj.start_node, beam_obj.end_node}
-                    # Check if both beam nodes are in the plate nodes (i.e., beam is on plate boundary)
-                    if beam_nodes.issubset(plate_node_ids):
-                        # Calculate beam length
-                        start_point = self._model.points[beam_obj.start_node]
-                        end_point = self._model.points[beam_obj.end_node]
-                        beam_length_m = start_point.distance_to(end_point)
-                        beam_length_mm = beam_length_m * M_TO_MM
+                # boundary_beams = []
 
-                        boundary_beams.append(
-                            {"beam_id": beam_id, "beam_obj": beam_obj, "length_mm": beam_length_mm}
-                        )
+                # for beam_id in plate_obj.boundary_beams:
+                #     beam_obj = self._model.beams[beam_id]
+                #     # Calculate beam length
+                #     start_point = self._model.points[beam_obj.start_node]
+                #     end_point = self._model.points[beam_obj.end_node]
+                #     beam_length_m = start_point.distance_to(end_point)
+                #     beam_length_mm = beam_length_m * M_TO_MM
 
-                if not boundary_beams:
-                    logger.warning(f"Warning: No boundary beams found for plate {plate_id}")
-                    continue
+                #     boundary_beams.append(
+                #         {"beam_id": beam_id, "beam_obj": beam_obj, "length_mm": beam_length_mm}
+                #     )
 
-                # Calculate total perimeter length
-                total_perimeter_mm = sum(beam["length_mm"] for beam in boundary_beams)
+                # # Calculate total perimeter length
+                # total_perimeter_mm = sum(beam["length_mm"] for beam in boundary_beams)
 
-                if total_perimeter_mm <= 0:
-                    logger.warning(f"Warning: Zero perimeter length for plate {plate_id}")
-                    continue
+                # # Distribute the total force to boundary beams proportionally
+                # for beam_data in boundary_beams:
+                #     beam_id = beam_data["beam_id"]
+                #     beam_length_mm = beam_data["length_mm"]
 
-                # Distribute the total force to boundary beams proportionally
-                for beam_data in boundary_beams:
-                    beam_id = beam_data["beam_id"]
-                    beam_length_mm = beam_data["length_mm"]
+                #     # Force proportion based on beam length
+                #     force_proportion = beam_length_mm / total_perimeter_mm
+                #     beam_force_n = total_force_n * force_proportion
 
-                    # Force proportion based on beam length
-                    force_proportion = beam_length_mm / total_perimeter_mm
-                    beam_force_n = total_force_n * force_proportion
+                #     # Convert to distributed load (N/mm)
+                #     distributed_load_n_per_mm = beam_force_n / beam_length_mm
 
-                    # Convert to distributed load (N/mm)
-                    distributed_load_n_per_mm = beam_force_n / beam_length_mm
+                #     # Apply pressure load in the correct direction for this face
+                #     if beam_id not in self.beam_local_coord_systems:
+                #         logger.warning(
+                #             f"Warning: Local axes not found for beam {beam_id}. Skipping pressure load."
+                #         )
+                #         continue
 
-                    # Apply pressure load in the correct direction for this face
-                    if beam_id not in self.beam_local_coord_systems:
-                        logger.warning(
-                            f"Warning: Local axes not found for beam {beam_id}. Skipping pressure load."
-                        )
-                        continue
+                #     x_loc, y_loc, z_loc = self.beam_local_coord_systems[beam_id]
+                #     R_glob_to_loc = np.array([x_loc, y_loc, z_loc])
 
-                    x_loc, y_loc, z_loc = self.beam_local_coord_systems[beam_id]
-                    R_glob_to_loc = np.array([x_loc, y_loc, z_loc])
+                #     # Pressure force in global coordinates (face-specific direction)
+                #     F_global_per_mm = pressure_direction * distributed_load_n_per_mm
+                #     F_local_components = R_glob_to_loc @ F_global_per_mm
 
-                    # Pressure force in global coordinates (face-specific direction)
-                    F_global_per_mm = pressure_direction * distributed_load_n_per_mm
-                    F_local_components = R_glob_to_loc @ F_global_per_mm
+                #     load_val_local_x = F_local_components[0]
+                #     load_val_local_y = F_local_components[1]
+                #     load_val_local_z = F_local_components[2]
 
-                    load_val_local_x = F_local_components[0]
-                    load_val_local_y = F_local_components[1]
-                    load_val_local_z = F_local_components[2]
+                #     try:
+                #         # Apply uniform beam load in local coordinates
+                #         ops.eleLoad(
+                #             "-ele",
+                #             beam_id,
+                #             "-type",
+                #             "-beamUniform",
+                #             load_val_local_y,
+                #             load_val_local_z,
+                #             load_val_local_x,
+                #         )
+                #         pressure_loads_applied += 1
 
-                    try:
-                        # Apply uniform beam load in local coordinates
-                        ops.eleLoad(
-                            "-ele",
-                            beam_id,
-                            "-type",
-                            "-beamUniform",
-                            load_val_local_y,
-                            load_val_local_z,
-                            load_val_local_x,
-                        )
-                        pressure_loads_applied += 1
-
-                    except Exception as e:
-                        logger.warning(f"Warning: Could not apply pressure load to beam {beam_id}: {e}")
+                #     except Exception as e:
+                #         logger.warning(f"Warning: Could not apply pressure load to beam {beam_id}: {e}")
 
             except Exception as e:
                 logger.error(f"Error processing pressure load for plate {plate_id}: {e}")
 
         self.pressure_load_applied = True
-        logger.info(f"Pressure loads converted and applied to {pressure_loads_applied} boundary beams.")
+        logger.info(f"Pressure loads converted and applied to {pressure_loads_applied} nodes.")
         logger.info(f"Total equivalent force: {total_equivalent_force:.2f} N")
         logger.info(f"Pressure magnitude: {internal_pressure_pa} Pa ({pressure_mpa:.6f} MPa)")
 
@@ -1168,7 +1161,7 @@ class OpenSeesAnalyzer:
                 max_beam_stress = stresses
 
         if self._model.plates:
-            t = self.plate_thickness_mm
+            t_M = self.plate_thickness_mm * 1e-3
             stresses = self.get_plate_stresses()
             max_plate_stress_abs = 0.0
             max_plate_stress_abs_idx = None
@@ -1184,21 +1177,26 @@ class OpenSeesAnalyzer:
             all_stresses = np.concatenate(all_stresses, axis=0)
             max_force = np.max(all_stresses, axis=0)
             min_force = np.min(all_stresses, axis=0)
-            print("max force:")
-            print((max_force / 1e3).tolist(), "kN")
-            print((min_force / 1e3).tolist(), "kN")
-            max_stress = np.zeros_like(max_force)
-            min_stress = np.zeros_like(max_force)
-            for i in range(max_force.shape[0]):
-                if 3 < i < 6:
-                    max_stress[i] = 6 * max_force[i] / t**2
-                    min_stress[i] = 6 * min_force[i] / t**2
-                else:
-                    max_stress[i] = max_force[i] / t
-                min_stress[i] = min_force[i] / t
-            print("max, min stress:")
-            print((max_stress).tolist(), "MPa")
-            print((min_stress).tolist(), "MPa")
+            max_force[3:6] = max_force[3:6] / 1e3
+            min_force[3:6] = min_force[3:6] / 1e3
+            components = ["Nx", "Ny", "Nxy", "Mx", "My", "Mxy", "Qx", "Qy"]
+            fmt_display_components(max_force, components, "max force(kN/m)|(kNm/m)")
+            fmt_display_components(min_force, components, "min force(kN/m)|(kNm/m)")
+
+            max_stress = calc_basic_stresses(max_force, t_M) * 1e-3
+            min_stress = calc_basic_stresses(min_force, t_M) * 1e-3
+            components = [
+                "sigma_x+",
+                "sigma_x-",
+                "sigma_y+",
+                "sigma_y-",
+                "tau_xy+",
+                "tau_xy-",
+                "tau_xz",
+                "tau_yz",
+            ]
+            fmt_display_components(max_stress, components, "max stress(MPa)")
+            fmt_display_components(min_stress, components, "min stress(MPa)")
 
         return {
             "max_abs_displacement": max_disp_abs,
@@ -1225,12 +1223,18 @@ class OpenSeesAnalyzer:
 
 # Example Usage (can be in a main script or a test file)
 if __name__ == "__main__":
+    from src.structure.mesh_generator import MeshGenerator, MeshParameters
     from src.utils.model_utils import create_structural_model, load_config
+    from src.utils.util import Timer
 
     logger.info("Testing OpenSeesAnalyzer...")
     config_path = "config.yaml"
     config = load_config(config_path)
     model = create_structural_model(config)
+    mesh_params = MeshParameters(max_grid_size=0.5)
+    mesh_generator = MeshGenerator(model, mesh_params)
+    mesh_generator.generate_mesh()
+    model = mesh_generator.meshed_model
     print("结构总质量: ", model.calculate_mass() / 1000, "t")
 
     analyzer = OpenSeesAnalyzer()
@@ -1238,9 +1242,11 @@ if __name__ == "__main__":
         # analyzer.perform_full_analysis_and_save(
         #     model, num_modal_modes=6, plate_thickness_mm=5, output_dir="results/opensees_test_results_0idx"
         # )
-        analyzer.setup_opensees_model(model)
-        analyzer.apply_pressure_loads(internal_pressure_pa=30000.0)
-        analyzer.run_static_analysis()
+        with Timer("setup opensees model cost"):
+            analyzer.setup_opensees_model(model)
+            analyzer.apply_pressure_loads(internal_pressure_pa=30000.0)
+        with Timer("static analysis cost"):
+            analyzer.run_static_analysis()
         max_indicators = analyzer.get_max_indicators()
         print("max_indicators: ", max_indicators)
 
@@ -1251,20 +1257,37 @@ if __name__ == "__main__":
         print("max_nodal_coord: ", max_nodal_coord)
 
         # modal analysis
-        num_modes = 12
-        modal_results = analyzer.run_modal_analysis(num_modes=num_modes)
-        frequencies_hz, periods_s = analyzer._process_modal_analysis_results(modal_results)
-        print("frequencies_hz: ", frequencies_hz)
-        print("periods_s: ", periods_s)
+        num_modes = 6
+        with Timer("modal analysis cost"):
+            modal_results = analyzer.run_modal_analysis(num_modes=num_modes)
+            frequencies_hz, periods_s = analyzer._process_modal_analysis_results(modal_results)
+
         # analyzer.visualize_model()
         modal_participation = analyzer.calculate_modal_participation_factors(numModes=num_modes)
+        data = []
         for i in range(num_modes):
-            print(
-                f"Mode {i+1}: X: {modal_participation[i, 0]:.2f}%, Y: {modal_participation[i, 1]:.2f}%, Z: {modal_participation[i, 2]:.2f}%"
+            data.append(
+                [
+                    # f"Mode {i+1}",
+                    periods_s[i],
+                    frequencies_hz[i],
+                    modal_participation[i, 0],
+                    modal_participation[i, 1],
+                    modal_participation[i, 2],
+                ]
             )
+        components = [
+            # "mode",
+            "periods(s)",
+            "freq(Hz)",
+            "φ_x(%)",
+            "φ_y(%)",
+            "φ_z(%)",
+        ]
+        fmt_display_components(np.array(data), components, "modal analysis results")
 
-        disp_83 = analyzer.get_node_displacements([83])
-        print("disp_83: ", disp_83)
+        # disp_83 = analyzer.get_node_displacements([83])
+        # print("disp_83: ", disp_83)
 
         # analyzer.visualize_model()
 
