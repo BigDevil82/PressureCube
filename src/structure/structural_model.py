@@ -334,7 +334,7 @@ class StructuralModel:
         return node_features, adjacency_matrix
 
     def calculate_mass(self) -> float:
-        """计算结构总质量"""
+        """计算结构总质量(kg)"""
         total_mass = 0.0
 
         # 计算梁构件质量
@@ -1190,6 +1190,7 @@ if __name__ == "__main__":
 
     ## 打印结构相关信息
     print(f"结构总质量: {model.calculate_mass()} kg")
+    print(f"结构总体积: {model.calculate_mass() / 7850} m³")
     print(f"节点数量: {len(model.points)}")
     print(f"梁数量: {len(model.beams)}")
     print(f"钢板数量: {len(model.plates)}")

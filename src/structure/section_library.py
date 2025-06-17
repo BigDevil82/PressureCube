@@ -248,9 +248,9 @@ class SectionLibrary:
             except Exception as e:
                 print(f"Error processing C型钢 section {item.get('规格', 'Unknown')}: {e}")
 
-        # 按照Ix排序
+        # 按照面积排序
         for section_type in self.sections:
-            self.sections[section_type].sort(key=lambda x: x.Ix)
+            self.sections[section_type].sort(key=lambda x: x.area)
             # shuffle
             # random.shuffle(self.sections[section_type])
 

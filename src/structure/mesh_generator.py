@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Dict, List
 
 import numpy as np
 
+from src.utils.logger import logger
+
 if TYPE_CHECKING:
     from src.structure.structural_model import Beam, Plate, Point, StructuralModel
 
@@ -60,21 +62,21 @@ class MeshGenerator:
         Returns:
             StructuralModel: 网格划分后的新结构模型.
         """
-        print("Pre-calculating beams on plate...")
+        logger.info("Pre-calculating beams on plate...")
         for plate in self.original_model.plates.values():
             boundary_beams = [self.original_model.beams[beam_id] for beam_id in plate.boundary_beams]
             self._beams_on_plate[plate.id] = self._get_beams_per_edge(plate, boundary_beams)
 
-        print("Pre-calculating beam divisions for plate compatibility...")
+        logger.info("Pre-calculating beam divisions for plate compatibility...")
         beam_divisions = self._calculate_beam_divisions()
 
-        print("开始划分梁单元...")
+        logger.info("开始划分梁单元...")
         self._mesh_beams(beam_divisions)
-        print("梁单元划分完成。")
+        logger.info("梁单元划分完成。")
 
-        print("开始划分板单元...")
+        logger.info("开始划分板单元...")
         self._mesh_plates()
-        print("板单元划分完成。")
+        logger.info("板单元划分完成。")
 
         return self.meshed_model
 
@@ -196,10 +198,10 @@ class MeshGenerator:
                     changed_in_iteration = True
 
             if not changed_in_iteration:
-                print(f"Beam division calculation converged after {i + 1} iterations.")
+                logger.info(f"Beam division calculation converged after {i + 1} iterations.")
                 break
         else:
-            print("Warning: Beam division calculation did not converge after 10 iterations.")
+            logger.info("Warning: Beam division calculation did not converge after 10 iterations.")
 
         return beam_divisions
 
@@ -318,7 +320,9 @@ class MeshGenerator:
     def _create_plate_mesh_from_edges(self, original_plate: Plate, edge_nodes: List[List[int]]):
         """根据边界节点创建板的网格（修正版）"""
         if any(not edge for edge in edge_nodes):
-            print(f"Warning: Plate {original_plate.id} has a zero-length edge. Skipping mesh generation.")
+            logger.info(
+                f"Warning: Plate {original_plate.id} has a zero-length edge. Skipping mesh generation."
+            )
             return
 
         n_nodes_u = len(edge_nodes[0])
@@ -326,7 +330,7 @@ class MeshGenerator:
 
         if len(edge_nodes[2]) != n_nodes_u or len(edge_nodes[3]) != n_nodes_v:
             # This should no longer happen with the new calculation method, but kept as a safeguard.
-            print(
+            logger.info(
                 f"Error: Plate {original_plate.id} opposite edges have non-matching node counts after meshing."
                 f" U-dir: {n_nodes_u} vs {len(edge_nodes[2])}, V-dir: {n_nodes_v} vs {len(edge_nodes[3])}"
             )

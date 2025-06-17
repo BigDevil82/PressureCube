@@ -95,7 +95,7 @@ def plot_training_progress(episode_num, metrics_history, save_dir):
     axs[0, 0].plot(
         epochs, metrics_history["rewards"], label="Episode Reward", color="blue", marker="o", linestyle="-"
     )
-    axs[0, 0].set_ylabel("Reward")
+    axs[0, 0].set_ylabel("Episode Return")
     axs[0, 0].set_title("Training Progress")
     axs[0, 0].legend()
     axs[0, 0].grid(True)
@@ -302,18 +302,19 @@ def train(args, config):
             # # print(f"Episode {episode+1}, Step {step+1}, Time: {end_time - start_time:.2f} seconds")
             # duration = end_time - start_time
 
-        episode_rewards.append(episode_reward)
-        # Store metrics for plotting
-        metrics_history["rewards"].append(episode_reward)
-        metrics_history["max_displacements"].append(
-            info.get("max_displacement_mm", float("nan"))
-        )  # Use NaN for missing data
-        metrics_history["max_stresses"].append(
-            info.get("max_stress", float("nan"))
-        )  # Use NaN for missing data
-        metrics_history["model_volumes"].append(
-            info.get("model_volume_m3", float("nan"))
-        )  # Use NaN for missing data
+            episode_rewards.append(episode_reward)
+            # Store metrics for plotting
+            metrics_history["rewards"].append(episode_reward)
+            metrics_history["max_displacements"].append(info.get("max_displacement_mm", float("nan")))
+            metrics_history["max_stresses"].append(info.get("max_stress", float("nan")))
+            metrics_history["model_volumes"].append(info.get("model_volume_m3", float("nan")))
+            # Plot progress after each episode
+            if (episode * rl_params["max_steps_per_episode"] + step + 1) % rl_params.get(
+                "plot_interval", 1
+            ) == 0:
+                plot_training_progress(
+                    episode * rl_params["max_steps_per_episode"] + step + 1, metrics_history, plot_save_dir
+                )
 
         print(
             f"Episode {episode+1}/{args.max_episodes}, Reward: {episode_reward:.2f}, Steps: {step+1}, Info: {info.get('error', 'OK')}"
@@ -328,10 +329,6 @@ def train(args, config):
             )
             agent.save_model(periodic_save_path)
             print(f"Model saved to {periodic_save_path} at episode {episode+1}")
-
-        # Plot progress after each episode
-        if (episode + 1) % rl_params.get("plot_interval", 1) == 0:  # Plot every episode by default
-            plot_training_progress(episode + 1, metrics_history, plot_save_dir)
 
     # Save the final model
     final_model_save_path = os.path.join(args.model_save_path, f"{model_base_name}_final.pth")
@@ -391,11 +388,7 @@ def test(args, config):
             print(f"Error setting up temp env for HEBG config: {e}")
 
     env = StructuralEnv(initial_params_config_path=args.config, env_action_config=env_action_config)
-    # The action_dim in DDPGAgent is the number of continuous outputs from the actor.
-    # This should match the shape of the action_space defined in StructuralEnv.
-    # The env_action_config["parameter_action_mapping"] defines 7 parameters.
-    # So, action_dim should be 7. The user had 4, which was likely a typo from earlier tests.
-    action_dim = len(env_action_config["parameter_action_mapping"])
+    action_dim = env_action_config["action_dim"]
 
     agent = DDPGAgent(
         hebg_config=hebg_config,

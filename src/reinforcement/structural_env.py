@@ -7,8 +7,10 @@ from gym import spaces
 
 from src.analysis.opensees_analysis import OpenSeesAnalyzer
 from src.graph.structural_graph import BeamAsNodeGraph
+from src.structure.mesh_generator import MeshGenerator, MeshParameters  # For loading initial full config
 from src.structure.structural_model import SectionLibrary, StructuralModel, StructuralParameters, Window
-from src.utils.model_utils import load_config  # For loading initial full config
+from src.utils.logger import Logger
+from src.utils.model_utils import load_config
 
 
 class StructuralEnv(gym.Env):
@@ -16,6 +18,7 @@ class StructuralEnv(gym.Env):
 
     def __init__(self, initial_params_config_path: str, env_action_config: dict):
         super(StructuralEnv, self).__init__()
+        self.logger = Logger("rewards")
 
         self.env_action_config = env_action_config
         self.section_library = SectionLibrary()  # Assumes default json path or configured
@@ -30,7 +33,7 @@ class StructuralEnv(gym.Env):
         # Initialize current optimizable parameters from this initial config
         # These will be updated by agent actions
         self.current_main_beam_spacing = self.base_config_dict["main_beam_spacing"]
-        self.current_secondary_beam_spacing = self.base_config_dict["secondary_beam_spacing"]
+        self.current_secondary_beam_spacing = self.base_config_dict["main_beam_spacing"]
         self.current_brace_spacing = self.base_config_dict["brace_spacing"]
         self.current_frame_section_index = self.base_config_dict["frame_section_index"]
         self.current_main_beam_section_index = self.base_config_dict["main_beam_section_index"]
@@ -68,7 +71,7 @@ class StructuralEnv(gym.Env):
 
         # Override with current optimizable values
         params_data_dict["main_beam_spacing"] = self.current_main_beam_spacing
-        params_data_dict["secondary_beam_spacing"] = self.current_secondary_beam_spacing
+        params_data_dict["secondary_beam_spacing"] = self.current_main_beam_spacing
         params_data_dict["brace_spacing"] = self.current_brace_spacing
         params_data_dict["frame_section_index"] = self.current_frame_section_index
         params_data_dict["main_beam_section_index"] = self.current_main_beam_section_index
@@ -82,11 +85,13 @@ class StructuralEnv(gym.Env):
                 # Ensure all keys expected by Window dataclass are present or have defaults
                 window_params = {
                     "y_position": w_config.get("y_position", 0.0),
-                    "width": w_config.get("width", 1.0),
-                    "height": w_config.get("height", 1.0),
-                    "bottom_height": w_config.get("bottom_height", 0.0),
+                    "width": params_data_dict["main_beam_spacing"],
+                    "height": params_data_dict["win_height"],
+                    "bottom_height": (
+                        0.0 if w_config.get("is_door", False) else params_data_dict["win_bottom"]
+                    ),
                     "on_face": w_config.get("on_face", "front"),
-                    "is_door": w_config.get("is_door", False),
+                    # "is_door": w_config.get("is_door", False),
                 }
                 windows_list.append(Window(**window_params))
         params_data_dict["windows"] = windows_list
@@ -128,7 +133,7 @@ class StructuralEnv(gym.Env):
 
         # Reset optimizable parameters to their initial values from the base config
         self.current_main_beam_spacing = self.base_config_dict["main_beam_spacing"]
-        self.current_secondary_beam_spacing = self.base_config_dict["secondary_beam_spacing"]
+        self.current_secondary_beam_spacing = self.base_config_dict["main_beam_spacing"]
         self.current_brace_spacing = self.base_config_dict["brace_spacing"]
         self.current_frame_section_index = self.base_config_dict["frame_section_index"]
         self.current_main_beam_section_index = self.base_config_dict["main_beam_section_index"]
@@ -144,8 +149,8 @@ class StructuralEnv(gym.Env):
 
         max_indicators = self._run_fem_analysis()
         if max_indicators:
-            self._last_max_disp_abs = max_indicators["max_displacement"]
-            self._last_max_stress = max_indicators["max_stress"]
+            self._last_max_disp_abs = max_indicators["max_abs_displacement"]
+            self._last_max_stress = max_indicators["max_abs_stress"]
         else:
             raise ValueError("Failed to run FEM analysis at reset.")
 
@@ -205,7 +210,12 @@ class StructuralEnv(gym.Env):
         self.current_brace_section_index = _decode_single_action("brace_section_index")
 
     def _run_fem_analysis(self) -> Optional[Dict[str, float]]:
-        self.opensees_analyzer.setup_opensees_model(self.current_structural_model)
+        # create mesh
+        mesh_params = MeshParameters(max_grid_size=0.2)
+        mesh_generator = MeshGenerator(self.current_structural_model, mesh_params)
+        mesh_generator.generate_mesh()
+
+        self.opensees_analyzer.setup_opensees_model(mesh_generator.meshed_model)
         self.opensees_analyzer.apply_gravity_and_pressure_loads(30000.0)
         static_success = self.opensees_analyzer.run_static_analysis()
         if not static_success:
@@ -217,30 +227,28 @@ class StructuralEnv(gym.Env):
         return self.current_structural_model.calculate_mass() / 7850.0
 
     def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
-        disp_constraint = 25.0
-        stress_constraint = 150.0
+        disp_constraint = 14.4
+        stress_constraint = 345.0
+        max_volume = 1.615
 
-        if max_disp_abs < disp_constraint:
-            delta_c1 = 1.0
+        # 1. 约束违反惩罚项（指数增长确保强惩罚）
+        disp_violation = max(0, (max_disp_abs - disp_constraint) / disp_constraint)
+        stress_violation = max(0, (max_stress - stress_constraint) / stress_constraint)
+        penalty = (disp_violation * 1) + (stress_violation * 1.5)  # 权重可调
+
+        # 2. 基础奖励：体积的负值（体积越小奖励越高）
+        if disp_violation == 0 and stress_violation == 0:
+            base_reward = -(model_volume - self._last_model_volume)
         else:
-            delta_c1 = (
-                (self._last_max_disp_abs - max_disp_abs)
-                / disp_constraint
-                / (max_disp_abs / disp_constraint + 1)
-            )
+            base_reward = 0
 
-        if max_stress < stress_constraint:
-            delta_c2 = 1.0
-        else:
-            delta_c2 = (
-                (self._last_max_stress - max_stress)
-                / stress_constraint
-                / (max_stress / stress_constraint + 1)
-            )
+        # 3. 总奖励 = 基础奖励 - 惩罚项
+        reward = base_reward - penalty
 
-        delta_v = model_volume - self._last_model_volume
+        self.logger.info(
+            f"Reward: {reward:.2f}, Penalty: {-penalty:.2f}, Disp: {disp_violation*1:.2f}, Stress: {stress_violation*1.5:.2f}, Base Reward: {base_reward:.2f}"
+        )
 
-        reward = -delta_v * (2 - delta_c1 - delta_c2)
         return reward
 
     def step(self, action: np.ndarray):
@@ -260,7 +268,7 @@ class StructuralEnv(gym.Env):
             or self.current_structural_model is None
             or not self.current_structural_model.beams
         ):
-            reward = -100.0
+            reward = -10
             terminated = True
             info["error"] = "Failed to generate valid structural model or PyG data from action."
             return next_state, reward, terminated, truncated, info
@@ -270,16 +278,20 @@ class StructuralEnv(gym.Env):
         try:
             max_indicators = self._run_fem_analysis()
             if max_indicators:
-                max_disp_abs = max_indicators["max_displacement"]
-                max_stress = max_indicators["max_stress"]
+                max_disp_abs = max_indicators["max_abs_displacement"]
+                max_stress = max_indicators["max_abs_stress"]
                 reward = self._calculate_reward(max_disp_abs, max_stress, current_model_volume)
+
+                self._last_max_disp_abs = max_disp_abs
+                self._last_max_stress = max_stress
+                self._last_model_volume = current_model_volume
 
                 info["max_displacement_mm"] = max_disp_abs
                 info["max_stress"] = max_stress
                 info["model_volume_m3"] = current_model_volume
 
             else:
-                reward = -200.0
+                reward = -10
                 terminated = True
                 info["error"] = "OpenSees static analysis failed."
 

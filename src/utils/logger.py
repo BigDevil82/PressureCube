@@ -131,6 +131,9 @@ class Logger:
         self.logger.critical(message, **kwargs)
 
 
+logger = Logger("global.log", disable=False)
+
+
 def test_logger():
     logger = Logger("test.log")
     logger.log("test log")
