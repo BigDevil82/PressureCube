@@ -1193,24 +1193,9 @@ class OpenSeesAnalyzer:
             min_force = np.min(all_stresses, axis=0)
             max_force[3:6] = max_force[3:6] / 1e3
             min_force[3:6] = min_force[3:6] / 1e3
-            components = ["Nx", "Ny", "Nxy", "Mx", "My", "Mxy", "Qx", "Qy"]
-            # fmt_display_components(max_force, components, "max force(kN/m)|(kNm/m)")
-            # fmt_display_components(min_force, components, "min force(kN/m)|(kNm/m)")
 
             max_stress = calc_basic_stresses(max_force, t_M) * 1e-3
             min_stress = calc_basic_stresses(min_force, t_M) * 1e-3
-            components = [
-                "sigma_x+",
-                "sigma_x-",
-                "sigma_y+",
-                "sigma_y-",
-                "tau_xy+",
-                "tau_xy-",
-                "tau_xz",
-                "tau_yz",
-            ]
-            # fmt_display_components(max_stress, components, "max stress(MPa)")
-            # fmt_display_components(min_stress, components, "min stress(MPa)")
 
             max_plate_stress_abs = np.max(np.abs(np.concatenate((max_stress, min_stress))))
             max_stress_abs = max(max_stress_abs, max_plate_stress_abs)
@@ -1226,6 +1211,10 @@ class OpenSeesAnalyzer:
             "max_abs_plate_stress": max_plate_stress_abs,
             "max_abs_plate_stress_idx": max_plate_stress_abs_idx,
             "max_abs_stress": max_stress_abs,
+            "max_force": max_force,
+            "min_force": min_force,
+            "max_stress": max_stress,
+            "min_stress": min_stress,
         }
 
     def visualize_model(self):
@@ -1249,7 +1238,7 @@ if __name__ == "__main__":
     config_path = "config.yaml"
     config = load_config(config_path)
     model = create_structural_model(config)
-    mesh_params = MeshParameters(max_grid_size=0.2)
+    mesh_params = MeshParameters(max_grid_size=0.1)
     mesh_generator = MeshGenerator(model, mesh_params)
     mesh_generator.generate_mesh()
     model = mesh_generator.meshed_model
@@ -1257,16 +1246,23 @@ if __name__ == "__main__":
 
     analyzer = OpenSeesAnalyzer()
     try:
-        # analyzer.perform_full_analysis_and_save(
-        #     model, num_modal_modes=6, plate_thickness_mm=5, output_dir="results/opensees_test_results_0idx"
-        # )
         with Timer("setup opensees model cost"):
             analyzer.setup_opensees_model(model)
             analyzer.apply_pressure_loads(internal_pressure_pa=30000.0)
         with Timer("static analysis cost"):
             analyzer.run_static_analysis()
         max_indicators = analyzer.get_max_indicators()
-        print("max_indicators: ", max_indicators)
+        components = ["Nx", "Ny", "Nxy", "Mx", "My", "Mxy", "Qx", "Qy"]
+        fmt_display_components(max_indicators["max_force"], components, "max force(kN/m)|(kNm/m)")
+        fmt_display_components(max_indicators["min_force"], components, "min force(kN/m)|(kNm/m)")
+        components = ["σx+", "σx-", "σy+", "σy-", "τxy+", "τxy-", "τxz", "τyz"]
+        fmt_display_components(max_indicators["max_stress"], components, "max stress(MPa)")
+        fmt_display_components(max_indicators["min_stress"], components, "min stress(MPa)")
+        for key, value in max_indicators.items():
+            if isinstance(value, np.ndarray):
+                print(f"{key}: {' '.join(value.round(2).astype(str).tolist())}")
+            else:
+                print(f"{key}: {value}")
 
         # max_nodal_idx
         max_nodal_idx = max_indicators["max_abs_displacement_idx"]
@@ -1274,35 +1270,35 @@ if __name__ == "__main__":
         max_nodal_coord = model.points[max_nodal_idx].coordinates()
         print("max_nodal_coord: ", max_nodal_coord)
 
-        # ########################  modal analysis  ########################
-        # num_modes = 6
-        # with Timer("modal analysis cost"):
-        #     modal_results = analyzer.run_modal_analysis(num_modes=num_modes)
-        #     frequencies_hz, periods_s = analyzer._process_modal_analysis_results(modal_results)
+        ########################  modal analysis  ########################
+        num_modes = 6
+        with Timer("modal analysis cost"):
+            modal_results = analyzer.run_modal_analysis(num_modes=num_modes)
+            frequencies_hz, periods_s = analyzer._process_modal_analysis_results(modal_results)
 
-        # # analyzer.visualize_model()
-        # modal_participation = analyzer.calculate_modal_participation_factors(numModes=num_modes)
-        # data = []
-        # for i in range(num_modes):
-        #     data.append(
-        #         [
-        #             # f"Mode {i+1}",
-        #             periods_s[i],
-        #             frequencies_hz[i],
-        #             modal_participation[i, 0],
-        #             modal_participation[i, 1],
-        #             modal_participation[i, 2],
-        #         ]
-        #     )
-        # components = [
-        #     # "mode",
-        #     "periods(s)",
-        #     "freq(Hz)",
-        #     "φ_x(%)",
-        #     "φ_y(%)",
-        #     "φ_z(%)",
-        # ]
-        # fmt_display_components(np.array(data), components, "modal analysis results")
+        # analyzer.visualize_model()
+        modal_participation = analyzer.calculate_modal_participation_factors(numModes=num_modes)
+        data = []
+        for i in range(num_modes):
+            data.append(
+                [
+                    # f"Mode {i+1}",
+                    periods_s[i],
+                    frequencies_hz[i],
+                    modal_participation[i, 0],
+                    modal_participation[i, 1],
+                    modal_participation[i, 2],
+                ]
+            )
+        components = [
+            # "mode",
+            "periods(s)",
+            "freq(Hz)",
+            "φ_x(%)",
+            "φ_y(%)",
+            "φ_z(%)",
+        ]
+        fmt_display_components(np.array(data), components, "modal analysis results")
 
         # analyzer.visualize_model()
 

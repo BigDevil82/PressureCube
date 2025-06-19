@@ -68,7 +68,7 @@ rl_params:
   critic_lr: 1.0e-3 # Critic网络学习率
   gamma: 0.99 # 折扣因子
   tau: 0.005 # 目标网络软更新参数
-  sigma: 0.1 # 探索高斯噪声的标准差
+  sigma: 0.2 # 探索高斯噪声的标准差
   min_replay_buffer_fill: 32
   batch_size: 2 # 批次大小
   buffer_size: 10000 # 经验回放缓冲区大小

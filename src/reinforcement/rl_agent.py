@@ -105,10 +105,11 @@ class DDPGAgent:
         self.gamma = gamma
         self.tau = tau
 
-    def select_action(self, state_data: Data) -> torch.Tensor:
+    def select_action(self, state_data: Data, training: bool = True) -> torch.Tensor:
         with torch.no_grad():
             action = self.actor(state_data)
-            action = action + self.sigma * torch.randn_like(action)
+            if training:
+                action = action + self.sigma * torch.randn_like(action)
         return action
 
     def update(self, batch: Dict[str, Any]):

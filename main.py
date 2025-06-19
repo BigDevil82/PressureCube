@@ -113,6 +113,8 @@ def plot_training_progress(episode_num, metrics_history, save_dir):
     # axs[1].set_yscale('log') # If values vary wildly
     axs[0, 1].legend()
     axs[0, 1].grid(True)
+    # plot displacement constraint line
+    axs[0, 1].axhline(y=14.4, color="red", linestyle="--", label="Displacement Constraint")
 
     # Plot Max Stress
     axs[1, 0].plot(
@@ -126,6 +128,8 @@ def plot_training_progress(episode_num, metrics_history, save_dir):
     axs[1, 0].set_ylabel("Max Stress (MPa)")
     axs[1, 0].legend()
     axs[1, 0].grid(True)
+    # plot stress constraint line
+    axs[1, 0].axhline(y=345, color="red", linestyle="--", label="Stress Constraint")
 
     # Plot Model Volume
     axs[1, 1].plot(
@@ -185,7 +189,9 @@ def train(args, config):
     hebg_config = config.get("hebg_config", DEFAULT_HEBG_CONFIG)
     rl_params = config.get("rl_params", {})
 
-    env = StructuralEnv(initial_params_config_path=args.config, env_action_config=env_action_config)
+    env = StructuralEnv(
+        initial_params_config_path=args.config, env_action_config=env_action_config, seed=args.seed
+    )
 
     # Determine HEBG in_channels from a sample observation
     sample_state, _ = env.reset()
@@ -210,6 +216,7 @@ def train(args, config):
 
     if args.resume_path:
         agent.load_model(args.resume_path)
+        print(f"Model resumed from {args.resume_path}")
 
     replay_buffer = deque(maxlen=rl_params["buffer_size"])
     episode_rewards = []
@@ -317,10 +324,11 @@ def train(args, config):
                 )
 
         print(
-            f"Episode {episode+1}/{args.max_episodes}, Reward: {episode_reward:.2f}, Steps: {step+1}, Info: {info.get('error', 'OK')}"
+            f"Episode {episode+1}/{args.max_episodes}, Episode Return: {episode_reward:.2f}, Steps: {step+1}, Info: {info.get('error', 'OK')}"
         )
-        if info.get("max_displacement_mm") is not None:
-            print(f"  Max displacement: {info['max_displacement_mm']:.3f} mm")
+        env.render()
+        # if info.get("max_displacement_mm") is not None:
+        #     print(f"  Max displacement: {info['max_displacement_mm']:.3f} mm")
 
         # Save model periodically (example)
         if (episode + 1) % rl_params.get("save_interval", 100) == 0:
@@ -338,7 +346,11 @@ def train(args, config):
     print("训练完成.")
     # Plot final combined metrics
     if metrics_history["rewards"]:
-        plot_training_progress(args.max_episodes, metrics_history, plot_save_dir)
+        plot_training_progress(
+            args.max_episodes * rl_params["max_steps_per_episode"],
+            metrics_history,
+            plot_save_dir,
+        )
         print(f"Final training plot saved in {plot_save_dir}")
 
 
@@ -349,12 +361,9 @@ def test(args, config):
 
     env_action_config = config.get("env_action_config", DEFAULT_ENV_ACTION_CONFIG)
     rl_params = config.get("rl_params", {})
-    # Load HEBG config that was used during training
-    # This requires the saved model to include hebg_config
 
-    model_dir = os.path.dirname(args.model_save_path)
-    model_base_name = os.path.splitext(os.path.basename(args.model_save_path))[0]
-    final_model_load_path = os.path.join(model_dir, f"{model_base_name}_final.pth")
+    model_base_name = "ddpg_agent"
+    final_model_load_path = os.path.join(args.model_save_path, f"{model_base_name}_final.pth")
 
     if not os.path.exists(final_model_load_path):
         print(f"Error: Trained final model not found at {final_model_load_path}. Cannot run test.")
@@ -368,26 +377,10 @@ def test(args, config):
 
     checkpoint = torch.load(final_model_load_path, map_location=device)
     hebg_config = checkpoint.get("hebg_config")
-    if hebg_config is None:
-        print("Error: hebg_config not found in checkpoint. Using default, which might be incorrect.")
-        hebg_config = config.get("hebg_config", DEFAULT_HEBG_CONFIG)
-        # Try to get in_channels if env can be set up
-        try:
-            test_env_for_channels = StructuralEnv(
-                initial_params_config_path=args.config, env_action_config=env_action_config
-            )
-            sample_state, _ = test_env_for_channels.reset()
-            if sample_state and hasattr(sample_state, "x") and sample_state.x is not None:
-                hebg_config["in_channels"] = sample_state.x.size(1)
-            else:  # Fallback if cannot determine
-                print(
-                    "Warning: Could not determine in_channels for HEBG during test. Model might not load correctly."
-                )
-                # hebg_config['in_channels'] = some_default_if_absolutely_necessary
-        except Exception as e:
-            print(f"Error setting up temp env for HEBG config: {e}")
 
-    env = StructuralEnv(initial_params_config_path=args.config, env_action_config=env_action_config)
+    env = StructuralEnv(
+        initial_params_config_path=args.config, env_action_config=env_action_config, seed=args.seed
+    )
     action_dim = env_action_config["action_dim"]
 
     agent = DDPGAgent(
@@ -418,7 +411,7 @@ def test(args, config):
 
         for step in range(rl_params["max_steps_per_episode"]):
             with torch.no_grad():  # Ensure no gradients are computed
-                action_tensor = agent.select_action(state_pyg)
+                action_tensor = agent.select_action(state_pyg, training=False)
             action_np = action_tensor.cpu().numpy().squeeze(0)
 
             next_state_pyg, reward, terminated, truncated, info = env.step(action_np)

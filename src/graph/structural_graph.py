@@ -389,9 +389,6 @@ class BeamAsNodeGraph:
 
         # 1. Node Features (x) - for each beam
         node_features_list = []
-        # Create a mapping for section names to integer indices
-        section_names = sorted(list(self.model.sections.keys()))
-        section_name_to_idx = {name: i for i, name in enumerate(section_names)}
 
         for beam_id in sorted_beam_ids:
             beam = self.nodes[beam_id]
@@ -401,12 +398,8 @@ class BeamAsNodeGraph:
             # Beam Type Index
             beam_type_idx = beam.beam_type.value
 
-            # Beam Section Index
-            beam_section_idx = section_name_to_idx.get(beam.section, -1)
-            if beam_section_idx == -1:
-                print(
-                    f"Warning: Beam {beam_id} has unknown section '{beam.section}'. Using index -1 for section."
-                )
+            # Beam Section Index in SectionLibrary
+            beam_section_idx = self.model.sections[beam.section].idx
 
             # Beam Length
             length = start_node_obj.distance_to(end_node_obj)

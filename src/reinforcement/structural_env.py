@@ -16,9 +16,10 @@ from src.utils.model_utils import load_config
 class StructuralEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 4}
 
-    def __init__(self, initial_params_config_path: str, env_action_config: dict):
+    def __init__(self, initial_params_config_path: str, env_action_config: dict, seed: int = None):
         super(StructuralEnv, self).__init__()
         self.logger = Logger("rewards")
+        self.seed = seed
 
         self.env_action_config = env_action_config
         self.section_library = SectionLibrary()  # Assumes default json path or configured
@@ -128,17 +129,19 @@ class StructuralEnv(gym.Env):
 
         return True
 
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)  # For gym compatibility if using random seeding later
+    def reset(self, options=None):
+        super().reset(seed=self.seed)  # For gym compatibility if using random seeding later
 
-        # Reset optimizable parameters to their initial values from the base config
+        # init section index randomly
+        section_counts = self.section_library.section_counts
+        self.current_frame_section_index = np.random.randint(0, section_counts["方钢"])
+        self.current_main_beam_section_index = np.random.randint(0, section_counts["H型钢-主梁"])
+        self.current_secondary_beam_section_index = np.random.randint(0, section_counts["H型钢-次梁"])
+        self.current_brace_section_index = np.random.randint(0, section_counts["C型钢"])
+
         self.current_main_beam_spacing = self.base_config_dict["main_beam_spacing"]
         self.current_secondary_beam_spacing = self.base_config_dict["main_beam_spacing"]
         self.current_brace_spacing = self.base_config_dict["brace_spacing"]
-        self.current_frame_section_index = self.base_config_dict["frame_section_index"]
-        self.current_main_beam_section_index = self.base_config_dict["main_beam_section_index"]
-        self.current_secondary_beam_section_index = self.base_config_dict["secondary_beam_section_index"]
-        self.current_brace_section_index = self.base_config_dict["brace_section_index"]
 
         self._current_step_count = 0
 
@@ -226,28 +229,59 @@ class StructuralEnv(gym.Env):
     def _calculate_model_volume(self) -> float:
         return self.current_structural_model.calculate_mass() / 7850.0
 
+    # def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
+    #     disp_constraint = 14.4
+    #     stress_constraint = 345.0
+    #     max_volume = 1.615
+
+    #     # 1. 约束违反惩罚项（指数增长确保强惩罚）
+    #     disp_violation = max(0, (max_disp_abs - disp_constraint) / disp_constraint)
+    #     stress_violation = max(0, (max_stress - stress_constraint) / stress_constraint)
+    #     penalty = (disp_violation * 1) + (stress_violation * 1.5)  # 权重可调
+
+    #     # 2. 基础奖励：体积的负值（体积越小奖励越高）
+    #     if disp_violation == 0 and stress_violation == 0:
+    #         base_reward = 1 - model_volume / max_volume
+    #     else:
+    #         base_reward = 0
+
+    #     # 3. 总奖励 = 基础奖励 - 惩罚项
+    #     reward = base_reward - penalty
+
+    #     self.logger.info(
+    #         f"Reward: {reward:.2f}, Penalty: {-penalty:.2f}, Disp: {disp_violation*1:.2f}, Stress: {stress_violation*1.5:.2f}, Base Reward: {base_reward:.2f}"
+    #     )
+
+    #     return reward
+
     def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
         disp_constraint = 14.4
         stress_constraint = 345.0
-        max_volume = 1.615
 
-        # 1. 约束违反惩罚项（指数增长确保强惩罚）
-        disp_violation = max(0, (max_disp_abs - disp_constraint) / disp_constraint)
-        stress_violation = max(0, (max_stress - stress_constraint) / stress_constraint)
-        penalty = (disp_violation * 1) + (stress_violation * 1.5)  # 权重可调
-
-        # 2. 基础奖励：体积的负值（体积越小奖励越高）
-        if disp_violation == 0 and stress_violation == 0:
-            base_reward = -(model_volume - self._last_model_volume)
+        if max_disp_abs < disp_constraint:
+            delta_c1 = 1.0
         else:
-            base_reward = 0
+            delta_c1 = (
+                (self._last_max_disp_abs - max_disp_abs)
+                / disp_constraint
+                / (max_disp_abs / disp_constraint + 1)
+            )
 
-        # 3. 总奖励 = 基础奖励 - 惩罚项
-        reward = base_reward - penalty
+        if max_stress < stress_constraint:
+            delta_c2 = 1.0
+        else:
+            delta_c2 = (
+                (self._last_max_stress - max_stress)
+                / stress_constraint
+                / (max_stress / stress_constraint + 1)
+            )
 
-        self.logger.info(
-            f"Reward: {reward:.2f}, Penalty: {-penalty:.2f}, Disp: {disp_violation*1:.2f}, Stress: {stress_violation*1.5:.2f}, Base Reward: {base_reward:.2f}"
-        )
+        delta_v = model_volume - self._last_model_volume
+
+        if delta_c1 == 1 and delta_c2 == 1:
+            reward = -delta_v * 100 if delta_v < 0 else -delta_v * 200
+        else:
+            reward = -(2 - delta_c1 - delta_c2) * 10
 
         return reward
 
@@ -317,8 +351,26 @@ class StructuralEnv(gym.Env):
         print(
             f"  Frame Idx: {self.current_frame_section_index}, Main Idx: {self.current_main_beam_section_index}, Secondary Idx: {self.current_secondary_beam_section_index}, Brace Idx: {self.current_brace_section_index}"
         )
-        if self.current_structural_model:
-            print(f"  Num Beams: {len(self.current_structural_model.beams)}")
+        print(
+            f"  Max Disp: {self._last_max_disp_abs:.2f}, Max Stress: {self._last_max_stress:.2f}, Model Volume: {self._last_model_volume:.2f}"
+        )
+        # print section info
+        print(
+            "Frame Section:",
+            self.section_library.sections["方钢"][self.current_frame_section_index].name,
+        )
+        print(
+            "Main Beam Section:",
+            self.section_library.sections["H型钢-主梁"][self.current_main_beam_section_index].name,
+        )
+        print(
+            "Secondary Beam Section:",
+            self.section_library.sections["H型钢-次梁"][self.current_secondary_beam_section_index].name,
+        )
+        print(
+            "Brace Section:",
+            self.section_library.sections["C型钢"][self.current_brace_section_index].name,
+        )
 
     def close(self):
         # Clean up any resources if needed (e.g., OpenSees model if ops.wipe() isn't sufficient)

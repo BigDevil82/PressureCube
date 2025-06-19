@@ -17,6 +17,7 @@ KG_M_TO_N_M3 = 9.80665  # Assuming g = 9.80665 m/s^2 for density calculation fro
 class SteelSection:
     """基本截面属性"""
 
+    idx: int  # 截面在该类截面库中的索引
     name: str
     area: float  # 截面面积 (m^2)
     Ix: float  # 惯性矩 (m^4)
@@ -51,6 +52,9 @@ class HSection(SteelSection):
     t_web: float  # 腹板厚度 (m) - JSON中用 t
     t_flange: float  # 翼缘厚度 (m) - JSON中用 l
 
+    def __repr__(self) -> str:
+        return f"{self.name}: H={self.H*1000:.1f}mm, B={self.B*1000:.1f}mm, t_web={self.t_web*1000:.1f}mm, t_flange={self.t_flange*1000:.1f}mm, A={self.area:.2e}m², Ix={self.Ix:.2e}m⁴, Iy={self.Iy:.2e}m⁴, Iz={self.Iz:.2e}m⁴"
+
 
 @dataclass
 class CSection(SteelSection):
@@ -59,9 +63,9 @@ class CSection(SteelSection):
     H: float  # 高度 (m)
     B: float  # 宽度 (m)
     t_web: float  # 腹板厚度 (m) -  没有直接提供，但可以从规格中提取或估算
-    # 槽钢的惯性矩和截面模量在JSON中没有严格区分x,y轴，需要根据实际情况调整
-    # Iz for CSection corresponds to "扭转常数I" if available, or approximated
-    # Zz for CSection corresponds to "扭转常数C" if available, or approximated
+
+    def __repr__(self) -> str:
+        return f"{self.name}: H={self.H*1000:.1f}mm, B={self.B*1000:.1f}mm, t_web={self.t_web*1000:.1f}mm, A={self.area:.2e}m², Ix={self.Ix:.2e}m⁴, Iy={self.Iy:.2e}m⁴, Iz={self.Iz:.2e}m⁴"
 
 
 class SectionLibrary:
@@ -74,7 +78,15 @@ class SectionLibrary:
             "H型钢-次梁": [],
             "C型钢": [],
         }
-        self.load_sections(file_path)
+        self._load_sections(file_path)
+
+    @property
+    def section_types(self) -> List[str]:
+        return list(self.sections.keys())
+
+    @property
+    def section_counts(self) -> Dict[str, int]:
+        return {section_type: len(self.sections[section_type]) for section_type in self.section_types}
 
     def _calculate_c_section_I(self, H: float, B: float, t: float) -> Tuple[float, float]:
         """
@@ -117,7 +129,7 @@ class SectionLibrary:
 
         return Ix, Iy
 
-    def load_sections(self, file_path: str):
+    def _load_sections(self, file_path: str):
         """从JSON文件加载截面数据"""
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -130,7 +142,7 @@ class SectionLibrary:
             return
 
         # 方钢
-        for item in data.get("方钢", []):
+        for i, item in enumerate(data.get("方钢", [])):
             try:
                 name = f"方钢-{item['边长B mm']}x{item['壁厚t mm']}"
                 area = item["截面面积A cm²"] * CM2_TO_M2
@@ -143,6 +155,7 @@ class SectionLibrary:
                 density = 7850.0  # Default steel density
 
                 section = RectangularTubeSection(
+                    idx=i,
                     name=name,
                     area=area,
                     Ix=Ix,
@@ -163,7 +176,7 @@ class SectionLibrary:
 
         # H型钢
         H_sections = data["H型钢-主梁"] + data["H型钢-次梁"]
-        for item in H_sections:
+        for i, item in enumerate(H_sections):
             try:
                 name = item["H-型号(高度×宽度) mm×mm"]
                 area = item["截面面积cm²"] * CM2_TO_M2
@@ -177,6 +190,7 @@ class SectionLibrary:
                 density = 7850.0
 
                 section = HSection(
+                    idx=i,
                     name=name,
                     area=area,
                     Ix=Ix,
@@ -205,7 +219,7 @@ class SectionLibrary:
                 print(f"Error processing H型钢 section {item.get('H-型号(高度×宽度) mm×mm', 'Unknown')}: {e}")
 
         # C型钢
-        for item in data.get("C型钢", []):
+        for i, item in enumerate(data.get("C型钢", [])):
             try:
                 # C型钢的JSON结构比较简单，很多参数需要推断或从规格中解析
                 # "规格": "80×40×20×2.5" -> H x B x C x t
@@ -227,6 +241,7 @@ class SectionLibrary:
                 Zz_placeholder = Zy_placeholder  # Rough placeholder for torsion
 
                 section = CSection(
+                    idx=i,
                     name=name,
                     area=estimated_area,
                     Ix=Ix_placeholder,
@@ -248,11 +263,15 @@ class SectionLibrary:
             except Exception as e:
                 print(f"Error processing C型钢 section {item.get('规格', 'Unknown')}: {e}")
 
-        # 按照面积排序
+        self._sort_sections_by_Ix()
+
+    def _sort_sections_by_Ix(self):
+        """按照Ix排序"""
         for section_type in self.sections:
-            self.sections[section_type].sort(key=lambda x: x.area)
-            # shuffle
-            # random.shuffle(self.sections[section_type])
+            self.sections[section_type].sort(key=lambda x: x.Ix)
+            # reindex
+            for i, section in enumerate(self.sections[section_type]):
+                section.idx = i
 
     def get_section(
         self, section_type: str, index: int
