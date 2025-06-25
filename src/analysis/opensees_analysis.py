@@ -1238,7 +1238,7 @@ if __name__ == "__main__":
     config_path = "config.yaml"
     config = load_config(config_path)
     model = create_structural_model(config)
-    mesh_params = MeshParameters(max_grid_size=0.1)
+    mesh_params = MeshParameters(max_grid_size=0.2)
     mesh_generator = MeshGenerator(model, mesh_params)
     mesh_generator.generate_mesh()
     model = mesh_generator.meshed_model

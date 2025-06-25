@@ -118,6 +118,12 @@ python main.py --mode test --config config.yaml
   - [x] 实现可自定义单元尺寸的梁、板网格划分。
   - [x] 确保梁、板网格节点一一对应，避免不连续。
   - [x] 支持含中间节点的复杂板边界的网格划分。
+- [x] **随机结构参数生成器**
+  - [x] 在 `src/structure/random_structure.py` 中创建 `RandomStructure` 类。
+  - [x] 支持在指定范围内随机化舱体长度（`length`）和主梁间距（`main_beam_spacing`）。
+  - [x] 根据主梁间距和随机跨数（1-3）计算支撑梁间距（`brace_spacing`）。
+  - [x] 从截面库中随机选择框架、主梁、次梁和支撑的截面。
+  - [x] 实现随机窗户生成逻辑，可在前、后、左立面根据规则布置窗户。
 
 ## 建模方法说明
 

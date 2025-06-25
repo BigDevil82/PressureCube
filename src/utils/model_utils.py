@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import yaml
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import BeamType, Point, StructuralModel, StructuralParameters, Window
@@ -197,8 +198,13 @@ class StructureVisualizer:
 
             # 根据板所在面判断是否需要显示
             if face_type == ViewType.FULL_3D or plate.on_face.lower() == face_type.value:
-                # 使用灰色虚线绘制板, 置于底层
-                ax.plot(x, y, z, color="gray", linestyle="-", linewidth=0.7, alpha=0.8, zorder=0)
+                # 绘制板的边界
+                ax.plot(x, y, z, color="gray", linestyle="--", linewidth=0.7, alpha=0.8, zorder=5)
+
+                # 填充板面
+                # verts = [list(zip(x[:-1], y[:-1], z[:-1]))]
+                # poly = Poly3DCollection(verts, alpha=0.6, facecolor="lightgray", edgecolor=None, zorder=5)
+                # ax.add_collection3d(poly)
 
     def _plot_nodes(self, ax: plt.Axes, face_type: ViewType):
         """绘制节点"""
@@ -231,7 +237,10 @@ class StructureVisualizer:
         for beam_type, color in self.colors.items():
             ax.plot([], [], [], color=color, label=beam_type.name)
         # 添加板的图例
-        ax.plot([], [], [], color="gray", linestyle="-", label="Plate")
+        ax.plot([], [], [], color="gray", linestyle="--", label="Plate Edge")
+        # 添加板填充的图例
+        # poly = plt.Rectangle((0, 0), 1, 1, fc="lightgray", alpha=0.2, label="Plate Area")
+        # ax.add_artist(plt.legend([poly], ["Plate Area"], loc="upper right"))
         # 添加节点的图例（只添加一次）
         if not any(item.get_label() == "Node" for item in ax.get_legend_handles_labels()[0]):
             ax.scatter([], [], [], color="gray", s=5, marker="o", alpha=0.6, label="Node")
