@@ -834,6 +834,8 @@ class StructuralModel:
                     win_right = round(window.y_position + window.width / 2, 3)
                     win_bottom = round(window.bottom_height, 3)
                     win_top = round(window.bottom_height + window.height, 3)
+                    if window.is_door:
+                        win_top = round(self.params.win_bottom + self.params.win_height, 3)
                     threshold = 0.05
 
                     if (abs(x - win_left) < threshold or abs(x - win_right) < threshold) and (
@@ -944,7 +946,7 @@ class StructuralModel:
         self._generate_face_plates(fixed_coord="y", fixed_value=length, face_name="right")
 
         # 生成窗户/门所在区域钢板
-        self._generate_window_plates()
+        # self._generate_window_plates()
 
     def _generate_face_plates(self, fixed_coord: str, fixed_value: float, face_name: str):
         """在指定面上生成钢板
@@ -1170,6 +1172,8 @@ class StructuralModel:
                 continue
 
             win_top = round(window.bottom_height + window.height, 6)
+            if window.is_door:
+                win_top = round(self.params.win_bottom + self.params.win_height, 6)
             win_left = round(window.y_position - window.width / 2, 6)
             win_right = round(window.y_position + window.width / 2, 6)
             win_bottom = round(window.bottom_height, 6)
@@ -1253,10 +1257,11 @@ class StructuralModel:
 
 
 if __name__ == "__main__":
-    from src.utils.model_utils import create_structural_model, load_config
+    from src.utils.model_utils import StructureVisualizer, create_structural_model, load_config
 
     config = load_config("config.yaml")
     model = create_structural_model(config)
+    visualizer = StructureVisualizer(model)
 
     ## 打印结构相关信息
     print(f"结构总质量: {model.calculate_mass()} kg")
@@ -1271,3 +1276,5 @@ if __name__ == "__main__":
     for plate in model.plates.values():
         total_plate_area += plate.area(model.points)
     print(f"钢板总面积: {total_plate_area} m2")
+
+    visualizer.show_all_views()

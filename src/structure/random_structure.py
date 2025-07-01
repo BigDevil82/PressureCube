@@ -151,6 +151,8 @@ if __name__ == "__main__":
     from src.utils.model_utils import StructureVisualizer
     from src.utils.util import Timer
 
+    np.random.seed(10)
+
     section_library = SectionLibrary()
     random_structure = RandomStructure(section_library)
 

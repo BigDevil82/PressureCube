@@ -57,6 +57,7 @@ def create_structural_model(config):
                 "height": params_dict["win_height"],
                 "bottom_height": 0.0 if window_dict.get("is_door", False) else params_dict["win_bottom"],
                 "on_face": window_dict["on_face"],
+                "is_door": window_dict.get("is_door", False),
             }
             windows.append(Window(**window_dict))
 
