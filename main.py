@@ -152,32 +152,6 @@ def plot_training_progress(episode_num, metrics_history, save_dir):
     # print(f"Training progress plot saved to {plot_filename}")
 
 
-def analyze_structure(model):
-    """分析结构性能"""
-    analyzer = OpenSeesAnalyzer()
-    analyzer.setup_opensees_model(model)
-    analyzer.apply_gravity_loads(model)
-    static_success = analyzer.run_static_analysis()
-
-    results = {"static_success": static_success}
-    constraints = {}
-    if static_success:
-        displacements = analyzer.get_node_displacements()
-        max_disp = 0
-        if displacements:
-            for disp_val in displacements.values():
-                max_disp = max(max_disp, np.max(np.abs(disp_val[:3])))
-        results["max_displacement_mm"] = max_disp
-        # Simplified constraint check based on max displacement
-        constraints["max_displacement_check"] = max_disp < 20.0  # Example: 20mm limit
-        satisfied = constraints["max_displacement_check"]
-    else:
-        results["max_displacement_mm"] = float("inf")
-        constraints["max_displacement_check"] = False
-        satisfied = False
-    return satisfied, constraints, results
-
-
 def train(args, config):
     """训练强化学习智能体"""
     print(f"开始训练 DDPG 智能体，设备: {args.device}")
@@ -241,7 +215,10 @@ def train(args, config):
         state_pyg = state_pyg.to(device)
 
         for step in range(rl_params["max_steps_per_episode"]):
-            start_time = time()
+            # # linearly decrease sigma from 0.1 to 0.001
+            # sigma = 0.2 - 0.099 * (episode * rl_params["max_steps_per_episode"] + step) / (
+            #     args.max_episodes * rl_params["max_steps_per_episode"]
+            # )
             action_tensor = agent.select_action(state_pyg)  # state_pyg is a single Data object
             action_np = (
                 action_tensor.cpu().detach().numpy().squeeze(0)
@@ -362,18 +339,15 @@ def test(args, config):
     env_action_config = config.get("env_action_config", DEFAULT_ENV_ACTION_CONFIG)
     rl_params = config.get("rl_params", {})
 
-    model_base_name = "ddpg_agent"
-    final_model_load_path = os.path.join(args.model_save_path, f"{model_base_name}_final.pth")
+    if args.resume_path:
+        final_model_load_path = args.resume_path
+    else:
+        model_base_name = "ddpg_agent"
+        final_model_load_path = os.path.join(args.model_save_path, f"{model_base_name}_final.pth")
 
     if not os.path.exists(final_model_load_path):
         print(f"Error: Trained final model not found at {final_model_load_path}. Cannot run test.")
-        # Fallback: try to load a model with the exact name if _final doesn't exist (old behavior)
-        if os.path.exists(args.model_save_path):
-            print(f"Attempting to load {args.model_save_path} instead.")
-            final_model_load_path = args.model_save_path
-        else:
-            print(f"Also, {args.model_save_path} not found. Exiting test.")
-            return
+        return
 
     checkpoint = torch.load(final_model_load_path, map_location=device)
     hebg_config = checkpoint.get("hebg_config")
@@ -403,6 +377,9 @@ def test(args, config):
 
     for episode in range(num_test_episodes):
         state_pyg, _ = env.reset()
+        print("initial state: ")
+        env.render()
+        print("-" * 100 + "\n")
         episode_reward = 0
         if state_pyg is None or not hasattr(state_pyg, "x") or state_pyg.x is None:
             print(f"Test Episode {episode+1}: Failed to get valid initial state. Skipping.")
@@ -477,14 +454,6 @@ def main():
             )
         visualizer = StructureVisualizer(model)
         visualizer.show_all_views()
-        try:
-            satisfied, constraints, results = analyze_structure(model)
-            print(f"结构约束满足: {satisfied}")
-            for constraint_name, is_satisfied in constraints.items():
-                print(f"  {constraint_name}: {'满足' if is_satisfied else '不满足'}")
-        except Exception as e:
-            print(f"结构分析失败: {e}")
-            # import traceback; traceback.print_exc()
 
 
 if __name__ == "__main__":
