@@ -92,7 +92,7 @@ class StructuralEnv(gym.Env):
                         0.0 if w_config.get("is_door", False) else params_data_dict["win_bottom"]
                     ),
                     "on_face": w_config.get("on_face", "front"),
-                    # "is_door": w_config.get("is_door", False),
+                    "is_door": w_config.get("is_door", False),
                 }
                 windows_list.append(Window(**window_params))
         params_data_dict["windows"] = windows_list
@@ -197,8 +197,17 @@ class StructuralEnv(gym.Env):
         def _decode_single_action(section_index_name):
             cfg = param_map[section_index_name]
             num_options = cfg["num_options"]
+            ## 1. interpret action as normalized index of the section
             raw_idx = action_vector[cfg["action_idx"]] * (num_options - 1)  # Scale [0,1] to [0, N-1]
             return np.clip(int(round(raw_idx)), 0, num_options - 1)
+
+            # ### 2. interpret action as increase or decrease of the section index
+            # current_section_index = getattr(self, f"current_{section_index_name}")
+            # if action_vector[cfg["action_idx"]] > 0.5:
+            #     updated_section_index = current_section_index + 1
+            # else:
+            #     updated_section_index = current_section_index - 1
+            # return np.clip(updated_section_index, 0, num_options - 1)
 
         # 4. Frame Section Index
         self.current_frame_section_index = _decode_single_action("frame_section_index")
