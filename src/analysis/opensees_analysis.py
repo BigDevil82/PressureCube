@@ -929,7 +929,7 @@ class OpenSeesAnalyzer:
 
         return plate_stresses_results
 
-    def get_beam_stresses(self) -> Dict[int, np.ndarray]:
+    def get_beam_stresses(self, query_beam_ids: Optional[List[int]] = None) -> Dict[int, np.ndarray]:
         """
         Retrieves beam element stresses and forces.
         Returns: Dict[beam_id, stress/force data]
@@ -958,6 +958,9 @@ class OpenSeesAnalyzer:
             return sigma_top, sigma_bottom
 
         for beam_id, beam_obj in self._model.beams.items():
+            if query_beam_ids is not None and beam_id not in query_beam_ids:
+                continue
+
             forces = ops.eleResponse(beam_id, "localForce")
             if forces is None:
                 beam_stresses_results[beam_id] = None
