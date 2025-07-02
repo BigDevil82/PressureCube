@@ -18,45 +18,6 @@ from src.structure.structural_model import BeamType
 from src.utils.constants import *
 from src.utils.model_utils import StructureVisualizer, create_structural_model, load_config
 
-# Default configuration for agent actions and environment interaction
-# This should ideally be part of your main config.yaml or a separate settings file
-DEFAULT_ENV_ACTION_CONFIG = {
-    "parameter_action_mapping": {
-        "main_beam_spacing": {"action_idx": 0, "type": "continuous", "bounds": [1.0, 3.0], "module": 0.1},
-        "secondary_beam_spacing": {
-            "action_idx": 1,
-            "type": "continuous",
-            "bounds": [0.5, 2.0],
-            "module": 0.1,
-        },
-        "brace_spacing": {"action_idx": 2, "type": "continuous", "bounds": [0.5, 2.0], "module": 0.1},
-        "frame_section_index": {
-            "action_idx": 3,
-            "type": "discrete",
-            "num_options": 3,
-        },  # Example: 3 choices for frame sections
-        "main_beam_section_index": {
-            "action_idx": 4,
-            "type": "discrete",
-            "num_options": 5,
-        },  # Example: 5 choices for main beam sections
-        "secondary_beam_section_index": {"action_idx": 5, "type": "discrete", "num_options": 5},
-        "brace_section_index": {"action_idx": 6, "type": "discrete", "num_options": 4},
-    },
-    "max_steps_per_episode": 100,  # Max steps per episode during training
-    "replay_buffer_size": 10000,
-    "batch_size": 32,
-    "min_replay_buffer_fill": 200,  # Start training after buffer has this many samples
-}
-
-# Placeholder for HEBG configuration - ideally from config.yaml or auto-detected
-DEFAULT_HEBG_CONFIG = {
-    # 'in_channels' will be determined from the environment observation
-    "hidden_channels": 64,  # Example
-    "out_channels": 128,  # Example, this is the state dim for DDPG FC layers
-    "num_beam_types": 4,
-}
-
 
 def parse_args():
     """解析命令行参数"""
@@ -82,35 +43,36 @@ def parse_args():
     return parser.parse_args()
 
 
-def plot_training_progress(episode_num, metrics_history, save_dir):
+def plot_training_progress(metrics_history, save_dir):
     """Plots and saves the training progress for various metrics."""
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
 
-    epochs = list(range(1, episode_num + 1))
+    # Create x-axis values (episode numbers)
+    episodes = list(range(1, len(metrics_history["rewards"]) + 1))
 
     fig, axs = plt.subplots(2, 2, figsize=(15, 15), sharex=True)
 
     # Plot Episode Rewards
     axs[0, 0].plot(
-        epochs, metrics_history["rewards"], label="Episode Reward", color="blue", marker="o", linestyle="-"
+        episodes, metrics_history["rewards"], label="Episode Reward", color="blue", marker="o", linestyle="-"
     )
     axs[0, 0].set_ylabel("Episode Return")
-    axs[0, 0].set_title("Training Progress")
+    axs[0, 0].set_title("Cumulative Rewards per Episode")
     axs[0, 0].legend()
     axs[0, 0].grid(True)
 
     # Plot Max Displacement
     axs[0, 1].plot(
-        epochs,
+        episodes,
         metrics_history["max_displacements"],
-        label="Max Displacement (mm)",
+        label="Max Displacement",
         color="red",
         marker="o",
         linestyle="-",
     )
     axs[0, 1].set_ylabel("Max Displacement (mm)")
-    # axs[1].set_yscale('log') # If values vary wildly
+    axs[0, 1].set_title("Maximum Displacement per Episode")
     axs[0, 1].legend()
     axs[0, 1].grid(True)
     # plot displacement constraint line
@@ -118,14 +80,16 @@ def plot_training_progress(episode_num, metrics_history, save_dir):
 
     # Plot Max Stress
     axs[1, 0].plot(
-        epochs,
+        episodes,
         metrics_history["max_stresses"],
-        label="Max Stress (MPa)",
+        label="Max Stress",
         color="green",
         marker="o",
         linestyle="-",
     )
     axs[1, 0].set_ylabel("Max Stress (MPa)")
+    axs[1, 0].set_xlabel("Episode")
+    axs[1, 0].set_title("Maximum Stress per Episode")
     axs[1, 0].legend()
     axs[1, 0].grid(True)
     # plot stress constraint line
@@ -133,23 +97,23 @@ def plot_training_progress(episode_num, metrics_history, save_dir):
 
     # Plot Model Volume
     axs[1, 1].plot(
-        epochs,
+        episodes,
         metrics_history["model_volumes"],
-        label="Model Volume (m^3)",
+        label="Model Volume",
         color="purple",
         marker="o",
         linestyle="-",
     )
-    axs[1, 1].set_ylabel("Model Volume (m^3)")
+    axs[1, 1].set_ylabel("Model Volume (m³)")
     axs[1, 1].set_xlabel("Episode")
+    axs[1, 1].set_title("Structure Volume per Episode")
     axs[1, 1].legend()
     axs[1, 1].grid(True)
 
     plt.tight_layout()
     plot_filename = os.path.join(save_dir, f"training_progress.png")
-    plt.savefig(plot_filename)
+    plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
     plt.close(fig)  # Close the figure to free memory
-    # print(f"Training progress plot saved to {plot_filename}")
 
 
 def train(args, config):
@@ -157,11 +121,9 @@ def train(args, config):
     print(f"开始训练 DDPG 智能体，设备: {args.device}")
     device = torch.device(args.device)
 
-    # Load env_action_config and hebg_config (using defaults for now)
-    # In a real setup, these might come from the main config file or be more elaborate
-    env_action_config = config.get("env_action_config", DEFAULT_ENV_ACTION_CONFIG)
-    hebg_config = config.get("hebg_config", DEFAULT_HEBG_CONFIG)
-    rl_params = config.get("rl_params", {})
+    env_action_config = config["env_action_config"]
+    hebg_config = config["hebg_config"]
+    rl_params = config["rl_params"]
 
     env = StructuralEnv(
         initial_params_config_path=args.config, env_action_config=env_action_config, seed=args.seed
@@ -195,14 +157,19 @@ def train(args, config):
     replay_buffer = deque(maxlen=rl_params["buffer_size"])
     episode_rewards = []
 
-    # For plotting
-    metrics_history = {"rewards": [], "max_displacements": [], "max_stresses": [], "model_volumes": []}
+    # For plotting and saving metrics
+    metrics_history = {
+        "rewards": [],
+        "max_displacements": [],
+        "max_stresses": [],
+        "model_volumes": [],
+        "steps": [],
+        "episode_numbers": [],
+    }
     plot_save_dir = os.path.join(args.model_save_path, "plots")
-    # Ensure the base model save directory exists
-    if not os.path.exists(args.model_save_path):
-        os.makedirs(args.model_save_path, exist_ok=True)
-    # Base name for the model, e.g., "ddpg_agent"
+    os.makedirs(plot_save_dir, exist_ok=True)
     model_base_name = "ddpg_agent"
+    global_step = 0
 
     for episode in range(args.max_episodes):
         state_pyg, info_reset = env.reset()
@@ -215,10 +182,7 @@ def train(args, config):
         state_pyg = state_pyg.to(device)
 
         for step in range(rl_params["max_steps_per_episode"]):
-            # # linearly decrease sigma from 0.1 to 0.001
-            # sigma = 0.2 - 0.099 * (episode * rl_params["max_steps_per_episode"] + step) / (
-            #     args.max_episodes * rl_params["max_steps_per_episode"]
-            # )
+            global_step += 1
             action_tensor = agent.select_action(state_pyg)  # state_pyg is a single Data object
             action_np = (
                 action_tensor.cpu().detach().numpy().squeeze(0)
@@ -232,17 +196,13 @@ def train(args, config):
                 print(
                     f"Warning: Episode {episode+1}, Step {step+1}: Received invalid next_state. Treating as done."
                 )
-                # Create a placeholder for next_state if needed by buffer, or skip storing this transition
                 done = True
-                # Potentially use current state_pyg as next_state_pyg to avoid None in buffer,
-                # but ensure done flag prevents Q-value bootstrapping from it.
                 if next_state_pyg is None:
                     next_state_pyg = state_pyg.clone()  # Simplistic handling
 
             next_state_pyg = next_state_pyg.to(device)
 
             # Store experience (state, action, reward, next_state, done)
-            # Action stored should be the one applied (action_np), ensure it's a tensor for batching
             replay_buffer.append(
                 (
                     state_pyg,
@@ -265,7 +225,6 @@ def train(args, config):
                 dones_tensor = torch.stack([e[4] for e in experiences])
 
                 # Batch PyG Data objects
-                # Critical: Ensure Batch.from_data_list is used for states and next_states
                 state_batch_pyg = Batch.from_data_list(states_list).to(device)
                 next_state_batch_pyg = Batch.from_data_list(next_states_list).to(device)
 
@@ -282,32 +241,25 @@ def train(args, config):
             if done:
                 break
 
-            # end_time = time()
-            # # print(f"Episode {episode+1}, Step {step+1}, Time: {end_time - start_time:.2f} seconds")
-            # duration = end_time - start_time
-
-            episode_rewards.append(episode_reward)
-            # Store metrics for plotting
+            # Store metrics for this episode
             metrics_history["rewards"].append(episode_reward)
             metrics_history["max_displacements"].append(info.get("max_displacement_mm", float("nan")))
             metrics_history["max_stresses"].append(info.get("max_stress", float("nan")))
             metrics_history["model_volumes"].append(info.get("model_volume_m3", float("nan")))
+            metrics_history["steps"].append(step + 1)  # Store number of steps taken
+            metrics_history["episode_numbers"].append(episode + 1)
+
             # Plot progress after each episode
-            if (episode * rl_params["max_steps_per_episode"] + step + 1) % rl_params.get(
-                "plot_interval", 1
-            ) == 0:
-                plot_training_progress(
-                    episode * rl_params["max_steps_per_episode"] + step + 1, metrics_history, plot_save_dir
-                )
+            if global_step % rl_params.get("plot_interval", 10) == 0:
+                plot_training_progress(metrics_history, plot_save_dir)
 
         print(
             f"Episode {episode+1}/{args.max_episodes}, Episode Return: {episode_reward:.2f}, Steps: {step+1}, Info: {info.get('error', 'OK')}"
         )
         env.render()
-        # if info.get("max_displacement_mm") is not None:
-        #     print(f"  Max displacement: {info['max_displacement_mm']:.3f} mm")
+        print()
 
-        # Save model periodically (example)
+        # Save model periodically
         if (episode + 1) % rl_params.get("save_interval", 100) == 0:
             periodic_save_path = os.path.join(
                 args.model_save_path, f"{model_base_name}_episode_{episode+1}.pth"
@@ -315,19 +267,41 @@ def train(args, config):
             agent.save_model(periodic_save_path)
             print(f"Model saved to {periodic_save_path} at episode {episode+1}")
 
+            # Also save metrics data periodically
+            metrics_save_path = os.path.join(plot_save_dir, "metrics.npz")
+            np.savez(
+                metrics_save_path,
+                rewards=np.array(metrics_history["rewards"]),
+                max_displacements=np.array(metrics_history["max_displacements"]),
+                max_stresses=np.array(metrics_history["max_stresses"]),
+                model_volumes=np.array(metrics_history["model_volumes"]),
+                steps=np.array(metrics_history["steps"]),
+                episode_numbers=np.array(metrics_history["episode_numbers"]),
+            )
+            print(f"Training metrics saved to {metrics_save_path}")
+
     # Save the final model
     final_model_save_path = os.path.join(args.model_save_path, f"{model_base_name}_final.pth")
     agent.save_model(final_model_save_path)
     print(f"Final model saved to {final_model_save_path}")
 
+    # Save final metrics data
+    final_metrics_save_path = os.path.join(plot_save_dir, "metrics.npz")
+    np.savez(
+        final_metrics_save_path,
+        rewards=np.array(metrics_history["rewards"]),
+        max_displacements=np.array(metrics_history["max_displacements"]),
+        max_stresses=np.array(metrics_history["max_stresses"]),
+        model_volumes=np.array(metrics_history["model_volumes"]),
+        steps=np.array(metrics_history["steps"]),
+        episode_numbers=np.array(metrics_history["episode_numbers"]),
+    )
+    print(f"Final training metrics saved to {final_metrics_save_path}")
+
     print("训练完成.")
     # Plot final combined metrics
     if metrics_history["rewards"]:
-        plot_training_progress(
-            args.max_episodes * rl_params["max_steps_per_episode"],
-            metrics_history,
-            plot_save_dir,
-        )
+        plot_training_progress(metrics_history, plot_save_dir)
         print(f"Final training plot saved in {plot_save_dir}")
 
 
@@ -336,8 +310,8 @@ def test(args, config):
     print(f"开始测试 DDPG 智能体，设备: {args.device}")
     device = torch.device(args.device)
 
-    env_action_config = config.get("env_action_config", DEFAULT_ENV_ACTION_CONFIG)
-    rl_params = config.get("rl_params", {})
+    env_action_config = config["env_action_config"]
+    rl_params = config["rl_params"]
 
     if args.resume_path:
         final_model_load_path = args.resume_path
@@ -425,14 +399,6 @@ def main():
     random.seed(args.seed)  # For replay buffer sampling consistency
 
     config = load_config(args.config)
-    # Merge or override with default env_action_config and hebg_config if not in main config
-    if "env_action_config" not in config:
-        config["env_action_config"] = DEFAULT_ENV_ACTION_CONFIG
-    if "hebg_config" not in config:
-        config["hebg_config"] = DEFAULT_HEBG_CONFIG
-    # Potentially load other rl_params from config if they exist
-    if "rl_params" not in config:
-        config["rl_params"] = {}
 
     if args.mode == "train":
         train(args, config)
