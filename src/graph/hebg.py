@@ -107,7 +107,7 @@ class HEBG(nn.Module):
         for type_val in range(self.num_beam_types):
             node_masks[type_val] = torch.zeros(num_total_nodes, dtype=torch.bool, device=data.x.device)
 
-        if hasattr(data, "num_graphs") and data.num_graphs > 1:  # Check if it's a Batch object
+        if hasattr(data, "num_graphs"):  # Check if it's a Batch object
             # raise NotImplementedError("Batch objects are not supported yet.")
             # It's a Batch object, iterate through individual graphs
             # We need to know the starting index of each graph in the batch
@@ -133,9 +133,14 @@ class HEBG(nn.Module):
                 current_node_offset += num_nodes_in_this_graph
 
         elif hasattr(data, "node_type_ranges") and data.node_type_ranges:  # Single Data object
-            for type_val, (start_idx, end_idx) in data.node_type_ranges.items():
-                if isinstance(type_val, int) and 0 <= type_val < self.num_beam_types:
-                    node_masks[type_val][start_idx : end_idx + 1] = True
+            try:
+                for type_val, (start_idx, end_idx) in data.node_type_ranges.items():
+                    if isinstance(type_val, int) and 0 <= type_val < self.num_beam_types:
+                        node_masks[type_val][start_idx : end_idx + 1] = True
+            except Exception as e:
+                print(f"Error in get_node_masks_by_type: {e}")
+                print(f"data.node_type_ranges: {data.node_type_ranges}")
+                raise e
         # else: No node_type_ranges found on the data object or it's an unhandled batch structure
         # print("Warning: node_type_ranges not found on data object or unhandled batch structure in get_node_masks_by_type")
 
