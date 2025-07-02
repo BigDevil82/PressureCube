@@ -415,8 +415,22 @@ class BeamAsNodeGraph:
             # Centroid Coordinates
             centroid = (start_node_obj.coordinates() + end_node_obj.coordinates()) / 2.0
 
+            # response
+            max_disp_abs = beam.response.max_disp_abs
+            max_stress = beam.response.max_stress
+
+            # section property
+            section_property = self.model.sections[beam.section]
+            Ix = section_property.Ix
+            Iy = section_property.Iy
+            area = section_property.area
+
             features = (
-                [beam_type_idx, beam_section_idx, length] + list(direction_vec_normalized) + list(centroid)
+                [beam_type_idx, beam_section_idx, length]
+                + list(direction_vec_normalized)
+                + list(centroid)
+                + [max_disp_abs, max_stress]
+                + [Ix, Iy, area]
             )
             node_features_list.append(features)
 
