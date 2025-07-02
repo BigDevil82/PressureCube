@@ -8,7 +8,14 @@ from gym import spaces
 from src.analysis.opensees_analysis import OpenSeesAnalyzer
 from src.graph.structural_graph import BeamAsNodeGraph
 from src.structure.mesh_generator import MeshGenerator, MeshParameters  # For loading initial full config
-from src.structure.structural_model import SectionLibrary, StructuralModel, StructuralParameters, Window
+from src.structure.random_structure import RandomStructure
+from src.structure.structural_model import (
+    Response,
+    SectionLibrary,
+    StructuralModel,
+    StructuralParameters,
+    Window,
+)
 from src.utils.logger import Logger
 from src.utils.model_utils import load_config
 
@@ -110,47 +117,46 @@ class StructuralEnv(gym.Env):
         self.current_structural_model = StructuralModel(params_obj, self.section_library)
         self.current_structural_model.generate_grid_mesh()
 
-        if not self.current_structural_model.beams:
-            print("Warning (StructuralEnv): Generated structural model has no beams.")
-            # Create an empty graph state representation
-            # Note: rl_agent might expect certain attributes even on an "empty" graph
-            self.current_pyg_data_state = BeamAsNodeGraph(self.current_structural_model).to_pyg_data()
-            return False
+        try:
+            max_indicators = self._run_fem_analysis()
+            if not max_indicators:
+                print("Warning (StructuralEnv): Failed to run FEM analysis.")
+                return False, None
+        except Exception as e:
+            print(f"Error during OpenSees analysis in _generate_model_and_state_from_current_params: {e}")
+            return False, None
 
-        graph_converter = BeamAsNodeGraph(self.current_structural_model)
-        self.current_pyg_data_state = graph_converter.to_pyg_data()
+        try:
+            graph_converter = BeamAsNodeGraph(self.current_structural_model)
+            self.current_pyg_data_state = graph_converter.to_pyg_data()
+        except Exception as e:
+            print(f"Error during graph conversion in _generate_model_and_state_from_current_params: {e}")
+            return False, None
 
-        if self.current_pyg_data_state.num_nodes == 0 and len(self.current_structural_model.beams) > 0:
-            print("Warning (StructuralEnv): PyG data has 0 nodes even though model has beams.")
-            # This case might indicate an issue in graph conversion for certain structures
-            return False
-        elif self.current_pyg_data_state.num_nodes == 0:
-            print("Info (StructuralEnv): PyG data has 0 nodes (likely no beams in model).")
-
-        return True
+        return True, max_indicators
 
     def reset(self, options=None):
         super().reset(seed=self.seed)  # For gym compatibility if using random seeding later
 
         # init section index randomly
-        section_counts = self.section_library.section_counts
-        self.current_frame_section_index = np.random.randint(0, section_counts["方钢"])
-        self.current_main_beam_section_index = np.random.randint(0, section_counts["H型钢-主梁"])
-        self.current_secondary_beam_section_index = np.random.randint(0, section_counts["H型钢-次梁"])
-        self.current_brace_section_index = np.random.randint(0, section_counts["C型钢"])
+        random_params = RandomStructure(self.section_library).generate_random_parameters()
 
-        self.current_main_beam_spacing = self.base_config_dict["main_beam_spacing"]
-        self.current_secondary_beam_spacing = self.base_config_dict["main_beam_spacing"]
-        self.current_brace_spacing = self.base_config_dict["brace_spacing"]
+        self.current_frame_section_index = random_params.frame_section_index
+        self.current_main_beam_section_index = random_params.main_beam_section_index
+        self.current_secondary_beam_section_index = random_params.secondary_beam_section_index
+        self.current_brace_section_index = random_params.brace_section_index
+
+        self.current_main_beam_spacing = random_params.main_beam_spacing
+        self.current_secondary_beam_spacing = random_params.secondary_beam_spacing
+        self.current_brace_spacing = random_params.brace_spacing
 
         self._current_step_count = 0
 
-        generation_success = self._generate_model_and_state_from_current_params()
+        generation_success, max_indicators = self._generate_model_and_state_from_current_params()
         if not generation_success:
             print("Critical Error (StructuralEnv): Failed to generate a valid model/state at reset.")
             raise ValueError("Failed to generate a valid model/state at reset.")
 
-        max_indicators = self._run_fem_analysis()
         if max_indicators:
             self._last_max_disp_abs = max_indicators["max_abs_displacement"]
             self._last_max_stress = max_indicators["max_abs_stress"]
@@ -173,26 +179,22 @@ class StructuralEnv(gym.Env):
         """
         param_map = self.env_action_config["parameter_action_mapping"]
 
-        # # 1. Main Beam Spacing
-        # cfg = param_map["main_beam_spacing"]
-        # raw_val = cfg["bounds"][0] + action_vector[cfg["action_idx"]] * (cfg["bounds"][1] - cfg["bounds"][0])
-        # self.current_main_beam_spacing = np.clip(
-        #     round(raw_val / cfg["module"]) * cfg["module"], cfg["bounds"][0], cfg["bounds"][1]
-        # )
+        # Main Beam Spacing
+        cfg = param_map["main_beam_spacing"]
+        raw_val = cfg["bounds"][0] + action_vector[cfg["action_idx"]] * (cfg["bounds"][1] - cfg["bounds"][0])
+        self.current_main_beam_spacing = np.clip(
+            round(raw_val / cfg["module"]) * cfg["module"], cfg["bounds"][0], cfg["bounds"][1]
+        )
 
-        # # 2. Secondary Beam Spacing
-        # cfg = param_map["secondary_beam_spacing"]
-        # raw_val = cfg["bounds"][0] + action_vector[cfg["action_idx"]] * (cfg["bounds"][1] - cfg["bounds"][0])
-        # self.current_secondary_beam_spacing = np.clip(
-        #     round(raw_val / cfg["module"]) * cfg["module"], cfg["bounds"][0], cfg["bounds"][1]
-        # )
-
-        # # 3. Brace Spacing
-        # cfg = param_map["brace_spacing"]
-        # raw_val = cfg["bounds"][0] + action_vector[cfg["action_idx"]] * (cfg["bounds"][1] - cfg["bounds"][0])
-        # self.current_brace_spacing = np.clip(
-        #     round(raw_val / cfg["module"]) * cfg["module"], cfg["bounds"][0], cfg["bounds"][1]
-        # )
+        # Brace Spacing
+        cfg = param_map["brace_spacing"]
+        raw_val = cfg["bounds"][0] + action_vector[cfg["action_idx"]] * (cfg["bounds"][1] - cfg["bounds"][0])
+        num_spans = np.clip(round(raw_val), cfg["bounds"][0], cfg["bounds"][1])
+        if num_spans > 1:
+            brace_spacing = (self.current_main_beam_spacing / num_spans).round(3)
+        else:
+            brace_spacing = (1.3 * (self.current_main_beam_spacing / 2)).round(3)
+        self.current_brace_spacing = brace_spacing if brace_spacing > 0.3 else 0.3
 
         def _decode_single_action(section_index_name):
             cfg = param_map[section_index_name]
@@ -226,79 +228,100 @@ class StructuralEnv(gym.Env):
         mesh_params = MeshParameters(max_grid_size=0.2)
         mesh_generator = MeshGenerator(self.current_structural_model, mesh_params)
         mesh_generator.generate_mesh()
+        meshed_model = mesh_generator.meshed_model
 
         self.opensees_analyzer.setup_opensees_model(mesh_generator.meshed_model)
         self.opensees_analyzer.apply_gravity_and_pressure_loads(30000.0)
         static_success = self.opensees_analyzer.run_static_analysis()
         if not static_success:
             return None
+
+        # 填充梁的响应
+        for beam_id, beam_obj in self.current_structural_model.beams.items():
+            meshed_beams_id = mesh_generator.original_to_meshed_beams[beam_id]
+            if len(meshed_beams_id) == 0:
+                continue
+            beam_obj.response = Response(max_disp_abs=0.0, max_stress=0.0)
+            stresses = self.opensees_analyzer.get_beam_stresses(meshed_beams_id)
+            stresses_arr = np.array(list(stresses.values()))
+            beam_obj.response.max_stress = np.max(np.abs(stresses_arr))
+
+            # meshed beam nodes
+            meshed_beam_nodes = []
+            for meshed_beam_id in meshed_beams_id:
+                meshed_beam_nodes.append(meshed_model.beams[meshed_beam_id].start_node)
+                meshed_beam_nodes.append(meshed_model.beams[meshed_beam_id].end_node)
+            displacements = self.opensees_analyzer.get_node_displacements(meshed_beam_nodes)
+            displacements_arr = np.array(list(displacements.values()))[:, :3]
+            beam_obj.response.max_disp_abs = np.max(np.abs(displacements_arr))
+
         max_indicators = self.opensees_analyzer.get_max_indicators()
         return max_indicators
 
     def _calculate_model_volume(self) -> float:
         return self.current_structural_model.calculate_mass() / 7850.0
 
+    def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
+        disp_constraint = 14.4
+        stress_constraint = 355.0
+        max_volume = 1.615
+
+        # 1. 约束违反惩罚项（指数增长确保强惩罚）
+        disp_violation = max(0, (max_disp_abs - disp_constraint) / disp_constraint)
+        stress_violation = max(0, (max_stress - stress_constraint) / stress_constraint)
+        penalty = (disp_violation * 1) + (stress_violation * 1.5)  # 权重可调
+
+        # 2. 基础奖励：体积的负值（体积越小奖励越高）
+        if disp_violation == 0 and stress_violation == 0:
+            base_reward = 1 - model_volume / max_volume
+        else:
+            base_reward = 0
+
+        # 3. 总奖励 = 基础奖励 - 惩罚项
+        reward = base_reward - penalty
+
+        self.logger.info(
+            f"Reward: {reward:.2f}, Penalty: {-penalty:.2f}, Disp: {disp_violation*1:.2f}, Stress: {stress_violation*1.5:.2f}, Base Reward: {base_reward:.2f}"
+        )
+
+        return reward
+
     # def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
     #     disp_constraint = 14.4
     #     stress_constraint = 345.0
-    #     max_volume = 1.615
 
-    #     # 1. 约束违反惩罚项（指数增长确保强惩罚）
-    #     disp_violation = max(0, (max_disp_abs - disp_constraint) / disp_constraint)
-    #     stress_violation = max(0, (max_stress - stress_constraint) / stress_constraint)
-    #     penalty = (disp_violation * 1) + (stress_violation * 1.5)  # 权重可调
-
-    #     # 2. 基础奖励：体积的负值（体积越小奖励越高）
-    #     if disp_violation == 0 and stress_violation == 0:
-    #         base_reward = 1 - model_volume / max_volume
+    #     if max_disp_abs < disp_constraint:
+    #         delta_c1 = 1.0
     #     else:
-    #         base_reward = 0
+    #         delta_c1 = (
+    #             (self._last_max_disp_abs - max_disp_abs)
+    #             / disp_constraint
+    #             / (max_disp_abs / disp_constraint + 1)
+    #         )
 
-    #     # 3. 总奖励 = 基础奖励 - 惩罚项
-    #     reward = base_reward - penalty
+    #     if max_stress < stress_constraint:
+    #         delta_c2 = 1.0
+    #     else:
+    #         delta_c2 = (
+    #             (self._last_max_stress - max_stress)
+    #             / stress_constraint
+    #             / (max_stress / stress_constraint + 1)
+    #         )
 
-    #     self.logger.info(
-    #         f"Reward: {reward:.2f}, Penalty: {-penalty:.2f}, Disp: {disp_violation*1:.2f}, Stress: {stress_violation*1.5:.2f}, Base Reward: {base_reward:.2f}"
-    #     )
+    #     delta_v = model_volume - self._last_model_volume
+
+    #     if delta_c1 == 1 and delta_c2 == 1:
+    #         reward = -delta_v * 100 if delta_v < 0 else -delta_v * 200
+    #     else:
+    #         reward = -(2 - delta_c1 - delta_c2) * 10
 
     #     return reward
-
-    def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
-        disp_constraint = 14.4
-        stress_constraint = 345.0
-
-        if max_disp_abs < disp_constraint:
-            delta_c1 = 1.0
-        else:
-            delta_c1 = (
-                (self._last_max_disp_abs - max_disp_abs)
-                / disp_constraint
-                / (max_disp_abs / disp_constraint + 1)
-            )
-
-        if max_stress < stress_constraint:
-            delta_c2 = 1.0
-        else:
-            delta_c2 = (
-                (self._last_max_stress - max_stress)
-                / stress_constraint
-                / (max_stress / stress_constraint + 1)
-            )
-
-        delta_v = model_volume - self._last_model_volume
-
-        if delta_c1 == 1 and delta_c2 == 1:
-            reward = -delta_v * 100 if delta_v < 0 else -delta_v * 200
-        else:
-            reward = -(2 - delta_c1 - delta_c2) * 10
-
-        return reward
 
     def step(self, action: np.ndarray):
         self._decode_action(action)
         self._current_step_count += 1
 
-        generation_success = self._generate_model_and_state_from_current_params()
+        generation_success, max_indicators = self._generate_model_and_state_from_current_params()
 
         next_state = self.current_pyg_data_state
         reward = 0.0
@@ -319,7 +342,7 @@ class StructuralEnv(gym.Env):
         current_model_volume = self._calculate_model_volume()
         # Perform OpenSees Analysis
         try:
-            max_indicators = self._run_fem_analysis()
+
             if max_indicators:
                 max_disp_abs = max_indicators["max_abs_displacement"]
                 max_stress = max_indicators["max_abs_stress"]
@@ -355,7 +378,7 @@ class StructuralEnv(gym.Env):
         # For now, print current parameters.
         print(f"Step: {self._current_step_count}")
         print(
-            f"  Main Spacing: {self.current_main_beam_spacing:.2f}, Secondary Spacing: {self.current_secondary_beam_spacing:.2f}, Brace Spacing: {self.current_brace_spacing:.2f}"
+            f"  Main Spacing: {self.current_main_beam_spacing:.2f}, Secondary Spacing: {self.current_main_beam_spacing:.2f}, Brace Spacing: {self.current_brace_spacing:.2f}"
         )
         print(
             f"  Frame Idx: {self.current_frame_section_index}, Main Idx: {self.current_main_beam_section_index}, Secondary Idx: {self.current_secondary_beam_section_index}, Brace Idx: {self.current_brace_section_index}"
