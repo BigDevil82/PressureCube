@@ -38,6 +38,14 @@ class Point:
 
 
 @dataclass
+class Response:
+    """响应类"""
+
+    max_disp_abs: float
+    max_stress: float
+
+
+@dataclass
 class Beam:
     """梁构件类"""
 
@@ -45,8 +53,9 @@ class Beam:
     start_node: int  # 起始节点ID
     end_node: int  # 终止节点ID
     beam_type: BeamType  # 梁类型
-    section: str  # 截面类型
+    section: str  # 截面类型 [FRAME, MAIN, SECONDARY, BRACE]
     on_face: str  # 处于哪个面上（left, right, top, bottom, front, back)
+    response: Response = None
 
     def length(self, nodes: Dict[int, Point]) -> float:
         """计算梁长度"""

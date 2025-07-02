@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from typing import TYPE_CHECKING, Dict, List
 
 import numpy as np
@@ -54,6 +55,10 @@ class MeshGenerator:
         self._nodes_on_beam: Dict[int, List[int]] = {}
         self._old_to_new_node_id: Dict[int, int] = {}
         self._beams_on_plate: Dict[int, List[List[Beam]]] = {}
+
+        # 记录原模型构件包含的新模型构件列表
+        self.original_to_meshed_beams: Dict[int, List[int]] = defaultdict(list)
+        self.original_to_meshed_plates: Dict[int, List[int]] = defaultdict(list)
 
     def generate_mesh(self) -> StructuralModel:
         """
@@ -400,6 +405,7 @@ class MeshGenerator:
             on_face=original_beam.on_face,
         )
         self.meshed_model.beam_counter += 1
+        self.original_to_meshed_beams[original_beam.id].append(new_beam_id)
         return new_beam_id
 
     def _add_plate(self, node_ids: list[int], original_plate: Plate) -> int:
@@ -413,6 +419,7 @@ class MeshGenerator:
             boundary_beams=[],
         )
         self.meshed_model.plate_counter += 1
+        self.original_to_meshed_plates[original_plate.id].append(new_plate_id)
         return new_plate_id
 
 
