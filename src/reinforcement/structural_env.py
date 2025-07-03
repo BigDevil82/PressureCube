@@ -57,7 +57,7 @@ class StructuralEnv(gym.Env):
         self.current_pyg_data_state = None  # Will be a PyG Data object
 
         # For tracking episode length or other conditions
-        self._max_steps_per_episode = env_action_config.get("max_steps", 200)
+        self._max_steps_per_episode = initial_full_config["rl_params"]["max_steps_per_episode"]
         self._current_step_count = 0
 
         # Perform initial reset to set up the first state
@@ -148,7 +148,7 @@ class StructuralEnv(gym.Env):
         self.current_main_beam_section_index = random_params.main_beam_section_index
         self.current_secondary_beam_section_index = random_params.secondary_beam_section_index
         self.current_brace_section_index = random_params.brace_section_index
-        self.current_pressure = random_params.pressure
+        # self.current_pressure = random_params.pressure
 
         self.current_main_beam_spacing = random_params.main_beam_spacing
         self.current_secondary_beam_spacing = random_params.secondary_beam_spacing
@@ -389,7 +389,7 @@ class StructuralEnv(gym.Env):
         # Optional: Implement visualization (e.g., using matplotlib or a 3D viewer)
         # For now, print current parameters.
         print(f"Step: {self._current_step_count}")
-        print("Frame Length: ", self.current_length)
+        print("Frame Length: ", self.current_length, "Pressure: ", self.current_pressure)
         print(
             f"  Main Spacing: {self.current_main_beam_spacing:.2f}, Secondary Spacing: {self.current_main_beam_spacing:.2f}, Brace Spacing: {self.current_brace_spacing:.2f}"
         )
