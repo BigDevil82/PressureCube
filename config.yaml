@@ -75,16 +75,14 @@ rl_params:
   plot_interval: 1 # 训练指标绘制间隔
 
 # 图神经网络参数
-gnn_params:
-  in_channels: 10 # 输入特征维度
+hebg_config:
   hidden_channels: 64 # 隐藏层维度
-  out_channels: 32 # 输出特征维度
-  num_layers: 3 # 图卷积层数
-  dropout: 0.1 # Dropout率
+  out_channels: 128 # 输出特征维度
+  num_beam_types: 4 # 梁的种类
 
 # OpenSees分析参数
 analysis_params:
-  max_stress_ratio: 0.8 # 最大应力比
-  max_disp_ratio: 0.004 # 最大位移比 (L/250)
+  max_stress: 355 # 最大应力
+  max_disp: 14.4 # 最大位移
   check_drift: true # 是否检查层间位移角
   max_drift_ratio: 0.005 # 最大层间位移角 (H/200)
