@@ -6,7 +6,6 @@ import sys
 from collections import deque  # Added for replay buffer
 from time import time
 
-import matplotlib.pyplot as plt  # Added for plotting
 import numpy as np
 import torch
 from torch_geometric.data import Batch  # Added for batching experiences
@@ -17,6 +16,7 @@ from src.reinforcement.structural_env import StructuralEnv  # Added
 from src.structure.structural_model import BeamType
 from src.utils.constants import *
 from src.utils.model_utils import StructureVisualizer, create_structural_model, load_config
+from src.utils.util import plot_training_progress
 
 
 def parse_args():
@@ -41,79 +41,6 @@ def parse_args():
         help="Path to save/load trained model",
     )
     return parser.parse_args()
-
-
-def plot_training_progress(metrics_history, save_dir):
-    """Plots and saves the training progress for various metrics."""
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir, exist_ok=True)
-
-    # Create x-axis values (episode numbers)
-    episodes = list(range(1, len(metrics_history["rewards"]) + 1))
-
-    fig, axs = plt.subplots(2, 2, figsize=(15, 15), sharex=True)
-
-    # Plot Episode Rewards
-    axs[0, 0].plot(
-        episodes, metrics_history["rewards"], label="Episode Reward", color="blue", marker="o", linestyle="-"
-    )
-    axs[0, 0].set_ylabel("Episode Return")
-    axs[0, 0].set_title("Cumulative Rewards per Episode")
-    axs[0, 0].legend()
-    axs[0, 0].grid(True)
-
-    # Plot Max Displacement
-    axs[0, 1].plot(
-        episodes,
-        metrics_history["max_displacements"],
-        label="Max Displacement",
-        color="red",
-        marker="o",
-        linestyle="-",
-    )
-    axs[0, 1].set_ylabel("Max Displacement (mm)")
-    axs[0, 1].set_title("Maximum Displacement per Episode")
-    axs[0, 1].legend()
-    axs[0, 1].grid(True)
-    # plot displacement constraint line
-    axs[0, 1].axhline(y=14.4, color="red", linestyle="--", label="Displacement Constraint")
-
-    # Plot Max Stress
-    axs[1, 0].plot(
-        episodes,
-        metrics_history["max_stresses"],
-        label="Max Stress",
-        color="green",
-        marker="o",
-        linestyle="-",
-    )
-    axs[1, 0].set_ylabel("Max Stress (MPa)")
-    axs[1, 0].set_xlabel("Episode")
-    axs[1, 0].set_title("Maximum Stress per Episode")
-    axs[1, 0].legend()
-    axs[1, 0].grid(True)
-    # plot stress constraint line
-    axs[1, 0].axhline(y=355, color="red", linestyle="--", label="Stress Constraint")
-
-    # Plot Model Volume
-    axs[1, 1].plot(
-        episodes,
-        metrics_history["model_volumes"],
-        label="Model Volume",
-        color="purple",
-        marker="o",
-        linestyle="-",
-    )
-    axs[1, 1].set_ylabel("Model Volume (m³)")
-    axs[1, 1].set_xlabel("Episode")
-    axs[1, 1].set_title("Structure Volume per Episode")
-    axs[1, 1].legend()
-    axs[1, 1].grid(True)
-
-    plt.tight_layout()
-    plot_filename = os.path.join(save_dir, f"training_progress.png")
-    plt.savefig(plot_filename)
-    plt.close(fig)  # Close the figure to free memory
 
 
 def train(args, config):
@@ -173,32 +100,23 @@ def train(args, config):
 
     for episode in range(args.max_episodes):
         state_pyg, info_reset = env.reset()
+        current_frame_length = info_reset["frame_length"]
+        step = 0
         episode_reward = 0
+        done = False
 
-        if state_pyg is None or not hasattr(state_pyg, "x") or state_pyg.x is None:
-            print(f"Episode {episode+1}: Failed to get valid initial state. Skipping episode.")
-            episode_rewards.append(0)  # Or handle as error
-            continue
         state_pyg = state_pyg.to(device)
 
-        for step in range(rl_params["max_steps_per_episode"]):
+        while not done:
+            step += 1
             global_step += 1
             action_tensor = agent.select_action(state_pyg)  # state_pyg is a single Data object
-            action_np = (
-                action_tensor.cpu().detach().numpy().squeeze(0)
-            )  # DDPG actor might output [1, action_dim]
+            # DDPG actor might output [1, action_dim]
+            action_np = action_tensor.cpu().detach().numpy().squeeze(0)
 
             next_state_pyg, reward, terminated, truncated, info = env.step(action_np)
             done = terminated or truncated
             episode_reward += reward
-
-            if next_state_pyg is None or not hasattr(next_state_pyg, "x") or next_state_pyg.x is None:
-                print(
-                    f"Warning: Episode {episode+1}, Step {step+1}: Received invalid next_state. Treating as done."
-                )
-                done = True
-                if next_state_pyg is None:
-                    next_state_pyg = state_pyg.clone()  # Simplistic handling
 
             next_state_pyg = next_state_pyg.to(device)
 
@@ -213,7 +131,10 @@ def train(args, config):
                 )
             )
 
-            if len(replay_buffer) >= rl_params["min_replay_buffer_fill"]:
+            if (
+                len(replay_buffer) >= rl_params["min_replay_buffer_fill"]
+                and step % rl_params["update_interval"] == 0
+            ):
                 experiences = random.sample(replay_buffer, rl_params["batch_size"])
 
                 states_list = [e[0] for e in experiences]
@@ -238,15 +159,13 @@ def train(args, config):
                 agent.update(batch_dict)
 
             state_pyg = next_state_pyg
-            if done:
-                break
 
             # Store metrics for this episode
             metrics_history["rewards"].append(episode_reward)
-            metrics_history["max_displacements"].append(info.get("max_displacement_mm", float("nan")))
-            metrics_history["max_stresses"].append(info.get("max_stress", float("nan")))
-            metrics_history["model_volumes"].append(info.get("model_volume_m3", float("nan")))
-            metrics_history["steps"].append(step + 1)  # Store number of steps taken
+            metrics_history["max_displacements"].append(info["max_displacement_mm"])
+            metrics_history["max_stresses"].append(info["max_stress"])
+            metrics_history["model_volumes"].append(info["model_volume_m3"] / current_frame_length)
+            metrics_history["steps"].append(step)  # Store number of steps taken
             metrics_history["episode_numbers"].append(episode + 1)
 
             # Plot progress after each episode
