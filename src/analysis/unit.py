@@ -24,3 +24,19 @@ MPa = 1e6 * Pa  # pressure unit
 GPa = 1e3 * MPa  # pressure unit
 
 ton = 1e3 * kg  # mass unit
+
+
+# unit conversion
+# Conversion Factors and Constants
+M_TO_MM = 1000.0
+M2_TO_MM2 = 1.0e6
+M4_TO_MM4 = 1.0e12
+KG_M3_TO_TONNE_MM3 = 1.0e-12  # 1 kg/m^3 = 1e-12 tonne/mm^3
+N_M_TO_N_MM = 1.0e-3
+
+# Material Properties (Steel)
+E_STEEL_MPA = 2.0e5  # Elastic Modulus in N/mm^2 (MPa) -> typical 200 GPa
+NU_STEEL = 0.3  # Poisson's ratio
+G_STEEL_MPA = E_STEEL_MPA / (2 * (1 + NU_STEEL))  # Shear Modulus in N/mm^2 (MPa)
+RHO_STEEL_KG_M3 = 7850.0  # Density in kg/m^3
+RHO_STEEL_TONNE_MM3 = RHO_STEEL_KG_M3 * KG_M3_TO_TONNE_MM3  # Density in tonne/mm^3

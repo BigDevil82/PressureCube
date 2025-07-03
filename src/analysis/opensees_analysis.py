@@ -8,23 +8,20 @@ import openseespy.opensees as ops
 import opsvis as opsv
 
 from src.analysis.fem_utils import calc_basic_stresses, fmt_display_components
+from src.analysis.unit import (
+    E_STEEL_MPA,
+    G_STEEL_MPA,
+    M2_TO_MM2,
+    M4_TO_MM4,
+    M_TO_MM,
+    N_M_TO_N_MM,
+    NU_STEEL,
+    RHO_STEEL_KG_M3,
+    RHO_STEEL_TONNE_MM3,
+)
 from src.structure.section_library import RectangularTubeSection
 from src.structure.structural_model import Beam, Plate, StructuralModel  # For type hinting
 from src.utils.logger import logger
-
-# Conversion Factors and Constants
-M_TO_MM = 1000.0
-M2_TO_MM2 = 1.0e6
-M4_TO_MM4 = 1.0e12
-KG_M3_TO_TONNE_MM3 = 1.0e-12  # 1 kg/m^3 = 1e-12 tonne/mm^3
-N_M_TO_N_MM = 1.0e-3
-
-# Material Properties (Steel)
-E_STEEL_MPA = 2.0e5  # Elastic Modulus in N/mm^2 (MPa) -> typical 200 GPa
-NU_STEEL = 0.3  # Poisson's ratio
-G_STEEL_MPA = E_STEEL_MPA / (2 * (1 + NU_STEEL))  # Shear Modulus in N/mm^2 (MPa)
-RHO_STEEL_KG_M3 = 7850.0  # Density in kg/m^3
-RHO_STEEL_TONNE_MM3 = RHO_STEEL_KG_M3 * KG_M3_TO_TONNE_MM3  # Density in tonne/mm^3
 
 # Gravity
 G_MM_S2 = 9806.65  # Gravitational acceleration in mm/s^2

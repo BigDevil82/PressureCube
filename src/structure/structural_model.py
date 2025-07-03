@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+from src.analysis.unit import M2_TO_MM2
 from src.structure.section_library import SectionLibrary, SteelSection
 from src.utils.util import calculate_rectangle_iou, is_close
 
@@ -56,6 +57,8 @@ class Beam:
     section: str  # 截面类型 [FRAME, MAIN, SECONDARY, BRACE]
     on_face: str  # 处于哪个面上（left, right, top, bottom, front, back)
     response: Response = None
+    start_node_load: np.ndarray = np.zeros(3)
+    end_node_load: np.ndarray = np.zeros(3)
 
     def length(self, nodes: Dict[int, Point]) -> float:
         """计算梁长度"""
@@ -1263,6 +1266,43 @@ class StructuralModel:
 
         # 创建钢板
         self.add_plate(ordered_nodes, window.on_face, boundary_beams)
+
+    def calc_node_load(self, pressure_mpa: float) -> Dict[int, np.ndarray]:
+        """
+        将作用在钢板上的压力转换为节点荷载
+        Args:
+            pressure_mpa: 压力，单位：MPa
+        """
+        face_pressure_directions = {
+            "top": np.array([0.0, 0.0, 1.0]),  # 向上
+            "bottom": np.array([0.0, 0.0, -1.0]),  # 向下
+            "left": np.array([0.0, -1.0, 0.0]),  # 向左 (Y负方向)
+            "right": np.array([0.0, 1.0, 0.0]),  # 向右 (Y正方向)
+            "front": np.array([-1.0, 0.0, 0.0]),  # 向前 (X正方向)
+            "back": np.array([1.0, 0.0, 0.0]),  # 向后 (X负方向)
+        }
+
+        nodal_loads = {}
+
+        for plate_id, plate_obj in self.plates.items():
+            # Calculate plate area
+            plate_area_m2 = plate_obj.area(self.points)
+            plate_area_mm2 = plate_area_m2 * M2_TO_MM2
+
+            # Total force on the plate
+            total_force_n = pressure_mpa * plate_area_mm2
+
+            # Get pressure direction for this plate's face
+            plate_face = plate_obj.on_face
+            pressure_direction = face_pressure_directions[plate_face]
+
+            # distribute the force on plate nodes
+            nodal_force = total_force_n * pressure_direction / len(plate_obj.nodes)
+            for node_id in plate_obj.nodes:
+                if node_id not in nodal_loads:
+                    nodal_loads[node_id] = np.zeros(3)
+                nodal_loads[node_id] += nodal_force
+        return nodal_loads
 
 
 if __name__ == "__main__":
