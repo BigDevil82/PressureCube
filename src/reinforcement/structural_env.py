@@ -35,7 +35,7 @@ class StructuralEnv(gym.Env):
         # Load initial full structural configuration
         initial_full_config = load_config(initial_params_config_path)
         analysis_config = initial_full_config["analysis_params"]
-        self.max_stress = analysis_config["analysis_params"]
+        self.max_stress = analysis_config["max_stress"]
         self.max_disp = analysis_config["max_disp"]
         # This base_config_dict contains all parameters, including fixed ones (length, width, etc.)
         # and initial values for the optimizable ones.
@@ -51,14 +51,7 @@ class StructuralEnv(gym.Env):
         self.current_main_beam_section_index = self.base_config_dict["main_beam_section_index"]
         self.current_secondary_beam_section_index = self.base_config_dict["secondary_beam_section_index"]
         self.current_brace_section_index = self.base_config_dict["brace_section_index"]
-
-        # Define action space (7 continuous values, agent output assumed in [0, 1])
-        self.action_space = spaces.Box(low=0, high=1, shape=(7,), dtype=np.float32)
-
-        # Define observation space (placeholder as agent uses PyG Data directly)
-        # For strict Gym compliance, this would need to be defined based on flattened graph features
-        # or a complex Dict space.
-        self.observation_space = spaces.Dict({})
+        self.current_pressure = self.base_config_dict["pressure"]
 
         self.current_structural_model: StructuralModel | None = None
         self.current_pyg_data_state = None  # Will be a PyG Data object
@@ -133,7 +126,10 @@ class StructuralEnv(gym.Env):
 
         try:
             graph_converter = BeamAsNodeGraph(self.current_structural_model)
-            self.current_pyg_data_state = graph_converter.to_pyg_data()
+            env_info = {
+                "frame_length": self.current_length,
+            }
+            self.current_pyg_data_state = graph_converter.to_pyg_data(env_info)
         except Exception as e:
             print(f"Error during graph conversion in _generate_model_and_state_from_current_params: {e}")
             return False, None
@@ -152,6 +148,7 @@ class StructuralEnv(gym.Env):
         self.current_main_beam_section_index = random_params.main_beam_section_index
         self.current_secondary_beam_section_index = random_params.secondary_beam_section_index
         self.current_brace_section_index = random_params.brace_section_index
+        self.current_pressure = random_params.pressure
 
         self.current_main_beam_spacing = random_params.main_beam_spacing
         self.current_secondary_beam_spacing = random_params.secondary_beam_spacing
@@ -176,6 +173,7 @@ class StructuralEnv(gym.Env):
             "max_displacement_mm": self._last_max_disp_abs,
             "max_stress": self._last_max_stress,
             "model_volume_m3": self._last_model_volume,
+            "frame_length": self.current_length,
         }  # Empty info dict for reset
         return self.current_pyg_data_state, info
 
@@ -238,13 +236,13 @@ class StructuralEnv(gym.Env):
         meshed_model = mesh_generator.meshed_model
 
         self.opensees_analyzer.setup_opensees_model(mesh_generator.meshed_model)
-        self.opensees_analyzer.apply_gravity_and_pressure_loads(30000.0)
+        self.opensees_analyzer.apply_gravity_and_pressure_loads(self.current_pressure * 1e3)
         static_success = self.opensees_analyzer.run_static_analysis()
         if not static_success:
             return None
 
         # 填充梁端节点荷载
-        nodal_loads = self.current_structural_model.calc_node_load(30e-3)
+        nodal_loads = self.current_structural_model.calc_node_load(self.current_pressure * 1e3)
         for beam_id, beam_obj in self.current_structural_model.beams.items():
             beam_obj.start_node_load = nodal_loads[beam_obj.start_node]
             beam_obj.end_node_load = nodal_loads[beam_obj.end_node]
@@ -368,6 +366,7 @@ class StructuralEnv(gym.Env):
                 info["max_displacement_mm"] = max_disp_abs
                 info["max_stress"] = max_stress
                 info["model_volume_m3"] = current_model_volume
+                info["frame_length"] = self.current_length
 
             else:
                 reward = -10
