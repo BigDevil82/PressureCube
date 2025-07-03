@@ -3,6 +3,7 @@ import time
 from typing import Tuple
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def is_close(a, b, abs_tol=1e-6):
@@ -86,74 +87,89 @@ def calculate_rectangle_iou(
     return iou
 
 
-def plot_training_progress(metrics_history, save_dir, filename="training_progress.png"):
-    """Plots and saves the training progress for various metrics."""
+def plot_progress(
+    metrics_history, save_dir, filename, x_axis_label="Episode", main_title_prefix="Training Progress"
+):
+    """Plots and saves the progress for various metrics."""
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
 
-    # Create x-axis values (episode numbers)
-    episodes = list(range(1, len(metrics_history["rewards"]) + 1))
+    # Create x-axis values (episodes or steps)
+    x_values = list(range(1, len(metrics_history["rewards"]) + 1))
+    if not x_values:
+        print("Warning: No metrics to plot.")
+        return
 
-    fig, axs = plt.subplots(2, 2, figsize=(15, 15), sharex=True)
+    fig, axs = plt.subplots(2, 2, figsize=(15, 15))
+    fig.suptitle(main_title_prefix, fontsize=16)
 
-    # Plot Episode Rewards
+    # Plot Rewards
     axs[0, 0].plot(
-        episodes, metrics_history["rewards"], label="Episode Reward", color="blue", marker="o", linestyle="-"
+        x_values,
+        metrics_history["rewards"],
+        label=f"{x_axis_label} Reward",
+        color="blue",
+        marker="o",
+        linestyle="-",
+        markersize=2,
     )
-    axs[0, 0].set_ylabel("Episode Return")
-    axs[0, 0].set_title("Cumulative Rewards per Episode")
+    axs[0, 0].set_ylabel("Reward")
+    axs[0, 0].set_xlabel(x_axis_label)
+    axs[0, 0].set_title(f"Rewards per {x_axis_label}")
     axs[0, 0].legend()
     axs[0, 0].grid(True)
 
     # Plot Max Displacement
     axs[0, 1].plot(
-        episodes,
+        x_values,
         metrics_history["max_displacements"],
         label="Max Displacement",
         color="red",
         marker="o",
         linestyle="-",
+        markersize=2,
     )
     axs[0, 1].set_ylabel("Max Displacement (mm)")
-    axs[0, 1].set_title("Maximum Displacement per Episode")
+    axs[0, 1].set_xlabel(x_axis_label)
+    axs[0, 1].set_title(f"Maximum Displacement per {x_axis_label}")
     axs[0, 1].legend()
     axs[0, 1].grid(True)
-    # plot displacement constraint line
-    axs[0, 1].axhline(y=14.4, color="red", linestyle="--", label="Displacement Constraint")
+    axs[0, 1].axhline(y=14.4, color="r", linestyle="--", label="Constraint")
 
     # Plot Max Stress
     axs[1, 0].plot(
-        episodes,
+        x_values,
         metrics_history["max_stresses"],
         label="Max Stress",
         color="green",
         marker="o",
         linestyle="-",
+        markersize=2,
     )
     axs[1, 0].set_ylabel("Max Stress (MPa)")
-    axs[1, 0].set_xlabel("Episode")
-    axs[1, 0].set_title("Maximum Stress per Episode")
+    axs[1, 0].set_xlabel(x_axis_label)
+    axs[1, 0].set_title(f"Maximum Stress per {x_axis_label}")
     axs[1, 0].legend()
     axs[1, 0].grid(True)
-    # plot stress constraint line
-    axs[1, 0].axhline(y=355, color="red", linestyle="--", label="Stress Constraint")
+    axs[1, 0].axhline(y=355, color="r", linestyle="--", label="Constraint")
 
     # Plot Model Volume
     axs[1, 1].plot(
-        episodes,
+        x_values,
         metrics_history["model_volumes"],
         label="Model Volume",
         color="purple",
         marker="o",
         linestyle="-",
+        markersize=2,
     )
     axs[1, 1].set_ylabel("Model Volume (m³)")
-    axs[1, 1].set_xlabel("Episode")
-    axs[1, 1].set_title("Structure Volume per Episode")
+    axs[1, 1].set_xlabel(x_axis_label)
+    axs[1, 1].set_title(f"Structure Volume per {x_axis_label}")
     axs[1, 1].legend()
     axs[1, 1].grid(True)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout
     plot_filename = os.path.join(save_dir, filename)
     plt.savefig(plot_filename)
-    plt.close(fig)  # Close the figure to free memory
+    plt.close(fig)

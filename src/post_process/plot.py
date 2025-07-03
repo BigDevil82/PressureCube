@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 
-from src.utils.util import plot_training_progress
+from src.utils.util import plot_progress
 
 
 def apply_moving_average(metrics_history, window_size=10):
@@ -72,11 +72,13 @@ def plot_episode_final_results(npz_file_path, save_dir=None, window_size=1):
     if window_size > 1:
         metrics_to_plot = apply_moving_average(final_metrics, window_size)
         output_filename = f"metrics_by_episode_smoothed_ws{window_size}.png"
+        title = "Smoothed Metrics per Episode (Final Step)"
     else:
         metrics_to_plot = final_metrics
         output_filename = "metrics_by_episode.png"
+        title = "Metrics per Episode (Final Step)"
 
-    plot_training_progress(metrics_to_plot, save_dir, filename=output_filename)
+    plot_progress(metrics_to_plot, save_dir, filename=output_filename, main_title_prefix=title)
     print(f"Final episode metrics plot saved to {os.path.join(save_dir, output_filename)}")
 
 

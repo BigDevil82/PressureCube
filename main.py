@@ -16,7 +16,7 @@ from src.reinforcement.structural_env import StructuralEnv  # Added
 from src.structure.structural_model import BeamType
 from src.utils.constants import *
 from src.utils.model_utils import StructureVisualizer, create_structural_model, load_config
-from src.utils.util import plot_training_progress
+from src.utils.util import plot_progress
 
 
 def parse_args():
@@ -170,10 +170,10 @@ def train(args, config):
 
             # Plot progress after each episode
             if global_step % rl_params.get("plot_interval", 10) == 0:
-                plot_training_progress(metrics_history, plot_save_dir)
+                plot_progress(metrics_history, plot_save_dir, filename="training_progress.png")
 
         print(
-            f"Episode {episode+1}/{args.max_episodes}, Episode Return: {episode_reward:.2f}, Steps: {step+1}, Info: {info.get('error', 'OK')}"
+            f"Episode {episode+1}/{args.max_episodes}, Episode Return: {episode_reward:.2f}, Steps: {step}, Info: {info.get('error', 'OK')}"
         )
         env.render()
         print()
@@ -220,7 +220,7 @@ def train(args, config):
     print("训练完成.")
     # Plot final combined metrics
     if metrics_history["rewards"]:
-        plot_training_progress(metrics_history, plot_save_dir)
+        plot_progress(metrics_history, plot_save_dir, "training_progress.png")
         print(f"Final training plot saved in {plot_save_dir}")
 
 
@@ -262,24 +262,35 @@ def test(args, config):
         device=device,  # Added for completeness
     )
     agent.load_model(final_model_load_path)
-    # agent.critic.load_state_dict(checkpoint['critic_state_dict']) # Critic not strictly needed for testing actions
     agent.actor.eval()  # Set to evaluation mode
 
     num_test_episodes = rl_params.get("num_test_episodes", 1)
     all_episode_rewards = []
+    test_plot_dir = os.path.join(args.model_save_path, "test_plots")
+    os.makedirs(test_plot_dir, exist_ok=True)
 
     for episode in range(num_test_episodes):
-        state_pyg, _ = env.reset()
-        print("initial state: ")
+        state_pyg, info = env.reset()
+        current_frame_length = info["frame_length"]
+        print(f"\n--- Starting Test Episode {episode+1}/{num_test_episodes} ---")
+        print("Initial state:")
         env.render()
-        print("-" * 100 + "\n")
+        print("-" * 100)
         episode_reward = 0
-        if state_pyg is None or not hasattr(state_pyg, "x") or state_pyg.x is None:
-            print(f"Test Episode {episode+1}: Failed to get valid initial state. Skipping.")
-            continue
-        state_pyg = state_pyg.to(device)
 
-        for step in range(rl_params["max_steps_per_episode"]):
+        # Metrics for this test episode
+        test_metrics_history = {
+            "rewards": [],
+            "max_displacements": [],
+            "max_stresses": [],
+            "model_volumes": [],
+        }
+
+        state_pyg = state_pyg.to(device)
+        done = False
+        step = 0
+        while not done:
+            step += 1
             with torch.no_grad():  # Ensure no gradients are computed
                 action_tensor = agent.select_action(state_pyg, training=False)
             action_np = action_tensor.cpu().numpy().squeeze(0)
@@ -288,27 +299,36 @@ def test(args, config):
             done = terminated or truncated
             episode_reward += reward
 
-            print(
-                f"  Test Step {step+1}: Action: {np.round(action_np, 2)}, Reward: {reward:.2f}, MaxDisp: {info.get('max_displacement_mm', -1):.2f} mm"
-            )
             env.render()  # Optionally print parameters
+            print()
 
-            if next_state_pyg is None or not hasattr(next_state_pyg, "x") or next_state_pyg.x is None:
-                done = True  # End episode if next state is invalid
-            else:
-                state_pyg = next_state_pyg.to(device)
+            # Collect metrics
+            test_metrics_history["rewards"].append(reward)
+            test_metrics_history["max_displacements"].append(info["max_displacement_mm"])
+            test_metrics_history["max_stresses"].append(info["max_stress"])
+            test_metrics_history["model_volumes"].append(info["model_volume_m3"] / current_frame_length)
 
-            if done:
-                break
+            state_pyg = next_state_pyg.to(device)
+
         all_episode_rewards.append(episode_reward)
-        print(
-            f"Test Episode {episode+1}/{num_test_episodes}, Total Reward: {episode_reward:.2f}, Steps: {step+1}"
-        )
+        print(f"--- Test Episode {episode+1} Finished ---")
+        print(f"Total Reward: {episode_reward:.2f}, Steps: {step}")
         if info.get("error"):
             print(f"  Episode ended with error: {info['error']}")
 
+        # Plot metrics for the completed episode
+        plot_progress(
+            test_metrics_history,
+            test_plot_dir,
+            filename=f"test_episode_{episode+1}_progress.png",
+            x_axis_label="Step",
+            main_title_prefix=f"Test Episode {episode+1}",
+        )
+        print(f"Test plot for episode {episode+1} saved in {test_plot_dir}")
+
     print("\nTesting completed.")
-    print(f"Average reward over {num_test_episodes} episodes: {np.mean(all_episode_rewards):.2f}")
+    avg_reward = np.mean(all_episode_rewards) if all_episode_rewards else 0
+    print(f"Average reward over {num_test_episodes} episodes: {avg_reward:.2f}")
 
 
 def main():
