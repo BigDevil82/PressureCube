@@ -356,9 +356,12 @@ class BeamAsNodeGraph:
             f"{self.number_of_edges()} edges (connections)."
         )
 
-    def to_pyg_data(self) -> Data:
+    def to_pyg_data(self, env_info: Dict) -> Data:
         """
         Converts the BeamAsNodeGraph to a PyTorch Geometric Data object.
+
+        Args:
+            env_info: A dictionary containing the environment information.
 
         Node features (for each beam):
             - Beam Type index (integer) (1 feature)
@@ -431,6 +434,9 @@ class BeamAsNodeGraph:
                 + list(centroid)
                 + [max_disp_abs, max_stress]
                 + [Ix, Iy, area]
+                + beam.start_node_load.tolist()
+                + beam.end_node_load.tolist()
+                + [env_info["frame_length"]]
             )
             node_features_list.append(features)
 
