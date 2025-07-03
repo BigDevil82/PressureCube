@@ -93,7 +93,7 @@ def plot_training_progress(metrics_history, save_dir):
     axs[1, 0].legend()
     axs[1, 0].grid(True)
     # plot stress constraint line
-    axs[1, 0].axhline(y=345, color="red", linestyle="--", label="Stress Constraint")
+    axs[1, 0].axhline(y=355, color="red", linestyle="--", label="Stress Constraint")
 
     # Plot Model Volume
     axs[1, 1].plot(
@@ -112,7 +112,7 @@ def plot_training_progress(metrics_history, save_dir):
 
     plt.tight_layout()
     plot_filename = os.path.join(save_dir, f"training_progress.png")
-    plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
+    plt.savefig(plot_filename)
     plt.close(fig)  # Close the figure to free memory
 
 
