@@ -15,6 +15,7 @@ structural_params:
   win_bottom: 1.0
   win_height: 1.5
   plate_thickness: 0.005
+  pressure: 30 # 内压，kPa
   windows:
     [] # 窗户参数列表
     # - y_position: 1.275 # 窗户中心在y轴的位置 (米)
@@ -70,7 +71,7 @@ rl_params:
   update_interval: 5 # 更新间隔
   ddpg_fc_hidden_dim: 256 # 隐藏层大小
   max_episodes: 1000 # 最大训练回合数
-  max_steps_per_episode: 50 # 每个回合的最大步数
+  max_steps_per_episode: 20 # 每个回合的最大步数
   save_interval: 10 # 模型保存间隔
   plot_interval: 1 # 训练指标绘制间隔
 

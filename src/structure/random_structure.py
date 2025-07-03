@@ -125,6 +125,9 @@ class RandomStructure:
         # 生成随机窗户
         windows = self._generate_random_windows(length, main_beam_spacing)
 
+        # 随机选择内压
+        pressure = self._rng.integers(10, 51)
+
         return StructuralParameters(
             length=length,
             width=self.fixed_width,
@@ -140,6 +143,7 @@ class RandomStructure:
             win_bottom=self.fixed_win_bottom,
             win_height=self.fixed_win_height,
             plate_thickness=self.fixed_plate_thickness,
+            pressure=pressure,
         )
 
 

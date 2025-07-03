@@ -137,6 +137,7 @@ class StructuralParameters:
     win_bottom: float = 1.0  # 窗户底部离地高度
     win_height: float = 1.5  # 窗户高度
     plate_thickness: float = 0.01  # 钢板厚度
+    pressure: float = 30  # 内压 (kPa)
 
 
 class NodeMap:
@@ -1267,11 +1268,11 @@ class StructuralModel:
         # 创建钢板
         self.add_plate(ordered_nodes, window.on_face, boundary_beams)
 
-    def calc_node_load(self, pressure_mpa: float) -> Dict[int, np.ndarray]:
+    def calc_node_load(self, pressure_pa: float) -> Dict[int, np.ndarray]:
         """
         将作用在钢板上的压力转换为节点荷载
         Args:
-            pressure_mpa: 压力，单位：MPa
+            pressure_mpa: 压力，单位：Pa
         """
         face_pressure_directions = {
             "top": np.array([0.0, 0.0, 1.0]),  # 向上
@@ -1290,7 +1291,7 @@ class StructuralModel:
             plate_area_mm2 = plate_area_m2 * M2_TO_MM2
 
             # Total force on the plate
-            total_force_n = pressure_mpa * plate_area_mm2
+            total_force_n = pressure_pa * 1e-6 * plate_area_mm2
 
             # Get pressure direction for this plate's face
             plate_face = plate_obj.on_face
