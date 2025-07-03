@@ -2,7 +2,6 @@ from typing import Dict, Optional
 
 import gym
 import numpy as np
-import torch  # Only if PyG Data objects are directly returned and type hinted
 from gym import spaces
 
 from src.analysis.opensees_analysis import OpenSeesAnalyzer
@@ -27,6 +26,7 @@ class StructuralEnv(gym.Env):
         super(StructuralEnv, self).__init__()
         self.logger = Logger("rewards")
         self.seed = seed
+        self._reset_count = 0
 
         self.env_action_config = env_action_config
         self.section_library = SectionLibrary()  # Assumes default json path or configured
@@ -34,12 +34,16 @@ class StructuralEnv(gym.Env):
 
         # Load initial full structural configuration
         initial_full_config = load_config(initial_params_config_path)
+        analysis_config = initial_full_config["analysis_params"]
+        self.max_stress = analysis_config["analysis_params"]
+        self.max_disp = analysis_config["max_disp"]
         # This base_config_dict contains all parameters, including fixed ones (length, width, etc.)
         # and initial values for the optimizable ones.
         self.base_config_dict = initial_full_config["structural_params"]
 
         # Initialize current optimizable parameters from this initial config
         # These will be updated by agent actions
+        self.current_length = self.base_config_dict["length"]
         self.current_main_beam_spacing = self.base_config_dict["main_beam_spacing"]
         self.current_secondary_beam_spacing = self.base_config_dict["main_beam_spacing"]
         self.current_brace_spacing = self.base_config_dict["brace_spacing"]
@@ -78,6 +82,7 @@ class StructuralEnv(gym.Env):
         params_data_dict = self.base_config_dict.copy()
 
         # Override with current optimizable values
+        params_data_dict["length"] = self.current_length
         params_data_dict["main_beam_spacing"] = self.current_main_beam_spacing
         params_data_dict["secondary_beam_spacing"] = self.current_main_beam_spacing
         params_data_dict["brace_spacing"] = self.current_brace_spacing
@@ -136,11 +141,13 @@ class StructuralEnv(gym.Env):
         return True, max_indicators
 
     def reset(self, options=None):
-        super().reset(seed=self.seed)  # For gym compatibility if using random seeding later
+        super().reset(seed=self.seed + self._reset_count)
+        self._reset_count += 1
 
         # init section index randomly
-        random_params = RandomStructure(self.section_library).generate_random_parameters()
+        random_params = RandomStructure(self.section_library, self._np_random).generate_random_parameters()
 
+        self.current_length = random_params.length
         self.current_frame_section_index = random_params.frame_section_index
         self.current_main_beam_section_index = random_params.main_beam_section_index
         self.current_secondary_beam_section_index = random_params.secondary_beam_section_index
@@ -236,6 +243,12 @@ class StructuralEnv(gym.Env):
         if not static_success:
             return None
 
+        # 填充梁端节点荷载
+        nodal_loads = self.current_structural_model.calc_node_load(30e-3)
+        for beam_id, beam_obj in self.current_structural_model.beams.items():
+            beam_obj.start_node_load = nodal_loads[beam_obj.start_node]
+            beam_obj.end_node_load = nodal_loads[beam_obj.end_node]
+
         # 填充梁的响应
         for beam_id, beam_obj in self.current_structural_model.beams.items():
             meshed_beams_id = mesh_generator.original_to_meshed_beams[beam_id]
@@ -261,61 +274,61 @@ class StructuralEnv(gym.Env):
     def _calculate_model_volume(self) -> float:
         return self.current_structural_model.calculate_mass() / 7850.0
 
-    def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
-        disp_constraint = 14.4
-        stress_constraint = 355.0
-        max_volume = 1.615
-
-        # 1. 约束违反惩罚项（指数增长确保强惩罚）
-        disp_violation = max(0, (max_disp_abs - disp_constraint) / disp_constraint)
-        stress_violation = max(0, (max_stress - stress_constraint) / stress_constraint)
-        penalty = (disp_violation * 1) + (stress_violation * 1.5)  # 权重可调
-
-        # 2. 基础奖励：体积的负值（体积越小奖励越高）
-        if disp_violation == 0 and stress_violation == 0:
-            base_reward = 1 - model_volume / max_volume
-        else:
-            base_reward = 0
-
-        # 3. 总奖励 = 基础奖励 - 惩罚项
-        reward = base_reward - penalty
-
-        self.logger.info(
-            f"Reward: {reward:.2f}, Penalty: {-penalty:.2f}, Disp: {disp_violation*1:.2f}, Stress: {stress_violation*1.5:.2f}, Base Reward: {base_reward:.2f}"
-        )
-
-        return reward
-
     # def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
     #     disp_constraint = 14.4
-    #     stress_constraint = 345.0
+    #     stress_constraint = 355.0
+    #     max_volume = 1.615
 
-    #     if max_disp_abs < disp_constraint:
-    #         delta_c1 = 1.0
+    #     # 1. 约束违反惩罚项（指数增长确保强惩罚）
+    #     disp_violation = max(0, (max_disp_abs - disp_constraint) / disp_constraint)
+    #     stress_violation = max(0, (max_stress - stress_constraint) / stress_constraint)
+    #     penalty = (disp_violation * 1) + (stress_violation * 1.5)  # 权重可调
+
+    #     # 2. 基础奖励：体积的负值（体积越小奖励越高）
+    #     if disp_violation == 0 and stress_violation == 0:
+    #         base_reward = 1 - model_volume / max_volume
     #     else:
-    #         delta_c1 = (
-    #             (self._last_max_disp_abs - max_disp_abs)
-    #             / disp_constraint
-    #             / (max_disp_abs / disp_constraint + 1)
-    #         )
+    #         base_reward = 0
 
-    #     if max_stress < stress_constraint:
-    #         delta_c2 = 1.0
-    #     else:
-    #         delta_c2 = (
-    #             (self._last_max_stress - max_stress)
-    #             / stress_constraint
-    #             / (max_stress / stress_constraint + 1)
-    #         )
+    #     # 3. 总奖励 = 基础奖励 - 惩罚项
+    #     reward = base_reward - penalty
 
-    #     delta_v = model_volume - self._last_model_volume
-
-    #     if delta_c1 == 1 and delta_c2 == 1:
-    #         reward = -delta_v * 100 if delta_v < 0 else -delta_v * 200
-    #     else:
-    #         reward = -(2 - delta_c1 - delta_c2) * 10
+    #     self.logger.info(
+    #         f"Reward: {reward:.2f}, Penalty: {-penalty:.2f}, Disp: {disp_violation*1:.2f}, Stress: {stress_violation*1.5:.2f}, Base Reward: {base_reward:.2f}"
+    #     )
 
     #     return reward
+
+    def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
+        disp_constraint = self.max_disp
+        stress_constraint = self.max_stress
+
+        if max_disp_abs < disp_constraint:
+            delta_c1 = 1.0
+        else:
+            delta_c1 = (
+                (self._last_max_disp_abs - max_disp_abs)
+                / disp_constraint
+                / (max_disp_abs / disp_constraint + 1)
+            )
+
+        if max_stress < stress_constraint:
+            delta_c2 = 1.0
+        else:
+            delta_c2 = (
+                (self._last_max_stress - max_stress)
+                / stress_constraint
+                / (max_stress / stress_constraint + 1)
+            )
+
+        delta_v = model_volume - self._last_model_volume
+
+        if delta_c1 == 1 and delta_c2 == 1:
+            reward = -delta_v * 100 if delta_v < 0 else -delta_v * 200
+        else:
+            reward = -(2 - delta_c1 - delta_c2) * 10
+
+        return reward
 
     def step(self, action: np.ndarray):
         self._decode_action(action)
@@ -377,6 +390,7 @@ class StructuralEnv(gym.Env):
         # Optional: Implement visualization (e.g., using matplotlib or a 3D viewer)
         # For now, print current parameters.
         print(f"Step: {self._current_step_count}")
+        print("Frame Length: ", self.current_length)
         print(
             f"  Main Spacing: {self.current_main_beam_spacing:.2f}, Secondary Spacing: {self.current_main_beam_spacing:.2f}, Brace Spacing: {self.current_brace_spacing:.2f}"
         )
@@ -407,3 +421,11 @@ class StructuralEnv(gym.Env):
     def close(self):
         # Clean up any resources if needed (e.g., OpenSees model if ops.wipe() isn't sufficient)
         print("StructuralEnv closed.")
+
+
+if __name__ == "__main__":
+    env = StructuralEnv("config.yaml", {"max_steps": 100}, seed=123)
+    for i in range(3):
+        env.reset()
+        env.render()
+        print("-" * 100)
