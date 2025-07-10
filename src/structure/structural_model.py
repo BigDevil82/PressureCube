@@ -28,6 +28,7 @@ class Point:
     x: float
     y: float
     z: float
+    is_support: bool = False
 
     def coordinates(self) -> np.ndarray:
         """返回节点坐标"""
@@ -552,6 +553,8 @@ class StructuralModel:
         for x in all_x:
             for y in all_y:
                 node_id = self.add_node(x, y, z)
+                if (x == all_x[0] or x == all_x[-1]) and (y == all_y[0] or y == all_y[-1]):
+                    self.points[node_id].is_support = True
                 # print(f"add node: {node_id}, x: {x}, y: {y}, z: {z}")
 
         # 生成水平方向的梁段（y方向，框架梁、次梁、支撑梁）
