@@ -145,8 +145,8 @@ def main(num_samples_to_validate: int = 10):
             total_disp_err += disp_error
             success_count += 1
 
-            print(f"  真实值:     应力 = {true_stress:.2f} MPa, 位移 = {true_disp * 1000:.3f} mm")
-            print(f"  预测值:     应力 = {pred_stress:.2f} MPa, 位移 = {pred_disp * 1000:.3f} mm")
+            print(f"  真实值:     应力 = {true_stress:.2f} MPa, 位移 = {true_disp:.3f} mm")
+            print(f"  预测值:     应力 = {pred_stress:.2f} MPa, 位移 = {pred_disp:.3f} mm")
             print(f"  相对误差:   应力 = {stress_error:.2f}%,   位移 = {disp_error:.2f}%")
 
     if success_count > 0:

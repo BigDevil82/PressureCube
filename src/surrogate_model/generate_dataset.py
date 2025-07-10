@@ -99,7 +99,10 @@ if __name__ == "__main__":
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    output_csv_path = os.path.join(output_dir, "dataset_0709.csv")
+    # output_csv_path = os.path.join(output_dir, "dataset_0709.csv")
 
-    # 生成10000个样本作为示例
-    generate_surrogate_model_dataset(num_samples=10000, output_path=output_csv_path)
+    # # 生成10000个样本作为示例
+    # generate_surrogate_model_dataset(num_samples=10000, output_path=output_csv_path)
+    for i in range(10):
+        data = generate_single_sample(i)
+        print(data)
