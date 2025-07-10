@@ -29,7 +29,8 @@ structural_params:
     #   on_face: "back" # 窗户所在面
 
 # 环境动作参数
-env_action_config:
+env_config:
+  graph_type: beam_as_node # beam_as_node | beam_as_edge
   action_dim: 6
   parameter_action_mapping:
     frame_section_index:
@@ -68,11 +69,11 @@ rl_params:
   min_replay_buffer_fill: 4
   batch_size: 1 # 批次大小
   buffer_size: 10000 # 经验回放缓冲区大小
-  update_interval: 5 # 更新间隔
+  update_interval: 1 # 更新间隔
   ddpg_fc_hidden_dim: 256 # 隐藏层大小
   max_episodes: 1000 # 最大训练回合数
-  max_steps_per_episode: 20 # 每个回合的最大步数
-  save_interval: 10 # 模型保存间隔
+  max_steps_per_episode: 50 # 每个回合的最大步数
+  save_interval: 20 # 模型保存间隔
   plot_interval: 1 # 训练指标绘制间隔
 
 # 图神经网络参数

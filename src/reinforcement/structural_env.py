@@ -5,7 +5,7 @@ import numpy as np
 from gym import spaces
 
 from src.analysis.opensees_analysis import OpenSeesAnalyzer
-from src.graph.structural_graph import BeamAsNodeGraph
+from src.graph.structural_graph import BeamAsEdgeGraph, BeamAsNodeGraph
 from src.structure.mesh_generator import MeshGenerator, MeshParameters  # For loading initial full config
 from src.structure.random_structure import RandomStructure
 from src.structure.structural_model import (
@@ -22,13 +22,12 @@ from src.utils.model_utils import load_config
 class StructuralEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 4}
 
-    def __init__(self, initial_params_config_path: str, env_action_config: dict, seed: int = None):
+    def __init__(self, initial_params_config_path: str, seed: int = None):
         super(StructuralEnv, self).__init__()
         self.logger = Logger("rewards")
         self.seed = seed
         self._reset_count = 0
 
-        self.env_action_config = env_action_config
         self.section_library = SectionLibrary()  # Assumes default json path or configured
         self.opensees_analyzer = OpenSeesAnalyzer()
 
@@ -37,6 +36,7 @@ class StructuralEnv(gym.Env):
         analysis_config = initial_full_config["analysis_params"]
         self.max_stress = analysis_config["max_stress"]
         self.max_disp = analysis_config["max_disp"]
+        self.env_config = initial_full_config["env_config"]
         # This base_config_dict contains all parameters, including fixed ones (length, width, etc.)
         # and initial values for the optimizable ones.
         self.base_config_dict = initial_full_config["structural_params"]
@@ -125,7 +125,13 @@ class StructuralEnv(gym.Env):
             return False, None
 
         try:
-            graph_converter = BeamAsNodeGraph(self.current_structural_model)
+            if self.env_config["graph_type"] == "beam_as_node":
+                graph_converter = BeamAsNodeGraph(self.current_structural_model)
+            elif self.env_config["graph_type"] == "beam_as_edge":
+                graph_converter = BeamAsEdgeGraph(self.current_structural_model)
+            else:
+                raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
+
             env_info = {
                 "frame_length": self.current_length,
             }
@@ -174,7 +180,7 @@ class StructuralEnv(gym.Env):
             "max_stress": self._last_max_stress,
             "model_volume_m3": self._last_model_volume,
             "frame_length": self.current_length,
-        }  # Empty info dict for reset
+        }
         return self.current_pyg_data_state, info
 
     def _decode_action(self, action_vector: np.ndarray):
@@ -182,11 +188,13 @@ class StructuralEnv(gym.Env):
         Decodes the continuous action vector from the agent (assumed to be in [0, 1])
         into actual structural parameter values.
         """
-        param_map = self.env_action_config["parameter_action_mapping"]
+        param_map = self.env_config["parameter_action_mapping"]
 
         # Main Beam Spacing
         cfg = param_map["main_beam_spacing"]
-        raw_val = cfg["bounds"][0] + action_vector[cfg["action_idx"]] * (cfg["bounds"][1] - cfg["bounds"][0])
+        raw_val = cfg["bounds"][0] + (1 - action_vector[cfg["action_idx"]]) * (
+            cfg["bounds"][1] - cfg["bounds"][0]
+        )
         self.current_main_beam_spacing = np.clip(
             round(raw_val / cfg["module"]) * cfg["module"], cfg["bounds"][0], cfg["bounds"][1]
         )
@@ -423,7 +431,7 @@ class StructuralEnv(gym.Env):
 
 
 if __name__ == "__main__":
-    env = StructuralEnv("config.yaml", {"max_steps": 100}, seed=123)
+    env = StructuralEnv("config.yaml", seed=123)
     for i in range(3):
         env.reset()
         env.render()

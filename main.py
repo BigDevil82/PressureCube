@@ -48,13 +48,11 @@ def train(args, config):
     print(f"开始训练 DDPG 智能体，设备: {args.device}")
     device = torch.device(args.device)
 
-    env_action_config = config["env_action_config"]
+    env_config = config["env_config"]
     hebg_config = config["hebg_config"]
     rl_params = config["rl_params"]
 
-    env = StructuralEnv(
-        initial_params_config_path=args.config, env_action_config=env_action_config, seed=args.seed
-    )
+    env = StructuralEnv(initial_params_config_path=args.config, seed=args.seed)
 
     # Determine HEBG in_channels from a sample observation
     sample_state, _ = env.reset()
@@ -67,7 +65,7 @@ def train(args, config):
 
     agent = DDPGAgent(
         hebg_config=hebg_config,
-        action_dim=env_action_config["action_dim"],
+        action_dim=env_config["action_dim"],
         actor_lr=rl_params["actor_lr"],
         critic_lr=rl_params["critic_lr"],
         gamma=rl_params["gamma"],
@@ -229,7 +227,7 @@ def test(args, config):
     print(f"开始测试 DDPG 智能体，设备: {args.device}")
     device = torch.device(args.device)
 
-    env_action_config = config["env_action_config"]
+    env_config = config["env_config"]
     rl_params = config["rl_params"]
 
     if args.resume_path:
@@ -245,10 +243,8 @@ def test(args, config):
     checkpoint = torch.load(final_model_load_path, map_location=device)
     hebg_config = checkpoint.get("hebg_config")
 
-    env = StructuralEnv(
-        initial_params_config_path=args.config, env_action_config=env_action_config, seed=args.seed
-    )
-    action_dim = env_action_config["action_dim"]
+    env = StructuralEnv(initial_params_config_path=args.config, seed=args.seed)
+    action_dim = env_config["action_dim"]
 
     agent = DDPGAgent(
         hebg_config=hebg_config,
