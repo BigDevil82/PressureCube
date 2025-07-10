@@ -1,3 +1,4 @@
+import argparse
 import multiprocessing
 import os
 import sys
@@ -159,6 +160,7 @@ def train_gnn_model(
     model_save_dir: str,
     num_epochs: int = 100,
     batch_size: int = 32,
+    resume_from_checkpoint: bool = False,
 ):
     """训练GNN代理模型。"""
 
@@ -222,13 +224,29 @@ def train_gnn_model(
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    # --- 4. 训练循环 ---
+    # --- 4. 从检查点加载（如果需要） ---
+    start_epoch = 0
     best_val_loss = float("inf")
+    latest_checkpoint_path = os.path.join(model_save_dir, "latest_checkpoint.pth")
+
+    if resume_from_checkpoint:
+        if os.path.exists(latest_checkpoint_path):
+            print(f"从检查点恢复: {latest_checkpoint_path}")
+            checkpoint = torch.load(latest_checkpoint_path)
+            model.load_state_dict(checkpoint["model_state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            start_epoch = checkpoint["epoch"] + 1
+            best_val_loss = checkpoint["best_val_loss"]
+            print(f"恢复成功。将从 epoch {start_epoch} 开始训练。")
+        else:
+            print("警告: 未找到检查点文件。将从头开始训练。")
+
+    # --- 5. 训练循环 ---
     os.makedirs(model_save_dir, exist_ok=True)
     log_interval = max(1, len(train_loader) // 10)  # 大约每个epoch记录10次
 
     print("\n开始训练GNN代理模型...")
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         model.train()
         epoch_train_loss = 0
         # 修正后的训练循环
@@ -243,7 +261,7 @@ def train_gnn_model(
 
             if (i + 1) % log_interval == 0:
                 print(
-                    f"  Epoch {epoch+1}/{num_epochs}, Batch {i+1}/{len(train_loader)}, Batch Loss: {loss.item():.6f}"
+                    f"  Epoch {epoch + 1}/{num_epochs}, Batch {i + 1}/{len(train_loader)}, Batch Loss: {loss.item():.6f}"
                 )
 
         avg_train_loss = epoch_train_loss / len(train_loader)
@@ -261,16 +279,29 @@ def train_gnn_model(
         avg_val_loss = total_val_loss / len(val_loader)
 
         print(
-            f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}"
+            f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}"
         )
 
+        # 保存最佳模型
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), os.path.join(model_save_dir, "efficient_gnn_surrogate_model.pth"))
+            print(f"  ** 新的最佳验证损失: {best_val_loss:.6f}。已保存最佳模型。 **")
+
+        # 保存最新的检查点用于恢复
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "best_val_loss": best_val_loss,
+            },
+            latest_checkpoint_path,
+        )
 
     print("\n训练完成!")
 
-    # --- 5. 测试集评估 ---
+    # --- 6. 测试集评估 ---
     print("在测试集上评估最佳模型...")
     # model.state_dict()包含CPU张量，所以我们加载到CPU模型，然后移动到设备
     best_model_state = torch.load(os.path.join(model_save_dir, "efficient_gnn_surrogate_model.pth"))
@@ -288,16 +319,22 @@ def train_gnn_model(
     avg_test_loss = total_test_loss / len(test_loader)
     print(f"测试集损失 (MSE): {avg_test_loss:.6f}")
 
-    # --- 6. 保存Scalers ---
+    # --- 7. 保存Scalers ---
     joblib.dump(node_scaler, os.path.join(model_save_dir, "gnn_node_scaler.joblib"))
     joblib.dump(target_scaler, os.path.join(model_save_dir, "gnn_target_scaler.joblib"))
     print(f"GNN模型和scalers已保存到 '{model_save_dir}'")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="训练GNN代理模型")
+    parser.add_argument("--resume", action="store_true", help="从最新的检查点恢复训练")
+    args = parser.parse_args()
+
     train_gnn_model(
         dataset_csv_path="results/surrogate_model_dataset/dataset_0709.csv",
         processed_data_cache_path="results/surrogate_model_dataset/processed_graphs.pt",
         model_save_dir="results/gnn_surrogate_model",
         num_epochs=100,
+        batch_size=32,
+        resume_from_checkpoint=args.resume,
     )
