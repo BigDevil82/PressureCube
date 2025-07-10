@@ -94,9 +94,12 @@ class RandomStructure:
                     )
         return windows
 
-    def generate_random_parameters(self) -> StructuralParameters:
+    def generate_random_parameters(self, generate_windows: bool = True) -> StructuralParameters:
         """
         生成一组随机的结构参数。
+
+        Args:
+            generate_windows (bool): 是否生成窗户。
 
         Returns:
             StructuralParameters: 随机生成的结构参数实例。
@@ -123,10 +126,12 @@ class RandomStructure:
         brace_section_index = self._rng.integers(0, self.section_counts["C型钢"])
 
         # 生成随机窗户
-        windows = self._generate_random_windows(length, main_beam_spacing)
+        windows = []
+        if generate_windows:
+            windows = self._generate_random_windows(length, main_beam_spacing)
 
         # 随机选择内压
-        pressure = self._rng.integers(10, 51)
+        pressure = self._rng.integers(25, 36)
 
         return StructuralParameters(
             length=length,
@@ -177,20 +182,20 @@ if __name__ == "__main__":
             # # visualizer.show_all_views()
             # visualizer.show_face(ViewType.FRONT, False)
 
-            # analyzer = OpenSeesAnalyzer()
+            analyzer = OpenSeesAnalyzer()
 
-            # with Timer("setup opensees model cost"):
-            #     analyzer.setup_opensees_model(model)
-            #     analyzer.apply_pressure_loads(internal_pressure_pa=30000.0)
-            # with Timer("static analysis cost"):
-            #     analyzer.run_static_analysis()
-            # max_indicators = analyzer.get_max_indicators()
-            # print(
-            #     "max stress: ",
-            #     max_indicators["max_abs_stress"],
-            #     "max_disp: ",
-            #     max_indicators["max_abs_displacement"],
-            # )
+            with Timer("setup opensees model cost"):
+                analyzer.setup_opensees_model(model)
+                analyzer.apply_pressure_loads(internal_pressure_pa=30000.0)
+            with Timer("static analysis cost"):
+                analyzer.run_static_analysis()
+            max_indicators = analyzer.get_max_indicators()
+            print(
+                "max stress: ",
+                max_indicators["max_abs_stress"],
+                "max_disp: ",
+                max_indicators["max_abs_displacement"],
+            )
             print("-" * 100 + "\n")
         except Exception as e:
             print_exc()
