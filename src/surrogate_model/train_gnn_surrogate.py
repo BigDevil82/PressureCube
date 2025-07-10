@@ -331,7 +331,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     train_gnn_model(
-        dataset_csv_path="results/surrogate_model_dataset/dataset_0709.csv",
+        dataset_csv_path="src/data/fem_dataset.csv",
         processed_data_cache_path="results/surrogate_model_dataset/processed_graphs.pt",
         model_save_dir="results/gnn_surrogate_model",
         num_epochs=100,

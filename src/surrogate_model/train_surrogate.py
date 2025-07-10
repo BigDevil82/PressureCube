@@ -237,7 +237,7 @@ def predict_with_model(input_data: dict, model_dir: str):
 
 
 if __name__ == "__main__":
-    dataset_path = "results/surrogate_model_dataset/dataset_0709.csv"
+    dataset_path = "src/data/fem_dataset.csv"
     save_dir = "results/surrogate_model"
 
     # 训练模型

@@ -95,11 +95,11 @@ def generate_surrogate_model_dataset(num_samples: int, output_path: str):
 
 if __name__ == "__main__":
     # 确保输出目录存在
-    output_dir = "results/surrogate_model_dataset"
+    output_dir = "src/data"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # output_csv_path = os.path.join(output_dir, "dataset_0709.csv")
+    output_csv_path = os.path.join(output_dir, "fem_dataset.csv")
 
     # # 生成10000个样本作为示例
     # generate_surrogate_model_dataset(num_samples=10000, output_path=output_csv_path)
