@@ -13,7 +13,7 @@ from ..structure.structural_model import StructuralModel
 from ..utils.util import is_close  # For comparing floating point numbers
 
 
-class StructuralGraph:
+class BeamAsEdgeGraph:
     """
     Represents the building structure as a graph.
     In this representation (Type 1):
@@ -127,7 +127,7 @@ class StructuralGraph:
     def __str__(self) -> str:
         return f"StructuralGraph with {self.number_of_nodes()} nodes and " f"{self.number_of_edges()} edges."
 
-    def to_pyg_data(self) -> Data:
+    def to_pyg_data(self, env_info: Dict) -> Data:
         """
         Converts the StructuralGraph to a PyTorch Geometric Data object.
 
@@ -151,11 +151,10 @@ class StructuralGraph:
 
         # 1. Node Features (x)
         node_features_list = []
-        tolerance_z_support = 1e-6
         for model_node_id in sorted_model_node_ids:
             node = self.nodes[model_node_id]
             coords = [node.x, node.y, node.z]
-            is_support_feature = [1.0 if is_close(node.z, 0.0, abs_tol=tolerance_z_support) else 0.0]
+            is_support_feature = [1.0 if node.is_support else 0.0]
             node_features_list.append(coords + is_support_feature)
 
         pyg_x = torch.tensor(node_features_list, dtype=torch.float)
@@ -167,11 +166,6 @@ class StructuralGraph:
         # Create a mapping for section names to integer indices
         section_names = sorted(list(self.model.sections.keys()))  # Consistent ordering
         section_name_to_idx = {name: i for i, name in enumerate(section_names)}
-
-        tolerance_coord_diff = 1e-4  # For determining horizontal/vertical/diagonal
-
-        # To handle undirected edges correctly if iterating self.adj
-        # Simpler: iterate self.edges (beams) once
 
         for beam_id, beam in self.model.beams.items():
             start_model_node_id = beam.start_node
@@ -195,33 +189,27 @@ class StructuralGraph:
 
             # Section index
             section_idx = section_name_to_idx.get(beam.section, -1)  # Default to -1 if section name not found
+            # Beam Type Index
+            beam_type_idx = beam.beam_type.value
+
+            # Beam Section Index in SectionLibrary
+            beam_section_idx = self.model.sections[beam.section].idx
+
+            length = beam.length(self.model.points)
+
             if section_idx == -1:
                 print(f"Warning: Beam {beam_id} has unknown section '{beam.section}'. Using index -1.")
 
             # Direction category
-            dx = abs(coords_u[0] - coords_v[0])
-            dy = abs(coords_u[1] - coords_v[1])
-            dz = abs(coords_u[2] - coords_v[2])
-
-            direction_category = 2  # Default to diagonal
-            if (
-                is_close(dx, 0.0, abs_tol=tolerance_coord_diff)
-                and is_close(dy, 0.0, abs_tol=tolerance_coord_diff)
-                and not is_close(dz, 0.0, abs_tol=tolerance_coord_diff)
-            ):
-                direction_category = 1  # Vertical
-            elif is_close(dz, 0.0, abs_tol=tolerance_coord_diff) and (
-                not is_close(dx, 0.0, abs_tol=tolerance_coord_diff)
-                or not is_close(dy, 0.0, abs_tol=tolerance_coord_diff)
-            ):
-                direction_category = 0  # Horizontal
+            beam_vec = np.array(coords_v) - np.array(coords_u)
+            direction_category = np.argmax(np.abs(beam_vec))
 
             # Edge attributes for this beam
             # Features: start_coords (3), end_coords (3), section_idx (1), direction_cat (1)
             # For edge u -> v
-            edge_feat_uv = coords_u + coords_v + [section_idx, direction_category]
+            edge_feat_uv = coords_u + coords_v + [beam_type_idx, beam_section_idx, length, direction_category]
             # For edge v -> u (features are symmetric in this definition)
-            edge_feat_vu = coords_v + coords_u + [section_idx, direction_category]
+            edge_feat_vu = coords_v + coords_u + [beam_type_idx, beam_section_idx, length, direction_category]
 
             # Add edges for PyG (typically expects directed edges, so add both directions for an undirected beam)
             edge_list.append([u_pyg, v_pyg])
@@ -230,16 +218,14 @@ class StructuralGraph:
             edge_list.append([v_pyg, u_pyg])
             edge_attr_list.append(edge_feat_vu)  # Using specific features for v->u edge
 
-        if not edge_list:  # No edges
-            pyg_edge_index = torch.empty((2, 0), dtype=torch.long)
-            pyg_edge_attr = torch.empty((0, 8), dtype=torch.float)  # 8 edge features
-        else:
-            pyg_edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
-            pyg_edge_attr = torch.tensor(edge_attr_list, dtype=torch.float)
+        pyg_edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        pyg_edge_attr = torch.tensor(edge_attr_list, dtype=torch.float)
 
         # 3. Create PyG Data object
         data = Data(x=pyg_x, edge_index=pyg_edge_index, edge_attr=pyg_edge_attr)
         data.num_nodes = pyg_x.size(0)
+        data.node_feature_dim = pyg_x.size(1)
+        data.edge_feature_dim = pyg_edge_attr.size(1)
 
         return data
 
@@ -419,8 +405,8 @@ class BeamAsNodeGraph:
             centroid = (start_node_obj.coordinates() + end_node_obj.coordinates()) / 2.0
 
             # response
-            max_disp_abs = beam.response.max_disp_abs
-            max_stress = beam.response.max_stress
+            # max_disp_abs = beam.response.max_disp_abs
+            # max_stress = beam.response.max_stress
 
             # section property
             section_property = self.model.sections[beam.section]
@@ -432,11 +418,11 @@ class BeamAsNodeGraph:
                 [beam_type_idx, beam_section_idx, length]
                 + list(direction_vec_normalized)
                 + list(centroid)
-                + [max_disp_abs, max_stress]
                 + [Ix, Iy, area]
-                + beam.start_node_load.tolist()
-                + beam.end_node_load.tolist()
-                + [env_info["frame_length"]]
+                # + [max_disp_abs, max_stress]
+                # + beam.start_node_load.tolist()
+                # + beam.end_node_load.tolist()
+                # + [env_info["frame_length"]]
             )
             node_features_list.append(features)
 
@@ -507,7 +493,7 @@ if __name__ == "__main__":
 
     # Test StructuralGraph (joints as nodes, beams as edges)
     print("\n--- Testing StructuralGraph (joints as nodes) ---")
-    graph_type1 = StructuralGraph(model)
+    graph_type1 = BeamAsEdgeGraph(model)
     print(f"Created: {graph_type1}")
     pyg_data_type1 = graph_type1.to_pyg_data()
     print("PyG Data (Type 1):")
