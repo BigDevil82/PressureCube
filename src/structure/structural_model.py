@@ -698,19 +698,13 @@ class StructuralModel:
                     section = "FRAME"
                 else:
                     # 检查是否在窗户区域内
-                    in_window = False
-                    for window in windows:
-                        window_bottom = window.bottom_height
-                        window_top = window.bottom_height + window.height
-                        window_left = window.y_position - window.width / 2
-                        window_right = window.y_position + window.width / 2
+                    window_bottom = self.params.win_bottom
+                    window_top = self.params.win_bottom + self.params.win_height
 
-                        if (window_bottom < z < window_top) and y1 < window.y_position < y2:
-                            # 这个区域在窗户范围内，不添加梁
-                            in_window = True
-                            break
-
-                    if not in_window:
+                    if (window_bottom < z < window_top) and y1 < window.y_position < y2:
+                        # 这个区域在窗户范围内，不添加梁
+                        pass
+                    else:
                         # 判断是否为次梁或支撑梁
                         is_secondary = False
                         for window in windows:
