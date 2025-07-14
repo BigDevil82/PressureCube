@@ -686,6 +686,8 @@ class StructuralModel:
             raise ValueError("窗户/门所在区域钢板生成失败")
 
         # 生成水平方向的梁段（沿y方向）
+        win_bottom = self.params.win_bottom
+        win_top = self.params.win_bottom + self.params.win_height
         for z in all_z:
             for i in range(len(all_y) - 1):
                 y1, y2 = all_y[i], all_y[i + 1]
@@ -699,25 +701,23 @@ class StructuralModel:
                     # 检查是否在任何一个窗户区域
                     skip_beam = False
                     for window in windows:
-                        win_bottom = window.bottom_height
-                        win_top = window.bottom_height + window.height
-                        if (win_bottom < z < win_top) and (y1 < window.y_position < y2 or y2 < window.y_position < y1):
+                        if (win_bottom < z < win_top) and (
+                            y1 < window.y_position < y2 or y2 < window.y_position < y1
+                        ):
                             skip_beam = True
                             break
                     if skip_beam:
                         continue
 
                     # 判断是否是次梁
-                    is_secondary = any(
-                        math.isclose(z, w.bottom_height, abs_tol=1e-6) or
-                        math.isclose(z, w.bottom_height + w.height, abs_tol=1e-6)
-                        for w in windows
+                    is_secondary = math.isclose(z, win_bottom, abs_tol=1e-6) or math.isclose(
+                        z, win_top, abs_tol=1e-6
                     )
+
                     beam_type = BeamType.SECONDARY if is_secondary else BeamType.BRACE
                     section = "SECONDARY" if is_secondary else "BRACE"
 
                 self.add_beam(start_node, end_node, beam_type, section, face)
-
 
         # 生成竖直方向的梁段（沿z方向）
         for y in all_y:
