@@ -692,36 +692,32 @@ class StructuralModel:
                 start_node = self.node_map.get_node_id(x_coord, y1, z)
                 end_node = self.node_map.get_node_id(x_coord, y2, z)
 
-                # 确定梁类型
-                if z == 0 or z == height:  # 底部或顶部的梁
+                if z == 0 or z == height:
                     beam_type = BeamType.FRAME
                     section = "FRAME"
                 else:
-                    # 检查是否在窗户区域内
-                    window_bottom = self.params.win_bottom
-                    window_top = self.params.win_bottom + self.params.win_height
+                    # 检查是否在任何一个窗户区域
+                    skip_beam = False
+                    for window in windows:
+                        win_bottom = window.bottom_height
+                        win_top = window.bottom_height + window.height
+                        if (win_bottom < z < win_top) and (y1 < window.y_position < y2 or y2 < window.y_position < y1):
+                            skip_beam = True
+                            break
+                    if skip_beam:
+                        continue
 
-                    if (window_bottom < z < window_top) and y1 < window.y_position < y2:
-                        # 这个区域在窗户范围内，不添加梁
-                        pass
-                    else:
-                        # 判断是否为次梁或支撑梁
-                        is_secondary = False
-                        for window in windows:
-                            window_bottom = window.bottom_height
-                            window_top = window.bottom_height + window.height
-                            if z == window_bottom or z == window_top:
-                                is_secondary = True
-                                break
+                    # 判断是否是次梁
+                    is_secondary = any(
+                        math.isclose(z, w.bottom_height, abs_tol=1e-6) or
+                        math.isclose(z, w.bottom_height + w.height, abs_tol=1e-6)
+                        for w in windows
+                    )
+                    beam_type = BeamType.SECONDARY if is_secondary else BeamType.BRACE
+                    section = "SECONDARY" if is_secondary else "BRACE"
 
-                        if is_secondary:
-                            beam_type = BeamType.SECONDARY
-                            section = "SECONDARY"
-                        else:
-                            beam_type = BeamType.BRACE
-                            section = "BRACE"
+                self.add_beam(start_node, end_node, beam_type, section, face)
 
-                        self.add_beam(start_node, end_node, beam_type, section, face)
 
         # 生成竖直方向的梁段（沿z方向）
         for y in all_y:
