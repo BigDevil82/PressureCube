@@ -1,9 +1,8 @@
-from typing import Dict, Optional
+from dataclasses import asdict
+from typing import Dict, Optional, Union
 
 import gym
 import numpy as np
-import torch
-from gym import spaces
 
 from src.analysis.opensees_analysis import OpenSeesAnalyzer
 from src.graph.structural_graph import BeamAsEdgeGraph, BeamAsNodeGraph
@@ -23,7 +22,11 @@ from src.utils.model_utils import load_config
 class StructuralEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 4}
 
-    def __init__(self, initial_params_config_path: str, seed: int = None):
+    def __init__(
+        self,
+        initial_params_config: Union[str, dict],
+        seed: int = None,
+    ):
         super(StructuralEnv, self).__init__()
         self.logger = Logger("rewards")
         self.seed = seed
@@ -33,26 +36,35 @@ class StructuralEnv(gym.Env):
         self.opensees_analyzer = OpenSeesAnalyzer()
 
         # Load initial full structural configuration
-        initial_full_config = load_config(initial_params_config_path)
+        if isinstance(initial_params_config, str):
+            initial_full_config = load_config(initial_params_config)
+        else:
+            initial_full_config = initial_params_config
+
         analysis_config = initial_full_config["analysis_params"]
         self.max_stress = analysis_config["max_stress"]
         self.max_disp = analysis_config["max_disp"]
         self.env_config = initial_full_config["env_config"]
         # This base_config_dict contains all parameters, including fixed ones (length, width, etc.)
         # and initial values for the optimizable ones.
-        self.base_config_dict = initial_full_config["structural_params"]
+        self.structural_params = initial_full_config["structural_params"]
+
+        # set the initial beam spacing to the base config
+        self.current_main_beam_spacing = self.structural_params["main_beam_spacing"]
+        self.current_secondary_beam_spacing = self.structural_params["main_beam_spacing"]
+        self.current_brace_spacing = self.structural_params["brace_spacing"]
 
         # Initialize current optimizable parameters from this initial config
         # These will be updated by agent actions
-        self.current_length = self.base_config_dict["length"]
-        self.current_main_beam_spacing = self.base_config_dict["main_beam_spacing"]
-        self.current_secondary_beam_spacing = self.base_config_dict["main_beam_spacing"]
-        self.current_brace_spacing = self.base_config_dict["brace_spacing"]
-        self.current_frame_section_index = self.base_config_dict["frame_section_index"]
-        self.current_main_beam_section_index = self.base_config_dict["main_beam_section_index"]
-        self.current_secondary_beam_section_index = self.base_config_dict["secondary_beam_section_index"]
-        self.current_brace_section_index = self.base_config_dict["brace_section_index"]
-        self.current_pressure = self.base_config_dict["pressure"]
+        # for agent+ (increase section index by 1), we need to set the initial section index to 0
+        self.current_frame_section_index = 0
+        self.current_main_beam_section_index = 0
+        self.current_secondary_beam_section_index = 0
+        self.current_brace_section_index = 0
+
+        # some parameters that may be randomly generated
+        self.current_length = self.structural_params["length"]
+        self.current_pressure = self.structural_params.get("pressure", 30)
 
         self.current_structural_model: StructuralModel | None = None
         self.current_graph_converter: BeamAsNodeGraph | BeamAsEdgeGraph | None = None
@@ -66,7 +78,8 @@ class StructuralEnv(gym.Env):
         self._last_max_disp_abs = 0.0
         self._last_max_stress = 0.0
         self._last_model_volume = 0.0
-        self.reset()  # Called by typical RL training loop setup
+        # `reset` is not called here anymore, it must be called by the training/testing loop
+        # to properly initialize the first state.
 
     def _get_current_structural_parameters_obj(self) -> StructuralParameters:
         """
@@ -74,9 +87,10 @@ class StructuralEnv(gym.Env):
         and the current values of the optimizable parameters.
         """
         # Start with a copy of the initial full parameter dictionary (containing L, W, H, windows etc.)
-        params_data_dict = self.base_config_dict.copy()
+        params_data_dict = self.structural_params.copy()
 
         # Override with current optimizable values
+        # Note: self.current_length is now set in reset() from the base_config_dict
         params_data_dict["length"] = self.current_length
         params_data_dict["main_beam_spacing"] = self.current_main_beam_spacing
         params_data_dict["secondary_beam_spacing"] = self.current_main_beam_spacing
@@ -144,23 +158,31 @@ class StructuralEnv(gym.Env):
 
         return True, max_indicators
 
-    def reset(self, options=None):
-        super().reset(seed=self.seed + self._reset_count)
+    def reset(self, options: Optional[dict] = None):
+        super().reset(seed=self.seed + self._reset_count if self.seed is not None else None)
         self._reset_count += 1
 
-        # init section index randomly
-        random_params = RandomStructure(self.section_library, self._np_random).generate_random_parameters()
+        # If a specific structural config is passed via options, use it.
+        # Otherwise, use the base config from initialization.
+        if options and options.get("random_structure", False):
+            random_keys = options["random_structure"].get("random_keys", [])
+            random_params = asdict(
+                RandomStructure(self.section_library, self._np_random).generate_random_parameters()
+            )
+            for key in random_keys:
+                if key in self.structural_params:
+                    self.structural_params[key] = random_params[key]
 
-        self.current_length = random_params.length
-        self.current_frame_section_index = 0
-        self.current_main_beam_section_index = 0
-        self.current_secondary_beam_section_index = 0
-        self.current_brace_section_index = 0
-        # self.current_pressure = random_params.pressure
-
-        # self.current_main_beam_spacing = random_params.main_beam_spacing
-        # self.current_secondary_beam_spacing = random_params.secondary_beam_spacing
-        # self.current_brace_spacing = random_params.brace_spacing
+        # Initialize/reset parameters based on the current self.base_config_dict
+        self.current_length = self.structural_params["length"]
+        self.current_main_beam_spacing = self.structural_params["main_beam_spacing"]
+        self.current_secondary_beam_spacing = self.structural_params["main_beam_spacing"]
+        self.current_brace_spacing = self.structural_params["brace_spacing"]
+        self.current_frame_section_index = self.structural_params["frame_section_index"]
+        self.current_main_beam_section_index = self.structural_params["main_beam_section_index"]
+        self.current_secondary_beam_section_index = self.structural_params["secondary_beam_section_index"]
+        self.current_brace_section_index = self.structural_params["brace_section_index"]
+        self.current_pressure = self.structural_params.get("pressure", 30)
 
         self._current_step_count = 0
 
@@ -354,9 +376,9 @@ class StructuralEnv(gym.Env):
         else:
             reward = -(2 - delta_c1 - delta_c2) * 10
 
-        self.logger.info(
-            f"Reward: {reward:.2f}, delta_c1: {delta_c1:.2f}, delta_c2: {delta_c2:.2f}, delta_v: {delta_v:.2f}"
-        )
+        # self.logger.info(
+        #     f"Reward: {reward:.2f}, delta_c1: {delta_c1:.2f}, delta_c2: {delta_c2:.2f}, delta_v: {delta_v:.2f}"
+        # )
 
         return reward
 

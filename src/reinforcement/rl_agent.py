@@ -164,6 +164,13 @@ class DDPGAgent:
         self.critic_optimizer.load_state_dict(checkpoint["critic_optimizer_state_dict"])
         self.hebg_config = checkpoint["hebg_config"]
 
+    def set_eval_mode(self):
+        """Sets the networks to evaluation mode."""
+        self.actor.eval()
+        self.critic.eval()
+        self.actor_target.eval()
+        self.critic_target.eval()
+
 
 class A2CAgent(nn.Module):
     """

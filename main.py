@@ -5,15 +5,16 @@ import shutil  # Added for directory operations
 import sys
 from collections import deque  # Added for replay buffer
 from time import time
+from typing import Union
 
 import numpy as np
 import torch
 from torch_geometric.data import Batch  # Added for batching experiences
 
-from src.analysis.opensees_analysis import OpenSeesAnalyzer
 from src.reinforcement.dqn_agent import DQNAgent
 from src.reinforcement.rl_agent import DDPGAgent  # Added
 from src.reinforcement.structural_env import StructuralEnv  # Added
+from src.structure.prototypes import get_prototype_configs
 from src.structure.structural_model import BeamType
 from src.utils.constants import *
 from src.utils.model_utils import StructureVisualizer, create_structural_model, load_config
@@ -44,6 +45,51 @@ def parse_args():
     return parser.parse_args()
 
 
+def evaluate_on_prototypes(agent: Union[DDPGAgent, DQNAgent], config: dict, device: torch.device, seed: int):
+    """
+    用当前agent评估所有原型结构，返回平均reward和详细表现。
+    """
+
+    prototypes = get_prototype_configs(
+        config_path=config["config_path"] if "config_path" in config else "config.yaml"
+    )
+    results = []
+    total_reward = 0
+    agent.set_eval_mode()
+    for proto_config in prototypes:
+        env = StructuralEnv(initial_params_config=proto_config, seed=seed)
+        state_pyg, info = env.reset()
+        episode_reward = 0
+        done = False
+        state_pyg = state_pyg.to(device)
+        while not done:
+            with torch.no_grad():
+                # DDPGAgent和DQNAgent都支持training参数
+                action = agent.select_action(state_pyg, 0.0)
+            next_state_pyg, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+            episode_reward += reward
+            state_pyg = next_state_pyg.to(device)
+        total_reward += episode_reward
+        analysis_params = config["analysis_params"]
+        is_feasible = (
+            info["max_displacement_mm"] <= analysis_params["max_disp"]
+            and info["max_stress"] <= analysis_params["max_stress"]
+        )
+        results.append(
+            {
+                "prototype": proto_config["name"],
+                "reward": episode_reward,
+                "final_displacement": info["max_displacement_mm"],
+                "final_stress": info["max_stress"],
+                "final_volume": info["model_volume_m3"],
+                "is_feasible": is_feasible,
+            }
+        )
+    avg_reward = total_reward / len(prototypes)
+    return avg_reward, results
+
+
 def train(args, config):
     """训练强化学习智能体"""
     print(f"开始训练 DDPG 智能体，设备: {args.device}")
@@ -53,13 +99,11 @@ def train(args, config):
     hebg_config = config["hebg_config"]
     rl_params = config["rl_params"]
 
-    env = StructuralEnv(initial_params_config_path=args.config, seed=args.seed)
+    env = StructuralEnv(initial_params_config=args.config, seed=args.seed)
 
     # Determine HEBG in_channels from a sample observation
     sample_state, _ = env.reset()
-    if sample_state is None or not hasattr(sample_state, "x") or sample_state.x is None:
-        print("Error: Could not get a valid initial state from environment to determine HEBG in_channels.")
-        return
+
     hebg_config["in_channels"] = sample_state.x.size(1)
 
     if rl_params["agent"] == "ddpg":
@@ -89,7 +133,6 @@ def train(args, config):
         print(f"Model resumed from {args.resume_path}")
 
     replay_buffer = deque(maxlen=rl_params["buffer_size"])
-    episode_rewards = []
 
     # For plotting and saving metrics
     metrics_history = {
@@ -102,11 +145,12 @@ def train(args, config):
     }
     plot_save_dir = os.path.join(args.model_save_path, "plots")
     os.makedirs(plot_save_dir, exist_ok=True)
-    model_base_name = "ddpg_agent"
+    model_base_name = rl_params["agent"]
     global_step = 0
 
+    best_eval_avg_reward = -float("inf")
     for episode in range(args.max_episodes):
-        state_pyg, info_reset = env.reset()
+        state_pyg, info_reset = env.reset(options={"random_structure": {"random_keys": ["length"]}})
         current_frame_length = info_reset["frame_length"]
         step = 0
         episode_reward = 0
@@ -182,6 +226,21 @@ def train(args, config):
         env.render()
         print()
 
+        # 每10个episode评估一次当前模型在prototypes上的表现
+        if (episode + 1) % rl_params["eval_interval"] == 0:
+            eval_avg_reward, eval_results = evaluate_on_prototypes(agent, config, device, args.seed)
+            print(f"[Prototype Eval] Episode {episode+1}: avg_reward={eval_avg_reward:.2f}")
+            for res in eval_results:
+                print(
+                    f"  原型: {res['prototype']} | reward: {res['reward']:.2f} | displacement: {res['final_displacement']:.2f} | stress: {res['final_stress']:.2f} | feasible: {'是' if res['is_feasible'] else '否'}"
+                )
+            # 若当前模型优于历史最佳，则保存
+            if eval_avg_reward > best_eval_avg_reward:
+                best_eval_avg_reward = eval_avg_reward
+                best_model_save_path = os.path.join(args.model_save_path, "best_model.pth")
+                agent.save_model(best_model_save_path)
+                print(f"[Prototype Eval] 新最佳模型已保存到: {best_model_save_path}")
+
         # Save model periodically
         if (episode + 1) % rl_params.get("save_interval", 100) == 0:
             periodic_save_path = os.path.join(
@@ -249,7 +308,7 @@ def test(args, config):
     checkpoint = torch.load(final_model_load_path, map_location=device)
     hebg_config = checkpoint.get("hebg_config")
 
-    env = StructuralEnv(initial_params_config_path=args.config, seed=args.seed)
+    env = StructuralEnv(initial_params_config=args.config, seed=args.seed)
     action_dim = env_config["action_dim"]
 
     agent = DDPGAgent(

@@ -75,6 +75,7 @@ rl_params:
   ddpg_fc_hidden_dim: 256 # 隐藏层大小
   max_episodes: 1000 # 最大训练回合数
   max_steps_per_episode: 64 # 每个回合的最大步数
+  eval_interval: 2 # 在原型结构上的评估间隔
   save_interval: 100 # 模型保存间隔
   plot_interval: 1 # 训练指标绘制间隔
 
