@@ -11,6 +11,7 @@ import torch
 from torch_geometric.data import Batch  # Added for batching experiences
 
 from src.analysis.opensees_analysis import OpenSeesAnalyzer
+from src.reinforcement.dqn_agent import DQNAgent
 from src.reinforcement.rl_agent import DDPGAgent  # Added
 from src.reinforcement.structural_env import StructuralEnv  # Added
 from src.structure.structural_model import BeamType
@@ -61,19 +62,27 @@ def train(args, config):
         return
     hebg_config["in_channels"] = sample_state.x.size(1)
 
-    print(f"HEBG Config determined: {hebg_config}")
-
-    agent = DDPGAgent(
-        hebg_config=hebg_config,
-        action_dim=env_config["action_dim"],
-        actor_lr=rl_params["actor_lr"],
-        critic_lr=rl_params["critic_lr"],
-        gamma=rl_params["gamma"],
-        sigma=rl_params["sigma"],
-        tau=rl_params["tau"],
-        hidden_dim_fc=rl_params["ddpg_fc_hidden_dim"],
-        device=device,
-    )
+    if rl_params["agent"] == "ddpg":
+        agent = DDPGAgent(
+            hebg_config=hebg_config,
+            action_dim=env_config["action_dim"],
+            actor_lr=rl_params["actor_lr"],
+            critic_lr=rl_params["critic_lr"],
+            gamma=rl_params["gamma"],
+            sigma=rl_params["sigma"],
+            tau=rl_params["tau"],
+            hidden_dim_fc=rl_params["ddpg_fc_hidden_dim"],
+            device=device,
+        )
+    else:
+        agent = DQNAgent(
+            state_dim=sample_state.x.size(1),
+            action_dim=env_config["action_dim"],
+            device=device,
+            gamma=rl_params["gamma"],
+            lr=rl_params["lr"],
+            target_update=rl_params["update_interval"],
+        )
 
     if args.resume_path:
         agent.load_model(args.resume_path)
@@ -108,11 +117,11 @@ def train(args, config):
         while not done:
             step += 1
             global_step += 1
-            action_tensor = agent.select_action(state_pyg)  # state_pyg is a single Data object
+            action = agent.select_action(state_pyg, 0.01)  # state_pyg is a single Data object
             # DDPG actor might output [1, action_dim]
-            action_np = action_tensor.cpu().detach().numpy().squeeze(0)
+            # action_np = action_tensor.cpu().detach().numpy().squeeze(0)
 
-            next_state_pyg, reward, terminated, truncated, info = env.step(action_np)
+            next_state_pyg, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             episode_reward += reward
 
@@ -122,17 +131,14 @@ def train(args, config):
             replay_buffer.append(
                 (
                     state_pyg,
-                    torch.tensor(action_np, dtype=torch.float32).to(device),
+                    torch.tensor(action, dtype=torch.long).to(device),
                     torch.tensor([reward], dtype=torch.float32).to(device),
                     next_state_pyg,
                     torch.tensor([done], dtype=torch.float32).to(device),
                 )
             )
 
-            if (
-                len(replay_buffer) >= rl_params["min_replay_buffer_fill"]
-                and step % rl_params["update_interval"] == 0
-            ):
+            if len(replay_buffer) >= rl_params["min_replay_buffer_fill"]:
                 experiences = random.sample(replay_buffer, rl_params["batch_size"])
 
                 states_list = [e[0] for e in experiences]
@@ -158,17 +164,17 @@ def train(args, config):
 
             state_pyg = next_state_pyg
 
-            # Store metrics for this episode
-            metrics_history["rewards"].append(episode_reward)
-            metrics_history["max_displacements"].append(info["max_displacement_mm"])
-            metrics_history["max_stresses"].append(info["max_stress"])
-            metrics_history["model_volumes"].append(info["model_volume_m3"] / current_frame_length)
-            metrics_history["steps"].append(step)  # Store number of steps taken
-            metrics_history["episode_numbers"].append(episode + 1)
+        # Store metrics for this episode
+        metrics_history["rewards"].append(episode_reward)
+        metrics_history["max_displacements"].append(info["max_displacement_mm"])
+        metrics_history["max_stresses"].append(info["max_stress"])
+        metrics_history["model_volumes"].append(info["model_volume_m3"] / current_frame_length)
+        metrics_history["steps"].append(step)  # Store number of steps taken
+        metrics_history["episode_numbers"].append(episode + 1)
 
-            # Plot progress after each episode
-            if global_step % rl_params.get("plot_interval", 10) == 0:
-                plot_progress(metrics_history, plot_save_dir, filename="training_progress.png")
+        # Plot progress after each episode
+        if episode % rl_params.get("plot_interval", 10) == 0:
+            plot_progress(metrics_history, plot_save_dir, filename="training_progress.png")
 
         print(
             f"Episode {episode+1}/{args.max_episodes}, Episode Return: {episode_reward:.2f}, Steps: {step}, Info: {info.get('error', 'OK')}"

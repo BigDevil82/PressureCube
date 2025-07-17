@@ -129,6 +129,14 @@ python main.py --mode test --config config.yaml
   - [x] 脚本可自动随机生成结构参数，进行有限元分析，并保存输入参数和输出结果（最大应力、最大位移）。
   - [x] 支持关闭窗户生成功能，以生成用于代理模型训练的简化结构数据集。
   - [x] 依赖 `pandas` 和 `tqdm` 库，已更新 `requirements.txt`。
+- [x] **强化学习架构重构 (V2)**
+  - [x] **GNN Encoder 替换**:
+    - 在 `src/graph/gnn_encoder.py` 中引入了基于 `GraphSAGE` 的新 GNN Encoder (`GraphSAGEEncoder`)。
+    - 新 Encoder 计算开销更低，旨在提升训练效率，替代原有的 `HEBG` 模型。
+  - [x] **RL Agent 和动作空间重构**:
+    - 在 `src/reinforcement/rl_agent_v2.py` 中创建了新的 DDPG Agent (`DDPGAgentV2`)。
+    - **动作空间重新设计**: Agent 不再输出全局调整动作，而是输出一个离散的动作，选择需要进行截面调整的构件，将优化过程建模为更精细的序贯决策。
+    - 采用DQN算法训练
 
 ## 建模方法说明
 

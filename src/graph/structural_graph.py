@@ -256,6 +256,7 @@ class BeamAsNodeGraph:
         # Value: List of beam_ids that are connected to this beam.
         self.adj: Dict[int, List[int]] = defaultdict(list)
         self._build_adjacency_list()
+        self.pyg_idx_to_beam_id = None
 
     def _build_adjacency_list(self):
         """
@@ -342,6 +343,12 @@ class BeamAsNodeGraph:
             f"{self.number_of_edges()} edges (connections)."
         )
 
+    def get_beam_id_from_pyg_idx(self, pyg_idx: int) -> int:
+        """
+        Retrieves the beam ID from a PyG index.
+        """
+        return self.pyg_idx_to_beam_id[pyg_idx]
+
     def to_pyg_data(self, env_info: Dict) -> Data:
         """
         Converts the BeamAsNodeGraph to a PyTorch Geometric Data object.
@@ -375,6 +382,7 @@ class BeamAsNodeGraph:
                 current_idx += len(type_ids)
 
         beam_id_to_pyg_idx = {beam_id: i for i, beam_id in enumerate(sorted_beam_ids)}
+        self.pyg_idx_to_beam_id = {i: beam_id for beam_id, i in beam_id_to_pyg_idx.items()}
 
         # 1. Node Features (x) - for each beam
         node_features_list = []
@@ -405,8 +413,8 @@ class BeamAsNodeGraph:
             centroid = (start_node_obj.coordinates() + end_node_obj.coordinates()) / 2.0
 
             # response
-            # max_disp_abs = beam.response.max_disp_abs
-            # max_stress = beam.response.max_stress
+            max_disp_abs = beam.response.max_disp_abs
+            max_stress = beam.response.max_stress
 
             # section property
             section_property = self.model.sections[beam.section]
@@ -419,7 +427,7 @@ class BeamAsNodeGraph:
                 + list(direction_vec_normalized)
                 + list(centroid)
                 + [Ix, Iy, area]
-                # + [max_disp_abs, max_stress]
+                + [max_disp_abs, max_stress]
                 # + beam.start_node_load.tolist()
                 # + beam.end_node_load.tolist()
                 # + [env_info["frame_length"]]

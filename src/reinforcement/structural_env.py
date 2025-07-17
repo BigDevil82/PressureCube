@@ -2,6 +2,7 @@ from typing import Dict, Optional
 
 import gym
 import numpy as np
+import torch
 from gym import spaces
 
 from src.analysis.opensees_analysis import OpenSeesAnalyzer
@@ -54,6 +55,7 @@ class StructuralEnv(gym.Env):
         self.current_pressure = self.base_config_dict["pressure"]
 
         self.current_structural_model: StructuralModel | None = None
+        self.current_graph_converter: BeamAsNodeGraph | BeamAsEdgeGraph | None = None
         self.current_pyg_data_state = None  # Will be a PyG Data object
 
         # For tracking episode length or other conditions
@@ -126,16 +128,16 @@ class StructuralEnv(gym.Env):
 
         try:
             if self.env_config["graph_type"] == "beam_as_node":
-                graph_converter = BeamAsNodeGraph(self.current_structural_model)
+                self.current_graph_converter = BeamAsNodeGraph(self.current_structural_model)
             elif self.env_config["graph_type"] == "beam_as_edge":
-                graph_converter = BeamAsEdgeGraph(self.current_structural_model)
+                self.current_graph_converter = BeamAsEdgeGraph(self.current_structural_model)
             else:
                 raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
 
             env_info = {
                 "frame_length": self.current_length,
             }
-            self.current_pyg_data_state = graph_converter.to_pyg_data(env_info)
+            self.current_pyg_data_state = self.current_graph_converter.to_pyg_data(env_info)
         except Exception as e:
             print(f"Error during graph conversion in _generate_model_and_state_from_current_params: {e}")
             return False, None
@@ -150,15 +152,15 @@ class StructuralEnv(gym.Env):
         random_params = RandomStructure(self.section_library, self._np_random).generate_random_parameters()
 
         self.current_length = random_params.length
-        self.current_frame_section_index = random_params.frame_section_index
-        self.current_main_beam_section_index = random_params.main_beam_section_index
-        self.current_secondary_beam_section_index = random_params.secondary_beam_section_index
-        self.current_brace_section_index = random_params.brace_section_index
+        self.current_frame_section_index = 0
+        self.current_main_beam_section_index = 0
+        self.current_secondary_beam_section_index = 0
+        self.current_brace_section_index = 0
         # self.current_pressure = random_params.pressure
 
-        self.current_main_beam_spacing = random_params.main_beam_spacing
-        self.current_secondary_beam_spacing = random_params.secondary_beam_spacing
-        self.current_brace_spacing = random_params.brace_spacing
+        # self.current_main_beam_spacing = random_params.main_beam_spacing
+        # self.current_secondary_beam_spacing = random_params.secondary_beam_spacing
+        # self.current_brace_spacing = random_params.brace_spacing
 
         self._current_step_count = 0
 
@@ -183,62 +185,80 @@ class StructuralEnv(gym.Env):
         }
         return self.current_pyg_data_state, info
 
-    def _decode_action(self, action_vector: np.ndarray):
-        """
-        Decodes the continuous action vector from the agent (assumed to be in [0, 1])
-        into actual structural parameter values.
-        """
-        param_map = self.env_config["parameter_action_mapping"]
+    # def _decode_action(self, action_vector: np.ndarray):
+    #     """
+    #     Decodes the continuous action vector from the agent (assumed to be in [0, 1])
+    #     into actual structural parameter values.
+    #     """
+    #     param_map = self.env_config["parameter_action_mapping"]
 
-        # Main Beam Spacing
-        cfg = param_map["main_beam_spacing"]
-        raw_val = cfg["bounds"][0] + (1 - action_vector[cfg["action_idx"]]) * (
-            cfg["bounds"][1] - cfg["bounds"][0]
-        )
-        self.current_main_beam_spacing = np.clip(
-            round(raw_val / cfg["module"]) * cfg["module"], cfg["bounds"][0], cfg["bounds"][1]
-        )
+    #     # Main Beam Spacing
+    #     cfg = param_map["main_beam_spacing"]
+    #     raw_val = cfg["bounds"][0] + (1 - action_vector[cfg["action_idx"]]) * (
+    #         cfg["bounds"][1] - cfg["bounds"][0]
+    #     )
+    #     self.current_main_beam_spacing = np.clip(
+    #         round(raw_val / cfg["module"]) * cfg["module"], cfg["bounds"][0], cfg["bounds"][1]
+    #     )
 
-        # Brace Spacing
-        cfg = param_map["brace_spacing"]
-        raw_val = cfg["bounds"][0] + action_vector[cfg["action_idx"]] * (cfg["bounds"][1] - cfg["bounds"][0])
-        num_spans = np.clip(round(raw_val), cfg["bounds"][0], cfg["bounds"][1])
-        if num_spans > 1:
-            brace_spacing = (self.current_main_beam_spacing / num_spans).round(3)
+    #     # Brace Spacing
+    #     cfg = param_map["brace_spacing"]
+    #     raw_val = cfg["bounds"][0] + action_vector[cfg["action_idx"]] * (cfg["bounds"][1] - cfg["bounds"][0])
+    #     num_spans = np.clip(round(raw_val), cfg["bounds"][0], cfg["bounds"][1])
+    #     if num_spans > 1:
+    #         brace_spacing = (self.current_main_beam_spacing / num_spans).round(3)
+    #     else:
+    #         brace_spacing = (1.3 * (self.current_main_beam_spacing / 2)).round(3)
+    #     self.current_brace_spacing = brace_spacing if brace_spacing > 0.3 else 0.3
+
+    #     def _decode_single_action(section_index_name):
+    #         cfg = param_map[section_index_name]
+    #         num_options = cfg["num_options"]
+    #         ## 1. interpret action as normalized index of the section
+    #         raw_idx = action_vector[cfg["action_idx"]] * (num_options - 1)  # Scale [0,1] to [0, N-1]
+    #         return np.clip(int(round(raw_idx)), 0, num_options - 1)
+
+    #         # ### 2. interpret action as increase or decrease of the section index
+    #         # current_section_index = getattr(self, f"current_{section_index_name}")
+    #         # if action_vector[cfg["action_idx"]] > 0.5:
+    #         #     updated_section_index = current_section_index + 1
+    #         # else:
+    #         #     updated_section_index = current_section_index - 1
+    #         # return np.clip(updated_section_index, 0, num_options - 1)
+
+    #     # 4. Frame Section Index
+    #     self.current_frame_section_index = _decode_single_action("frame_section_index")
+
+    #     # 5. Main Beam Section Index
+    #     self.current_main_beam_section_index = _decode_single_action("main_beam_section_index")
+
+    #     # 6. Secondary Beam Section Index
+    #     self.current_secondary_beam_section_index = _decode_single_action("secondary_beam_section_index")
+
+    #     # 7. Brace Section Index
+    #     self.current_brace_section_index = _decode_single_action("brace_section_index")
+
+    def _decode_action(self, action: np.ndarray):
+        if self.env_config["graph_type"] == "beam_as_node":
+            beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
+            beam_obj = self.current_structural_model.beams[beam_id]
+            frame_type = beam_obj.section
+            if frame_type.lower() in ["main", "secondary"]:
+                current_sec_idx_name = f"current_{frame_type.lower()}_beam_section_index"
+            else:
+                current_sec_idx_name = f"current_{frame_type.lower()}_section_index"
+            current_sec_idx = getattr(self, current_sec_idx_name)
+
+            section_idx_upper_bound = self.section_library.section_num_by_frame_type(frame_type.lower())
+            updated_sec_idx = np.clip(current_sec_idx + 1, 0, section_idx_upper_bound - 1)
+            setattr(self, current_sec_idx_name, updated_sec_idx)
         else:
-            brace_spacing = (1.3 * (self.current_main_beam_spacing / 2)).round(3)
-        self.current_brace_spacing = brace_spacing if brace_spacing > 0.3 else 0.3
-
-        def _decode_single_action(section_index_name):
-            cfg = param_map[section_index_name]
-            num_options = cfg["num_options"]
-            ## 1. interpret action as normalized index of the section
-            raw_idx = action_vector[cfg["action_idx"]] * (num_options - 1)  # Scale [0,1] to [0, N-1]
-            return np.clip(int(round(raw_idx)), 0, num_options - 1)
-
-            # ### 2. interpret action as increase or decrease of the section index
-            # current_section_index = getattr(self, f"current_{section_index_name}")
-            # if action_vector[cfg["action_idx"]] > 0.5:
-            #     updated_section_index = current_section_index + 1
-            # else:
-            #     updated_section_index = current_section_index - 1
-            # return np.clip(updated_section_index, 0, num_options - 1)
-
-        # 4. Frame Section Index
-        self.current_frame_section_index = _decode_single_action("frame_section_index")
-
-        # 5. Main Beam Section Index
-        self.current_main_beam_section_index = _decode_single_action("main_beam_section_index")
-
-        # 6. Secondary Beam Section Index
-        self.current_secondary_beam_section_index = _decode_single_action("secondary_beam_section_index")
-
-        # 7. Brace Section Index
-        self.current_brace_section_index = _decode_single_action("brace_section_index")
+            raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
+        return beam_id
 
     def _run_fem_analysis(self) -> Optional[Dict[str, float]]:
         # create mesh
-        mesh_params = MeshParameters(max_grid_size=0.2)
+        mesh_params = MeshParameters(max_grid_size=0.5)
         mesh_generator = MeshGenerator(self.current_structural_model, mesh_params)
         mesh_generator.generate_mesh()
         meshed_model = mesh_generator.meshed_model
@@ -334,9 +354,13 @@ class StructuralEnv(gym.Env):
         else:
             reward = -(2 - delta_c1 - delta_c2) * 10
 
+        self.logger.info(
+            f"Reward: {reward:.2f}, delta_c1: {delta_c1:.2f}, delta_c2: {delta_c2:.2f}, delta_v: {delta_v:.2f}"
+        )
+
         return reward
 
-    def step(self, action: np.ndarray):
+    def step(self, action: int):
         self._decode_action(action)
         self._current_step_count += 1
 

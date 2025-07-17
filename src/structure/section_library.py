@@ -88,6 +88,19 @@ class SectionLibrary:
     def section_counts(self) -> Dict[str, int]:
         return {section_type: len(self.sections[section_type]) for section_type in self.section_types}
 
+    def section_num_by_frame_type(self, frame_type: str) -> int:
+        frame_type = frame_type.lower()
+        if frame_type == "frame":
+            return len(self.sections["方钢"])
+        elif frame_type == "main":
+            return len(self.sections["H型钢-主梁"])
+        elif frame_type == "secondary":
+            return len(self.sections["H型钢-次梁"])
+        elif frame_type == "brace":
+            return len(self.sections["C型钢"])
+        else:
+            raise ValueError(f"Invalid frame type: {frame_type}")
+
     def _calculate_c_section_I(self, H: float, B: float, t: float) -> Tuple[float, float]:
         """
         计算C型钢的惯性矩

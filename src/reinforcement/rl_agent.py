@@ -5,8 +5,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from torch_geometric.nn import global_mean_pool
+from torch_geometric.nn import global_max_pool, global_mean_pool
 
+from src.graph.gnn_encoder import GraphSAGEEncoder
 from src.graph.hebg import HEBG
 
 
@@ -15,29 +16,27 @@ class Actor(nn.Module):
 
     def __init__(self, hebg_config: Dict[str, int], action_dim: int, hidden_dim: int = 256):
         super().__init__()
-        self.hebg = HEBG(
+        self.gnn_encoder = GraphSAGEEncoder(
             in_channels=hebg_config["in_channels"],
             hidden_channels=hebg_config["hidden_channels"],
             out_channels=hebg_config["out_channels"],
-            num_beam_types=hebg_config.get("num_beam_types", 4),
+            num_layers=hebg_config.get("num_layers", 4),
         )
         self.fc1 = nn.Linear(hebg_config["out_channels"], hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, action_dim)
+        self.fc3 = nn.Linear(hidden_dim, 1)
 
     def forward(self, data: Data) -> torch.Tensor:
-        node_features = self.hebg(data)
+        node_features = self.gnn_encoder(data)
 
-        if hasattr(data, "batch") and data.batch is not None:
-            batch_vector = data.batch
-        else:
-            batch_vector = torch.zeros(node_features.size(0), dtype=torch.long, device=node_features.device)
+        # if hasattr(data, "batch") and data.batch is not None:
+        #     batch_vector = data.batch
+        # else:
+        #     batch_vector = torch.zeros(node_features.size(0), dtype=torch.long, device=node_features.device)
 
-        graph_embedding = global_mean_pool(node_features, batch_vector)
-
-        x = F.relu(self.fc1(graph_embedding))
+        x = F.relu(self.fc1(node_features))
         x = F.relu(self.fc2(x))
-        return torch.sigmoid(self.fc3(x))
+        return self.fc3(x)
 
 
 class Critic(nn.Module):

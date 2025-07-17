@@ -5,13 +5,13 @@ structural_params:
   length: 7.2 # 舱体长度 (y方向，米)
   width: 3.6 # 舱体宽度 (x方向，米)
   height: 3.3 # 舱体高度 (z方向，米)
-  main_beam_spacing: 1.05 # 环向主梁间距 (米)
-  secondary_beam_spacing: 1.05 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
-  brace_spacing: 0.5 # 支撑梁间距 (米)
-  frame_section_index: 2
-  main_beam_section_index: 5
+  main_beam_spacing: 0.97 # 环向主梁间距 (米)
+  secondary_beam_spacing: 0.55 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
+  brace_spacing: 0.41 # 支撑梁间距 (米)
+  frame_section_index: 1
+  main_beam_section_index: 7
   secondary_beam_section_index: 7
-  brace_section_index: 4
+  brace_section_index: 16
   win_bottom: 1.0
   win_height: 1.5
   plate_thickness: 0.005
@@ -61,19 +61,21 @@ env_config:
 
 # 强化学习参数
 rl_params:
+  agent: "dqn"
+  lr: 1.0e-3
   actor_lr: 1.0e-4 # Actor网络学习率
   critic_lr: 1.0e-3 # Critic网络学习率
   gamma: 0.99 # 折扣因子
   tau: 0.005 # 目标网络软更新参数
   sigma: 0.2 # 探索高斯噪声的标准差
-  min_replay_buffer_fill: 4
-  batch_size: 1 # 批次大小
+  min_replay_buffer_fill: 100
+  batch_size: 32 # 批次大小
   buffer_size: 10000 # 经验回放缓冲区大小
-  update_interval: 1 # 更新间隔
+  update_interval: 10 # 更新间隔
   ddpg_fc_hidden_dim: 256 # 隐藏层大小
   max_episodes: 1000 # 最大训练回合数
-  max_steps_per_episode: 50 # 每个回合的最大步数
-  save_interval: 20 # 模型保存间隔
+  max_steps_per_episode: 64 # 每个回合的最大步数
+  save_interval: 100 # 模型保存间隔
   plot_interval: 1 # 训练指标绘制间隔
 
 # 图神经网络参数
