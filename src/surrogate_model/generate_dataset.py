@@ -20,7 +20,7 @@ def generate_single_sample(_):
         # 每个进程都需要自己的SectionLibrary和RandomStructure实例
         # 以避免状态共享并确保不同的随机数。
         section_library = SectionLibrary()
-        random_structure = RandomStructure(section_library, rng=np.random.default_rng())
+        random_structure = RandomStructure(section_library)
 
         # 1. 生成随机参数（不生成窗户）
         params = random_structure.generate_random_parameters(generate_windows=False)

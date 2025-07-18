@@ -85,7 +85,7 @@ def generate_and_validate_sample(predictor: GNNPredictor):
     """生成一个随机样本，运行有限元分析，并与GNN预测进行比较。"""
     try:
         # 1. 生成随机参数
-        random_structure_gen = RandomStructure(predictor.section_library, rng=np.random.default_rng())
+        random_structure_gen = RandomStructure(predictor.section_library)
         params = random_structure_gen.generate_random_parameters(generate_windows=False)
 
         # 2. 运行有限元分析获取真实值

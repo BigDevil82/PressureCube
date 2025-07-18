@@ -12,7 +12,7 @@ from src.utils.model_utils import ViewType
 class RandomStructure:
     """随机生成舱体结构参数的类"""
 
-    def __init__(self, section_library: SectionLibrary, rng: np.random.Generator = None):
+    def __init__(self, section_library: SectionLibrary):
         """
         初始化RandomStructure。
 
@@ -21,7 +21,6 @@ class RandomStructure:
         """
         self.section_library = section_library
         self.section_counts = self._get_section_counts()
-        self._rng = rng or np.random.default_rng()
 
         # 定义参数的随机取值范围
         self._length_options = np.arange(7.2, 12.01, 0.3)
@@ -55,7 +54,7 @@ class RandomStructure:
             self.fixed_width / 2 + main_beam_spacing / 2,
         ]
         for y_pos_on_left_face in pos_x_options:
-            if self._rng.random() < 0.5:  # 50%概率在左侧开窗
+            if np.random.random() < 0.5:  # 50%概率在左侧开窗
                 windows.append(
                     Window(
                         y_position=y_pos_on_left_face.round(3),
@@ -77,8 +76,8 @@ class RandomStructure:
 
         if len(possible_bays) > 0:
             for face in ["front", "back"]:
-                num_windows = self._rng.integers(1, min(4, len(possible_bays) + 1))  # 最多3个窗户
-                selected_bays = self._rng.choice(possible_bays, num_windows, replace=False)
+                num_windows = np.random.randint(1, min(4, len(possible_bays) + 1))  # 最多3个窗户
+                selected_bays = np.random.choice(possible_bays, num_windows, replace=False)
 
                 for bay_index in selected_bays:
                     # 窗户中线在所选跨的中间
@@ -104,11 +103,11 @@ class RandomStructure:
         Returns:
             StructuralParameters: 随机生成的结构参数实例。
         """
-        length = self._rng.choice(self._length_options).round(3)
-        main_beam_spacing = self._rng.choice(self._main_beam_spacing_options).round(3)
+        length = np.random.choice(self._length_options).round(3)
+        main_beam_spacing = np.random.choice(self._main_beam_spacing_options).round(3)
 
         # 支撑梁间距
-        num_spans = self._rng.integers(1, 4)
+        num_spans = np.random.randint(1, 4)
         if num_spans > 1:
             brace_spacing = (main_beam_spacing / num_spans).round(3)
         else:
@@ -120,10 +119,10 @@ class RandomStructure:
         secondary_beam_spacing = main_beam_spacing
 
         # 随机选择截面索引
-        frame_section_index = self._rng.integers(0, self.section_counts["方钢"])
-        main_beam_section_index = self._rng.integers(0, self.section_counts["H型钢-主梁"])
-        secondary_beam_section_index = self._rng.integers(0, self.section_counts["H型钢-次梁"])
-        brace_section_index = self._rng.integers(0, self.section_counts["C型钢"])
+        frame_section_index = np.random.randint(0, self.section_counts["方钢"])
+        main_beam_section_index = np.random.randint(0, self.section_counts["H型钢-主梁"])
+        secondary_beam_section_index = np.random.randint(0, self.section_counts["H型钢-次梁"])
+        brace_section_index = np.random.randint(0, self.section_counts["C型钢"])
 
         # 生成随机窗户
         windows = []
@@ -131,7 +130,7 @@ class RandomStructure:
             windows = self._generate_random_windows(length, main_beam_spacing)
 
         # 随机选择内压
-        pressure = self._rng.integers(25, 36)
+        pressure = np.random.randint(25, 36)
 
         return StructuralParameters(
             length=length,

@@ -45,7 +45,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def evaluate_on_prototypes(agent: Union[DDPGAgent, DQNAgent], config: dict, device: torch.device, seed: int):
+def evaluate_on_prototypes(agent: Union[DDPGAgent, DQNAgent], config: dict, device: torch.device):
     """
     用当前agent评估所有原型结构，返回平均reward和详细表现。
     """
@@ -57,7 +57,7 @@ def evaluate_on_prototypes(agent: Union[DDPGAgent, DQNAgent], config: dict, devi
     total_reward = 0
     agent.set_eval_mode()
     for proto_config in prototypes:
-        env = StructuralEnv(initial_params_config=proto_config, seed=seed)
+        env = StructuralEnv(initial_params_config=proto_config)
         state_pyg, info = env.reset()
         episode_reward = 0
         done = False
@@ -99,7 +99,7 @@ def train(args, config):
     hebg_config = config["hebg_config"]
     rl_params = config["rl_params"]
 
-    env = StructuralEnv(initial_params_config=args.config, seed=args.seed)
+    env = StructuralEnv(initial_params_config=args.config)
 
     # Determine HEBG in_channels from a sample observation
     sample_state, _ = env.reset()
@@ -227,22 +227,22 @@ def train(args, config):
         print()
 
         # 每10个episode评估一次当前模型在prototypes上的表现
-        if (episode + 1) % rl_params["eval_interval"] == 0:
-            eval_avg_reward, eval_results = evaluate_on_prototypes(agent, config, device, args.seed)
-            print(f"[Prototype Eval] Episode {episode+1}: avg_reward={eval_avg_reward:.2f}")
-            for res in eval_results:
-                print(
-                    f"  原型: {res['prototype']} | reward: {res['reward']:.2f} | displacement: {res['final_displacement']:.2f} | stress: {res['final_stress']:.2f} | feasible: {'是' if res['is_feasible'] else '否'}"
-                )
-            # 若当前模型优于历史最佳，则保存
-            if eval_avg_reward > best_eval_avg_reward:
-                best_eval_avg_reward = eval_avg_reward
-                best_model_save_path = os.path.join(args.model_save_path, "best_model.pth")
-                agent.save_model(best_model_save_path)
-                print(f"[Prototype Eval] 新最佳模型已保存到: {best_model_save_path}")
+        # if (episode + 1) % rl_params["eval_interval"] == 0:
+        #     eval_avg_reward, eval_results = evaluate_on_prototypes(agent, config, device)
+        #     print(f"[Prototype Eval] Episode {episode+1}: avg_reward={eval_avg_reward:.2f}")
+        #     for res in eval_results:
+        #         print(
+        #             f"  原型: {res['prototype']} | reward: {res['reward']:.2f} | displacement: {res['final_displacement']:.2f} | stress: {res['final_stress']:.2f} | feasible: {'是' if res['is_feasible'] else '否'}"
+        #         )
+        #     # 若当前模型优于历史最佳，则保存
+        #     if eval_avg_reward > best_eval_avg_reward:
+        #         best_eval_avg_reward = eval_avg_reward
+        #         best_model_save_path = os.path.join(args.model_save_path, "best_model.pth")
+        #         agent.save_model(best_model_save_path)
+        #         print(f"[Prototype Eval] 新最佳模型已保存到: {best_model_save_path}")
 
         # Save model periodically
-        if (episode + 1) % rl_params.get("save_interval", 100) == 0:
+        if (episode + 1) % rl_params["save_interval"] == 0:
             periodic_save_path = os.path.join(
                 args.model_save_path, f"{model_base_name}_episode_{episode+1}.pth"
             )
@@ -308,7 +308,7 @@ def test(args, config):
     checkpoint = torch.load(final_model_load_path, map_location=device)
     hebg_config = checkpoint.get("hebg_config")
 
-    env = StructuralEnv(initial_params_config=args.config, seed=args.seed)
+    env = StructuralEnv(initial_params_config=args.config)
     action_dim = env_config["action_dim"]
 
     agent = DDPGAgent(
@@ -394,6 +394,8 @@ def test(args, config):
 
 def main():
     args = parse_args()
+
+    # set seed globally
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     random.seed(args.seed)  # For replay buffer sampling consistency

@@ -8,10 +8,10 @@ structural_params:
   main_beam_spacing: 0.97 # 环向主梁间距 (米)
   secondary_beam_spacing: 0.55 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
   brace_spacing: 0.41 # 支撑梁间距 (米)
-  frame_section_index: 1
-  main_beam_section_index: 7
-  secondary_beam_section_index: 7
-  brace_section_index: 16
+  frame_section_index: 0
+  main_beam_section_index: 0
+  secondary_beam_section_index: 0
+  brace_section_index: 0
   win_bottom: 1.0
   win_height: 1.5
   plate_thickness: 0.005
@@ -65,7 +65,7 @@ rl_params:
   lr: 1.0e-3
   actor_lr: 1.0e-4 # Actor网络学习率
   critic_lr: 1.0e-3 # Critic网络学习率
-  gamma: 0.99 # 折扣因子
+  gamma: 0.98 # 折扣因子
   tau: 0.005 # 目标网络软更新参数
   sigma: 0.2 # 探索高斯噪声的标准差
   min_replay_buffer_fill: 100
@@ -74,8 +74,8 @@ rl_params:
   update_interval: 10 # 更新间隔
   ddpg_fc_hidden_dim: 256 # 隐藏层大小
   max_episodes: 1000 # 最大训练回合数
-  max_steps_per_episode: 64 # 每个回合的最大步数
-  eval_interval: 2 # 在原型结构上的评估间隔
+  max_steps_per_episode: 45 # 每个回合的最大步数
+  eval_interval: 20 # 在原型结构上的评估间隔
   save_interval: 100 # 模型保存间隔
   plot_interval: 1 # 训练指标绘制间隔
 
@@ -89,5 +89,3 @@ hebg_config:
 analysis_params:
   max_stress: 355 # 最大应力
   max_disp: 14.4 # 最大位移
-  check_drift: true # 是否检查层间位移角
-  max_drift_ratio: 0.005 # 最大层间位移角 (H/200)
