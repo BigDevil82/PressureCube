@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from datetime import datetime
 from typing import Dict, Optional, Union
 
 import gym
@@ -27,7 +28,8 @@ class StructuralEnv(gym.Env):
         initial_params_config: Union[str, dict],
     ):
         super(StructuralEnv, self).__init__()
-        self.logger = Logger("rewards")
+        ts = datetime.now().strftime("%m%d_%H%M")
+        self.logger = Logger(f"rewards_{ts}.log")
 
         self.section_library = SectionLibrary()
         self.opensees_analyzer = OpenSeesAnalyzer()
@@ -303,38 +305,77 @@ class StructuralEnv(gym.Env):
 
     #     return reward
 
-    def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
+    # def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
+    #     disp_constraint = self.max_disp
+    #     stress_constraint = self.max_stress
+
+    #     if max_disp_abs < disp_constraint:
+    #         delta_c1 = 1.0
+    #     else:
+    #         delta_c1 = (
+    #             (self._last_max_disp_abs - max_disp_abs)
+    #             / disp_constraint
+    #             / (max_disp_abs / disp_constraint + 1)
+    #         )
+
+    #     if max_stress < stress_constraint:
+    #         delta_c2 = 1.0
+    #     else:
+    #         delta_c2 = (
+    #             (self._last_max_stress - max_stress)
+    #             / stress_constraint
+    #             / (max_stress / stress_constraint + 1)
+    #         )
+
+    #     delta_v = model_volume - self._last_model_volume
+
+    #     if delta_c1 == 1 and delta_c2 == 1:
+    #         reward = -delta_v * 100 if delta_v < 0 else -delta_v * 200
+    #     else:
+    #         reward = -(2 - delta_c1 - delta_c2) * 10
+
+    #     # self.logger.info(
+    #     #     f"Reward: {reward:.2f}, delta_c1: {delta_c1:.2f}, delta_c2: {delta_c2:.2f}, delta_v: {delta_v:.2f}"
+    #     # )
+
+    #     return reward
+
+    def _calculate_reward(self, max_disp_abs, max_stress, model_volume):
         disp_constraint = self.max_disp
         stress_constraint = self.max_stress
 
-        if max_disp_abs < disp_constraint:
-            delta_c1 = 1.0
+        # 1. 计算约束满足度（0-1连续值）
+        # disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
+        # stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
+        # constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
+
+        # 2. 材料效率奖励（鼓励用更少材料满足约束）
+        # 基准材料用量（经验值或初始设计）
+        baseline_volume = 1.73
+        volume_efficiency = max(0.1, baseline_volume / model_volume)  # 当前用量/基准用量
+
+        # 3. 改进奖励（与上一步比较）
+        delta_disp = self._last_max_disp_abs - max_disp_abs
+        delta_stress = self._last_max_stress - max_stress
+        delta_volume = self._last_model_volume - model_volume
+
+        # 4. 核心奖励计算
+        if max_disp_abs < disp_constraint and max_stress < stress_constraint:
+            # 满足约束时的奖励 = 基础奖励 + 材料效率奖励
+            reward = 20.0 + 10 * volume_efficiency
+            self.logger.info(f"Reward: {reward:.2f}, volume_efficiency: {volume_efficiency:.2f}")
         else:
-            delta_c1 = (
-                (self._last_max_disp_abs - max_disp_abs)
-                / disp_constraint
-                / (max_disp_abs / disp_constraint + 1)
+            # 未满足时的奖励 = 约束改进奖励 + 材料节省奖励
+            improvement_reward = 10 * delta_disp / disp_constraint + delta_stress / stress_constraint
+            volume_penalty = 5 * delta_volume / baseline_volume
+            if volume_penalty == 0:
+                volume_penalty = -2
+
+            reward = improvement_reward + volume_penalty
+
+            self.logger.info(
+                f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}"
             )
-
-        if max_stress < stress_constraint:
-            delta_c2 = 1.0
-        else:
-            delta_c2 = (
-                (self._last_max_stress - max_stress)
-                / stress_constraint
-                / (max_stress / stress_constraint + 1)
-            )
-
-        delta_v = model_volume - self._last_model_volume
-
-        if delta_c1 == 1 and delta_c2 == 1:
-            reward = -delta_v * 100 if delta_v < 0 else -delta_v * 200
-        else:
-            reward = -(2 - delta_c1 - delta_c2) * 10
-
-        # self.logger.info(
-        #     f"Reward: {reward:.2f}, delta_c1: {delta_c1:.2f}, delta_c2: {delta_c2:.2f}, delta_v: {delta_v:.2f}"
-        # )
 
         return reward
 
@@ -377,6 +418,9 @@ class StructuralEnv(gym.Env):
                 info["max_stress"] = max_stress
                 info["model_volume_m3"] = current_model_volume
                 info["frame_length"] = self.current_params["length"]
+
+                if max_disp_abs < self.max_disp and max_stress < self.max_stress:
+                    terminated = True
 
             else:
                 reward = -10

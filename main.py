@@ -55,7 +55,7 @@ def evaluate_on_prototypes(agent: Union[DDPGAgent, DQNAgent], config: dict, devi
     )
     results = []
     total_reward = 0
-    agent.set_eval_mode()
+    agent.set_train_mode(True)
     for proto_config in prototypes:
         env = StructuralEnv(initial_params_config=proto_config)
         state_pyg, info = env.reset()
@@ -87,6 +87,7 @@ def evaluate_on_prototypes(agent: Union[DDPGAgent, DQNAgent], config: dict, devi
             }
         )
     avg_reward = total_reward / len(prototypes)
+    agent.set_train_mode(False)
     return avg_reward, results
 
 

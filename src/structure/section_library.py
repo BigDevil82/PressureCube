@@ -276,12 +276,21 @@ class SectionLibrary:
             except Exception as e:
                 print(f"Error processing C型钢 section {item.get('规格', 'Unknown')}: {e}")
 
-        self._sort_sections_by_Ix()
+        # self._sort_sections_by_Ix()
+        self._sort_sections_by_area()
 
     def _sort_sections_by_Ix(self):
         """按照Ix排序"""
         for section_type in self.sections:
             self.sections[section_type].sort(key=lambda x: x.Ix)
+            # reindex
+            for i, section in enumerate(self.sections[section_type]):
+                section.idx = i
+
+    def _sort_sections_by_area(self):
+        """按照面积排序"""
+        for section_type in self.sections:
+            self.sections[section_type].sort(key=lambda x: x.area)
             # reindex
             for i, section in enumerate(self.sections[section_type]):
                 section.idx = i
