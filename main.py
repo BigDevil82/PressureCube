@@ -154,7 +154,6 @@ def train(args, config):
         state_pyg, info_reset = env.reset(
             options={"random_structure": {"random_keys": ["length", "pressure"]}}
         )
-        current_frame_length = info_reset["frame_length"]
         step = 0
         episode_reward = 0
         done = False
@@ -215,7 +214,7 @@ def train(args, config):
         metrics_history["rewards"].append(episode_reward)
         metrics_history["max_displacements"].append(info["max_displacement_mm"])
         metrics_history["max_stresses"].append(info["max_stress"])
-        metrics_history["model_volumes"].append(info["model_volume_m3"] / current_frame_length)
+        metrics_history["model_volumes"].append(info["model_volume_m3"] / info_reset["base_volume"])
         metrics_history["steps"].append(step)  # Store number of steps taken
         metrics_history["episode_numbers"].append(episode + 1)
 

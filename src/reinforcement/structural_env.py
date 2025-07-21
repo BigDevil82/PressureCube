@@ -157,12 +157,18 @@ class StructuralEnv(gym.Env):
             raise ValueError("Failed to run FEM analysis at reset.")
 
         self._last_model_volume = self._calculate_model_volume()
+        self.base_volume = self._calculate_base_volume()
+        self.logger.info(
+            "\n\n"
+            + f"Start new episode: Length: {self.current_params['length']}, Pressure: {self.current_params['pressure']}, Base Volume: {self.base_volume:.2f}, Current Volume: {self._last_model_volume:.2f}"
+        )
 
         info = {
             "max_displacement_mm": self._last_max_disp_abs,
             "max_stress": self._last_max_stress,
             "model_volume_m3": self._last_model_volume,
             "frame_length": self.current_params["length"],
+            "base_volume": self.base_volume,
         }
         return self.current_pyg_data_state, info
 
@@ -239,7 +245,7 @@ class StructuralEnv(gym.Env):
 
     def _run_fem_analysis(self) -> Optional[Dict[str, float]]:
         # create mesh
-        mesh_params = MeshParameters(max_grid_size=0.2)
+        mesh_params = MeshParameters(max_grid_size=0.4)
         mesh_generator = MeshGenerator(self.current_structural_model, mesh_params)
         mesh_generator.generate_mesh()
         meshed_model = mesh_generator.meshed_model
@@ -343,44 +349,109 @@ class StructuralEnv(gym.Env):
 
     #     return reward
 
+    # def _calculate_reward(self, max_disp_abs, max_stress, model_volume):
+    #     disp_constraint = self.max_disp
+    #     stress_constraint = self.max_stress
+
+    #     # 1. 计算约束满足度（0-1连续值）
+    #     # disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
+    #     # stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
+    #     # constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
+
+    #     # 2. 材料效率奖励（鼓励用更少材料满足约束）
+    #     # 基准材料用量（经验值或初始设计）
+    #     baseline_volume = 1.73
+    #     volume_efficiency = max(0.1, baseline_volume / model_volume)  # 当前用量/基准用量
+
+    #     # 3. 改进奖励（与上一步比较）
+    #     delta_disp = self._last_max_disp_abs - max_disp_abs
+    #     delta_stress = self._last_max_stress - max_stress
+    #     delta_volume = self._last_model_volume - model_volume
+
+    #     # 4. 核心奖励计算
+    #     if max_disp_abs < disp_constraint and max_stress < stress_constraint:
+    #         # 满足约束时的奖励 = 基础奖励 + 材料效率奖励
+    #         reward = 20.0 + 10 * volume_efficiency
+    #         self.logger.info(f"Reward: {reward:.2f}, volume_efficiency: {volume_efficiency:.2f}")
+    #     else:
+    #         # 未满足时的奖励 = 约束改进奖励 + 材料节省奖励
+    #         improvement_reward = 30 * delta_disp / disp_constraint + delta_stress / stress_constraint
+    #         volume_penalty = 5 * delta_volume / baseline_volume
+    #         if volume_penalty == 0:
+    #             volume_penalty = -2
+
+    #         reward = improvement_reward + volume_penalty
+
+    #         self.logger.info(
+    #             f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}"
+    #         )
+
+    #     return reward
+
     def _calculate_reward(self, max_disp_abs, max_stress, model_volume):
         disp_constraint = self.max_disp
         stress_constraint = self.max_stress
 
-        # 1. 计算约束满足度（0-1连续值）
-        # disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
-        # stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
-        # constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
+        # 1. 计算标准化的材料效率
+        volume_ratio = model_volume / self.base_volume
 
-        # 2. 材料效率奖励（鼓励用更少材料满足约束）
-        # 基准材料用量（经验值或初始设计）
-        baseline_volume = 1.73
-        volume_efficiency = max(0.1, baseline_volume / model_volume)  # 当前用量/基准用量
+        # 2. 计算约束满足度
+        disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
+        stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
+        constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
 
-        # 3. 改进奖励（与上一步比较）
-        delta_disp = self._last_max_disp_abs - max_disp_abs
-        delta_stress = self._last_max_stress - max_stress
-        delta_volume = self._last_model_volume - model_volume
+        # 3. 计算安全裕度（鼓励接近边界）
+        disp_margin = (disp_constraint - max_disp_abs) / disp_constraint
+        stress_margin = (stress_constraint - max_stress) / stress_constraint
+        total_margin = disp_margin + stress_margin
 
         # 4. 核心奖励计算
         if max_disp_abs < disp_constraint and max_stress < stress_constraint:
-            # 满足约束时的奖励 = 基础奖励 + 材料效率奖励
-            reward = 20.0 + 10 * volume_efficiency
-            self.logger.info(f"Reward: {reward:.2f}, volume_efficiency: {volume_efficiency:.2f}")
-        else:
-            # 未满足时的奖励 = 约束改进奖励 + 材料节省奖励
-            improvement_reward = 10 * delta_disp / disp_constraint + delta_stress / stress_constraint
-            volume_penalty = 5 * delta_volume / baseline_volume
-            if volume_penalty == 0:
-                volume_penalty = -2
+            # 基础奖励
+            base_reward = 10.0
 
-            reward = improvement_reward + volume_penalty
+            # 材料效率奖励（二次函数鼓励接近最优）
+            efficiency_bonus = max(0, 10 * (1 - (volume_ratio - 0.9) ** 2))
 
+            # 安全裕度奖励（鼓励接近边界）
+            margin_bonus = max(0, 20 * (1 - total_margin))
+
+            reward = base_reward + efficiency_bonus + margin_bonus
             self.logger.info(
-                f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}"
+                f"Reward: {reward:.2f}, efficiency_bonus: {efficiency_bonus:.2f}, margin_bonus: {margin_bonus:.2f}, disp: {max_disp_abs:.2f}, stress: {max_stress:.2f}"
+            )
+        else:
+            # 改进奖励
+            disp_improvement = max(0, (self._last_max_disp_abs - max_disp_abs) / disp_constraint)
+            stress_improvement = max(0, (self._last_max_stress - max_stress) / stress_constraint)
+            improvement_reward = 30 * disp_improvement + stress_improvement
+
+            # 材料变化惩罚
+            volume_change = model_volume - self._last_model_volume
+            if volume_change < -0.01:  # 显著减少
+                volume_penalty = volume_change * 40
+            elif volume_change == 0:
+                volume_penalty = -2
+            elif volume_change < 0.02:  # 小幅变化
+                volume_penalty = volume_change * (-10)
+            else:  # 大幅增加
+                volume_penalty = volume_change * (-50)
+
+            reward = improvement_reward + volume_penalty + 5 * constraint_satisfaction
+            self.logger.info(
+                f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}, constraint_satisfaction: {constraint_satisfaction:.2f}"
             )
 
         return reward
+
+    def _calculate_base_volume(self):
+        """计算基于结构尺寸的基准材料用量"""
+        # 基于结构长度、跨度和荷载计算基准材料
+        length_factor = self.current_params["length"]
+        load_factor = self.current_params["pressure"] / 30  # 30是基准荷载
+
+        # 简单线性模型（实际中可用更复杂的公式）
+        return length_factor * (0.1 + 0.08 * load_factor)
 
     def step(self, action: int):
         self._decode_action(action)
