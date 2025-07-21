@@ -6,36 +6,50 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch_geometric.data import Batch
+from torch_geometric.data import Batch, Data
 
 from src.graph.gnn_encoder import GraphSAGEEncoder
 
 
 class GraphQNetwork(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, global_feature_dim):
         super().__init__()
         self.encoder = GraphSAGEEncoder(
             in_channels=state_dim, hidden_channels=64, out_channels=32, num_layers=3
         )
+        self.global_feature_encoder = nn.Sequential(
+            nn.Linear(global_feature_dim, 64), nn.ReLU(), nn.Linear(64, 32)
+        )
         self.q_head = nn.Sequential(
-            nn.Linear(32, 64), nn.ReLU(), nn.Linear(64, 1)  # Output Q-value for each node
+            nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, 1)  # Output Q-value for each node
         )
 
-    def forward(self, data):
+    def forward(self, data: Data):
         # Get node embeddings
         node_embeddings = self.encoder(data)
+        global_features: torch.Tensor = self.global_feature_encoder(data.global_features)
 
         # Compute Q-values for each node
-        q_values = self.q_head(node_embeddings)
 
         # For batch handling
         if hasattr(data, "batch") and data.batch is not None:
-            # Split Q-values by graphs in batch
             batch = data.batch
-            q_values = torch.split(q_values, torch.bincount(batch).tolist())
+            # repeat global features of each graph by the number of nodes in the graph
+            glb_feature_batch = []
+            node_nums_per_graph = torch.bincount(batch).tolist()
+            for i, node_num in enumerate(node_nums_per_graph):
+                glb_feature_batch.append(global_features[i : i + 1].repeat(node_num, 1))
+            global_features = torch.cat(glb_feature_batch, dim=0)
+
+            node_embeddings = torch.cat([node_embeddings, global_features], dim=1)
+            q_values = self.q_head(node_embeddings)
+            # Split Q-values by graphs in batch
+            q_values = torch.split(q_values, node_nums_per_graph)
         else:
             # Single graph
-            q_values = [q_values]
+            global_features = global_features.repeat(node_embeddings.size(0), 1)
+            node_embeddings = torch.cat([node_embeddings, global_features], dim=1)
+            q_values = [self.q_head(node_embeddings)]
 
         return q_values
 
@@ -44,7 +58,7 @@ class DQNAgent:
     def __init__(
         self,
         state_dim,
-        action_dim,
+        glb_feat_dim,
         device,
         gamma=0.99,
         lr=1e-3,
@@ -52,8 +66,8 @@ class DQNAgent:
     ):
 
         # Q-network and target network
-        self.q_net = GraphQNetwork(state_dim, action_dim).to(device)
-        self.target_net = GraphQNetwork(state_dim, action_dim).to(device)
+        self.q_net = GraphQNetwork(state_dim, glb_feat_dim).to(device)
+        self.target_net = GraphQNetwork(state_dim, glb_feat_dim).to(device)
         self.target_net.load_state_dict(self.q_net.state_dict())
 
         # Training components

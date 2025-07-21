@@ -130,7 +130,7 @@ class RandomStructure:
             windows = self._generate_random_windows(length, main_beam_spacing)
 
         # 随机选择内压
-        pressure = np.random.randint(25, 36)
+        pressure = np.random.randint(30, 50)
 
         return StructuralParameters(
             length=length,

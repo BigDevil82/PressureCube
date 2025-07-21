@@ -122,7 +122,7 @@ def train(args, config):
     else:
         agent = DQNAgent(
             state_dim=sample_state.x.size(1),
-            action_dim=env_config["action_dim"],
+            glb_feat_dim=sample_state.global_features.size(1),
             device=device,
             gamma=rl_params["gamma"],
             lr=rl_params["lr"],
@@ -151,7 +151,9 @@ def train(args, config):
 
     best_eval_avg_reward = -float("inf")
     for episode in range(args.max_episodes):
-        state_pyg, info_reset = env.reset(options={"random_structure": {"random_keys": ["length"]}})
+        state_pyg, info_reset = env.reset(
+            options={"random_structure": {"random_keys": ["length", "pressure"]}}
+        )
         current_frame_length = info_reset["frame_length"]
         step = 0
         episode_reward = 0

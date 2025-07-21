@@ -121,6 +121,7 @@ class StructuralEnv(gym.Env):
 
             env_info = {
                 "frame_length": self.current_params["length"],
+                "pressure": self.current_params["pressure"],
             }
             self.current_pyg_data_state = self.current_graph_converter.to_pyg_data(env_info)
         except Exception as e:
@@ -238,7 +239,7 @@ class StructuralEnv(gym.Env):
 
     def _run_fem_analysis(self) -> Optional[Dict[str, float]]:
         # create mesh
-        mesh_params = MeshParameters(max_grid_size=0.5)
+        mesh_params = MeshParameters(max_grid_size=0.2)
         mesh_generator = MeshGenerator(self.current_structural_model, mesh_params)
         mesh_generator.generate_mesh()
         meshed_model = mesh_generator.meshed_model
@@ -250,10 +251,12 @@ class StructuralEnv(gym.Env):
             return None
 
         # 填充梁端节点荷载
-        nodal_loads = self.current_structural_model.calc_node_load(self.current_params["pressure"] * 1e3)
+        nodal_loads = self.current_structural_model.calc_node_load(
+            self.current_params["pressure"] * 1e3
+        )  # 单位N
         for beam_id, beam_obj in self.current_structural_model.beams.items():
-            beam_obj.start_node_load = nodal_loads[beam_obj.start_node]
-            beam_obj.end_node_load = nodal_loads[beam_obj.end_node]
+            beam_obj.start_node_load = nodal_loads[beam_obj.start_node] / 1e3  # 单位kN
+            beam_obj.end_node_load = nodal_loads[beam_obj.end_node] / 1e3  # 单位kN
 
         # 填充梁的响应
         for beam_id, beam_obj in self.current_structural_model.beams.items():
@@ -479,7 +482,15 @@ class StructuralEnv(gym.Env):
 
 if __name__ == "__main__":
     env = StructuralEnv("config.yaml")
-    for i in range(3):
+    env.reset()
+    for i in range(1):
+        max_beam_load = -float("inf")
+        for beam_id, beam_obj in env.current_structural_model.beams.items():
+            if np.max(np.abs(beam_obj.start_node_load)) > max_beam_load:
+                max_beam_load = np.max(np.abs(beam_obj.start_node_load))
+            if np.max(np.abs(beam_obj.end_node_load)) > max_beam_load:
+                max_beam_load = np.max(np.abs(beam_obj.end_node_load))
+        print(f"Max Beam Load: {max_beam_load:.2f}")
         env.reset()
         env.render()
         print("-" * 100)

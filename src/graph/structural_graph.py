@@ -428,8 +428,8 @@ class BeamAsNodeGraph:
                 + list(centroid)
                 + [Ix, Iy, area]
                 + [max_disp_abs, max_stress]
-                # + beam.start_node_load.tolist()
-                # + beam.end_node_load.tolist()
+                + beam.start_node_load.tolist()
+                + beam.end_node_load.tolist()
                 # + [env_info["frame_length"]]
             )
             node_features_list.append(features)
@@ -483,10 +483,13 @@ class BeamAsNodeGraph:
             pyg_edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
             pyg_edge_attr = torch.tensor(edge_attr_list, dtype=torch.float)
 
+        global_features = [env_info["frame_length"], env_info["pressure"]]
+
         data = Data(x=pyg_x, edge_index=pyg_edge_index, edge_attr=pyg_edge_attr)
         data.num_nodes = pyg_x.size(0)
         data.node_type_ranges = type_ranges  # 各类型梁的索引范围
         data.edge_types = torch.tensor(edge_types, dtype=torch.long)  # 添加连接类型
+        data.global_features = torch.tensor([global_features], dtype=torch.float)
 
         return data
 
