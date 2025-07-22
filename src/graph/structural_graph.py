@@ -372,14 +372,14 @@ class BeamAsNodeGraph:
         # 按梁类型分层排序：框架梁 -> 主梁 -> 次梁 -> 支撑梁
         sorted_beam_ids = sorted(self.nodes.keys(), key=lambda bid: self.nodes[bid].beam_type.value)
 
-        # 记录各类型梁的索引范围
-        type_ranges = {}
-        current_idx = 0
-        for beam_type in [0, 1, 2, 3]:  # BeamType枚举值对应: 0-框架梁,1-主梁,2-次梁,3-支撑梁
-            type_ids = [bid for bid in sorted_beam_ids if self.nodes[bid].beam_type.value == beam_type]
-            if type_ids:
-                type_ranges[beam_type] = (current_idx, current_idx + len(type_ids) - 1)
-                current_idx += len(type_ids)
+        # # 记录各类型梁的索引范围
+        # type_ranges = {}
+        # current_idx = 0
+        # for beam_type in [0, 1, 2, 3]:  # BeamType枚举值对应: 0-框架梁,1-主梁,2-次梁,3-支撑梁
+        #     type_ids = [bid for bid in sorted_beam_ids if self.nodes[bid].beam_type.value == beam_type]
+        #     if type_ids:
+        #         type_ranges[beam_type] = (current_idx, current_idx + len(type_ids) - 1)
+        #         current_idx += len(type_ids)
 
         beam_id_to_pyg_idx = {beam_id: i for i, beam_id in enumerate(sorted_beam_ids)}
         self.pyg_idx_to_beam_id = {i: beam_id for beam_id, i in beam_id_to_pyg_idx.items()}
@@ -487,7 +487,7 @@ class BeamAsNodeGraph:
 
         data = Data(x=pyg_x, edge_index=pyg_edge_index, edge_attr=pyg_edge_attr)
         data.num_nodes = pyg_x.size(0)
-        data.node_type_ranges = type_ranges  # 各类型梁的索引范围
+        # data.node_type_ranges = type_ranges  # 各类型梁的索引范围
         data.edge_types = torch.tensor(edge_types, dtype=torch.long)  # 添加连接类型
         data.global_features = torch.tensor([global_features], dtype=torch.float)
 

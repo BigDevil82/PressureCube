@@ -195,6 +195,15 @@ def train(args, config):
                 next_states_list = [e[3] for e in experiences]
                 dones_tensor = torch.stack([e[4] for e in experiences])
 
+                # # 检查字典类型的属性
+                # for state in states_list:
+                #     for key in state.keys:
+                #         if isinstance(getattr(state, key), dict):
+                #             dict_attr = getattr(state, key)
+                #             print(f"Dict attribute '{key}': keys={list(dict_attr.keys())}")
+                #             if 3 not in dict_attr:  # 检查是否缺少键3
+                #                 print(f"⚠️ Missing key '3' in {key}!")
+
                 # Batch PyG Data objects
                 state_batch_pyg = Batch.from_data_list(states_list).to(device)
                 next_state_batch_pyg = Batch.from_data_list(next_states_list).to(device)
