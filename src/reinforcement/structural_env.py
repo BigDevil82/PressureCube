@@ -225,45 +225,45 @@ class StructuralEnv(gym.Env):
     #     # 7. Brace Section Index
     #     self.current_brace_section_index = _decode_single_action("brace_section_index")
 
-    # def _decode_action(self, action: np.ndarray):
-    #     if self.env_config["graph_type"] == "beam_as_node":
-    #         beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
-    #         beam_obj = self.current_structural_model.beams[beam_id]
-    #         frame_type = beam_obj.section
-    #         if frame_type.lower() in ["main", "secondary"]:
-    #             current_sec_idx_name = f"{frame_type.lower()}_beam_section_index"
-    #         else:
-    #             current_sec_idx_name = f"{frame_type.lower()}_section_index"
-    #         current_sec_idx = self.current_params[current_sec_idx_name]
-
-    #         section_idx_upper_bound = self.section_library.section_num_by_frame_type(frame_type.lower())
-    #         updated_sec_idx = np.clip(current_sec_idx + 1, 0, section_idx_upper_bound - 1)
-    #         self.current_params[current_sec_idx_name] = updated_sec_idx
-    #     else:
-    #         raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
-    #     return beam_id
-
     def _decode_action(self, action: np.ndarray):
-        # main_beam_spacing_range = np.linspace(1.8, 0.3, 16)
-        # brace_spacing_range = np.linspace(1.0, 0.1, 10)
         if self.env_config["graph_type"] == "beam_as_node":
             beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
             beam_obj = self.current_structural_model.beams[beam_id]
             frame_type = beam_obj.section
             if frame_type.lower() in ["main", "secondary"]:
-                current_beam_spacing_name = f"main_beam_spacing"
-                current_beam_spacing = self.current_params[current_beam_spacing_name]
-                updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.1, 1.8)
-            elif frame_type.lower() == "brace":
-                current_beam_spacing_name = f"brace_spacing"
-                current_beam_spacing = self.current_params[current_beam_spacing_name]
-                updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.1, 1.0)
+                current_sec_idx_name = f"{frame_type.lower()}_beam_section_index"
             else:
-                return None
-            self.current_params[current_beam_spacing_name] = updated_beam_spacing
+                current_sec_idx_name = f"{frame_type.lower()}_section_index"
+            current_sec_idx = self.current_params[current_sec_idx_name]
+
+            section_idx_upper_bound = self.section_library.section_num_by_frame_type(frame_type.lower())
+            updated_sec_idx = np.clip(current_sec_idx + 1, 0, section_idx_upper_bound - 1)
+            self.current_params[current_sec_idx_name] = updated_sec_idx
         else:
             raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
         return beam_id
+
+    # def _decode_action(self, action: np.ndarray):
+    #     # main_beam_spacing_range = np.linspace(1.8, 0.3, 16)
+    #     # brace_spacing_range = np.linspace(1.0, 0.1, 10)
+    #     if self.env_config["graph_type"] == "beam_as_node":
+    #         beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
+    #         beam_obj = self.current_structural_model.beams[beam_id]
+    #         frame_type = beam_obj.section
+    #         if frame_type.lower() in ["main", "secondary"]:
+    #             current_beam_spacing_name = f"main_beam_spacing"
+    #             current_beam_spacing = self.current_params[current_beam_spacing_name]
+    #             updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.8)
+    #         elif frame_type.lower() == "brace":
+    #             current_beam_spacing_name = f"brace_spacing"
+    #             current_beam_spacing = self.current_params[current_beam_spacing_name]
+    #             updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.0)
+    #         else:
+    #             return None
+    #         self.current_params[current_beam_spacing_name] = updated_beam_spacing
+    #     else:
+    #         raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
+    #     return beam_id
 
     def _run_fem_analysis(self) -> Optional[Dict[str, float]]:
         # create mesh
@@ -482,7 +482,7 @@ class StructuralEnv(gym.Env):
         if delta_disp > 0 and delta_stress > 0:
             delta0 = 0.01
             r0 = 10
-            reward = 40 + 100 / delta - model_volume * model_volume
+            reward = 40 + 50 / delta - 3 * model_volume * model_volume
         else:
             reward = delta
 
