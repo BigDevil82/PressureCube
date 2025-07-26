@@ -17,7 +17,7 @@ from src.structure.structural_model import (
     Window,
 )
 from src.utils.logger import Logger
-from src.utils.model_utils import load_config
+from src.utils.model_utils import create_structural_model, load_config
 
 
 class StructuralEnv(gym.Env):
@@ -61,6 +61,34 @@ class StructuralEnv(gym.Env):
         self._last_max_disp_abs = 0.0
         self._last_max_stress = 0.0
         self._last_model_volume = 0.0
+
+    def _calculate_volume_for_params(self, params_dict: dict) -> float:
+        """根据给定的参数字典计算并返回结构体积"""
+        # 创建一个临时的配置对象
+        temp_config = {"structural_params": params_dict}
+        # 使用工具函数创建模型
+        model = create_structural_model(temp_config)
+        # 计算并返回体积
+        return model.calculate_mass() / 7850.0
+
+    def _calculate_volume_bounds(self):
+        """计算当前结构参数下的最小和最大可能体积"""
+        # 最小体积参数
+        min_params = self.current_params.copy()
+        min_params["frame_section_index"] = 0
+        min_params["main_beam_section_index"] = 0
+        min_params["secondary_beam_section_index"] = 0
+        min_params["brace_section_index"] = 0
+        self.min_volume = self._calculate_volume_for_params(min_params)
+
+        # 最大体积参数
+        max_params = self.current_params.copy()
+        section_counts = self.section_library.section_counts
+        max_params["frame_section_index"] = section_counts["方钢"] - 1
+        max_params["main_beam_section_index"] = section_counts["H型钢-主梁"] - 1
+        max_params["secondary_beam_section_index"] = section_counts["H型钢-次梁"] - 1
+        max_params["brace_section_index"] = section_counts["C型钢"] - 1
+        self.max_volume = self._calculate_volume_for_params(max_params)
 
     def _get_current_structural_parameters_obj(self) -> StructuralParameters:
         """
@@ -157,10 +185,12 @@ class StructuralEnv(gym.Env):
             raise ValueError("Failed to run FEM analysis at reset.")
 
         self._last_model_volume = self._calculate_model_volume()
-        self.base_volume = self._calculate_base_volume()
+        self._calculate_volume_bounds()
+        self.normalized_volume = self._calculate_normalized_volume(self._last_model_volume)
+
         self.logger.info(
             "\n\n"
-            + f"Start new episode: Length: {self.current_params['length']}, Pressure: {self.current_params['pressure']}, Base Volume: {self.base_volume:.2f}, Current Volume: {self._last_model_volume:.2f}"
+            + f"Start new episode: Length: {self.current_params['length']}, Pressure: {self.current_params['pressure']}, Volumn bounds: {self.min_volume:.2f} ~ {self.max_volume:.2f}, Current Volume: {self._last_model_volume:.2f}, Total Force: {self.total_force_kN:.2f} kN"
         )
 
         info = {
@@ -168,7 +198,7 @@ class StructuralEnv(gym.Env):
             "max_stress": self._last_max_stress,
             "model_volume_m3": self._last_model_volume,
             "frame_length": self.current_params["length"],
-            "base_volume": self.base_volume,
+            "normalized_volume": self.normalized_volume,
         }
         return self.current_pyg_data_state, info
 
@@ -225,7 +255,7 @@ class StructuralEnv(gym.Env):
     #     # 7. Brace Section Index
     #     self.current_brace_section_index = _decode_single_action("brace_section_index")
 
-    def _decode_action(self, action: np.ndarray):
+    def _decode_action_for_size(self, action: np.ndarray):
         if self.env_config["graph_type"] == "beam_as_node":
             beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
             beam_obj = self.current_structural_model.beams[beam_id]
@@ -243,27 +273,27 @@ class StructuralEnv(gym.Env):
             raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
         return beam_id
 
-    # def _decode_action(self, action: np.ndarray):
-    #     # main_beam_spacing_range = np.linspace(1.8, 0.3, 16)
-    #     # brace_spacing_range = np.linspace(1.0, 0.1, 10)
-    #     if self.env_config["graph_type"] == "beam_as_node":
-    #         beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
-    #         beam_obj = self.current_structural_model.beams[beam_id]
-    #         frame_type = beam_obj.section
-    #         if frame_type.lower() in ["main", "secondary"]:
-    #             current_beam_spacing_name = f"main_beam_spacing"
-    #             current_beam_spacing = self.current_params[current_beam_spacing_name]
-    #             updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.8)
-    #         elif frame_type.lower() == "brace":
-    #             current_beam_spacing_name = f"brace_spacing"
-    #             current_beam_spacing = self.current_params[current_beam_spacing_name]
-    #             updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.0)
-    #         else:
-    #             return None
-    #         self.current_params[current_beam_spacing_name] = updated_beam_spacing
-    #     else:
-    #         raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
-    #     return beam_id
+    def _decode_action_for_spacing(self, action: np.ndarray):
+        # main_beam_spacing_range = np.linspace(1.8, 0.3, 16)
+        # brace_spacing_range = np.linspace(1.0, 0.1, 10)
+        if self.env_config["graph_type"] == "beam_as_node":
+            beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
+            beam_obj = self.current_structural_model.beams[beam_id]
+            frame_type = beam_obj.section
+            if frame_type.lower() in ["main", "secondary"]:
+                current_beam_spacing_name = f"main_beam_spacing"
+                current_beam_spacing = self.current_params[current_beam_spacing_name]
+                updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.8)
+            elif frame_type.lower() == "brace":
+                current_beam_spacing_name = f"brace_spacing"
+                current_beam_spacing = self.current_params[current_beam_spacing_name]
+                updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.0)
+            else:
+                return None
+            self.current_params[current_beam_spacing_name] = updated_beam_spacing
+        else:
+            raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
+        return beam_id
 
     def _run_fem_analysis(self) -> Optional[Dict[str, float]]:
         # create mesh
@@ -274,6 +304,7 @@ class StructuralEnv(gym.Env):
 
         self.opensees_analyzer.setup_opensees_model(mesh_generator.meshed_model)
         self.opensees_analyzer.apply_gravity_and_pressure_loads(self.current_params["pressure"] * 1e3)
+        self.total_force_kN = self.opensees_analyzer.total_equi_force_N / 1e3
         static_success = self.opensees_analyzer.run_static_analysis()
         if not static_success:
             return None
@@ -410,63 +441,63 @@ class StructuralEnv(gym.Env):
 
     #     return reward
 
-    # def _calculate_reward(self, max_disp_abs, max_stress, model_volume):
-    #     disp_constraint = self.max_disp
-    #     stress_constraint = self.max_stress
+    def _calculate_reward_for_size(self, max_disp_abs, max_stress, model_volume):
+        disp_constraint = self.max_disp
+        stress_constraint = self.max_stress
 
-    #     # 1. 计算标准化的材料效率
-    #     volume_ratio = model_volume / self.base_volume
+        # 1. 计算标准化的材料效率
+        volume_ratio = model_volume / self.base_volume
 
-    #     # 2. 计算约束满足度
-    #     disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
-    #     stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
-    #     constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
+        # 2. 计算约束满足度
+        disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
+        stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
+        constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
 
-    #     # 3. 计算安全裕度（鼓励接近边界）
-    #     disp_margin = (disp_constraint - max_disp_abs) / disp_constraint
-    #     stress_margin = (stress_constraint - max_stress) / stress_constraint
-    #     total_margin = disp_margin + stress_margin
+        # 3. 计算安全裕度（鼓励接近边界）
+        disp_margin = (disp_constraint - max_disp_abs) / disp_constraint
+        stress_margin = (stress_constraint - max_stress) / stress_constraint
+        total_margin = disp_margin + stress_margin
 
-    #     # 4. 核心奖励计算
-    #     if max_disp_abs < disp_constraint and max_stress < stress_constraint:
-    #         # 基础奖励
-    #         base_reward = 10.0
+        # 4. 核心奖励计算
+        if max_disp_abs < disp_constraint and max_stress < stress_constraint:
+            # 基础奖励
+            base_reward = 10.0
 
-    #         # 材料效率奖励（二次函数鼓励接近最优）
-    #         efficiency_bonus = max(0, 10 * (1 - (volume_ratio - 0.9) ** 2))
+            # 材料效率奖励（二次函数鼓励接近最优）
+            efficiency_bonus = max(0, 10 * (1 - (volume_ratio - 0.9) ** 2))
 
-    #         # 安全裕度奖励（鼓励接近边界）
-    #         margin_bonus = max(0, 20 * (1 - total_margin))
+            # 安全裕度奖励（鼓励接近边界）
+            margin_bonus = max(0, 20 * (1 - total_margin))
 
-    #         reward = base_reward + efficiency_bonus + margin_bonus
-    #         self.logger.info(
-    #             f"Reward: {reward:.2f}, efficiency_bonus: {efficiency_bonus:.2f}, margin_bonus: {margin_bonus:.2f}, disp: {max_disp_abs:.2f}, stress: {max_stress:.2f}"
-    #         )
-    #     else:
-    #         # 改进奖励
-    #         disp_improvement = max(0, (self._last_max_disp_abs - max_disp_abs) / disp_constraint)
-    #         stress_improvement = max(0, (self._last_max_stress - max_stress) / stress_constraint)
-    #         improvement_reward = 30 * disp_improvement + stress_improvement
+            reward = base_reward + efficiency_bonus + margin_bonus
+            self.logger.info(
+                f"Reward: {reward:.2f}, efficiency_bonus: {efficiency_bonus:.2f}, margin_bonus: {margin_bonus:.2f}, disp: {max_disp_abs:.2f}, stress: {max_stress:.2f}"
+            )
+        else:
+            # 改进奖励
+            disp_improvement = max(0, (self._last_max_disp_abs - max_disp_abs) / disp_constraint)
+            stress_improvement = max(0, (self._last_max_stress - max_stress) / stress_constraint)
+            improvement_reward = 30 * disp_improvement + stress_improvement
 
-    #         # 材料变化惩罚
-    #         volume_change = model_volume - self._last_model_volume
-    #         if volume_change < -0.01:  # 显著减少
-    #             volume_penalty = volume_change * 40
-    #         elif volume_change == 0:
-    #             volume_penalty = -2
-    #         elif volume_change < 0.02:  # 小幅变化
-    #             volume_penalty = volume_change * (-10)
-    #         else:  # 大幅增加
-    #             volume_penalty = volume_change * (-50)
+            # 材料变化惩罚
+            volume_change = model_volume - self._last_model_volume
+            if volume_change < -0.01:  # 显著减少
+                volume_penalty = volume_change * 40
+            elif volume_change == 0:
+                volume_penalty = -2
+            elif volume_change < 0.02:  # 小幅变化
+                volume_penalty = volume_change * (-10)
+            else:  # 大幅增加
+                volume_penalty = volume_change * (-50)
 
-    #         reward = improvement_reward + volume_penalty + 5 * constraint_satisfaction
-    #         self.logger.info(
-    #             f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}, constraint_satisfaction: {constraint_satisfaction:.2f}"
-    #         )
+            reward = improvement_reward + volume_penalty + 5 * constraint_satisfaction
+            self.logger.info(
+                f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}, constraint_satisfaction: {constraint_satisfaction:.2f}"
+            )
 
-    #     return reward
+        return reward
 
-    def _calculate_reward(self, max_disp_abs, max_stress, model_volume):
+    def _calculate_reward_for_spacing(self, max_disp_abs, max_stress, model_volume):
         disp_constraint = self.max_disp
         stress_constraint = self.max_stress
 
@@ -477,6 +508,9 @@ class StructuralEnv(gym.Env):
         delta = (delta_disp + delta_stress) * 0.1
 
         if delta_volume == 0:
+            self.logger.info(
+                f"delta_volume: {delta_volume:.2f}, delta_disp: {delta_disp:.2f}, delta_stress: {delta_stress:.2f}, delta: {delta:.2f}"
+            )
             return -50
 
         if delta_disp > 0 and delta_stress > 0:
@@ -492,17 +526,20 @@ class StructuralEnv(gym.Env):
 
         return reward
 
-    def _calculate_base_volume(self):
-        """计算基于结构尺寸的基准材料用量"""
-        # 基于结构长度、跨度和荷载计算基准材料
-        length_factor = self.current_params["length"]
-        load_factor = self.current_params["pressure"] / 30  # 30是基准荷载
+    def _calculate_normalized_volume(self, model_volume: float) -> float:
+        """计算归一化的材料用量"""
+        return (model_volume - self.min_volume) / (self.max_volume - self.min_volume)
 
-        # 简单线性模型（实际中可用更复杂的公式）
-        return length_factor * (0.1 + 0.08 * load_factor)
+    def _calculate_volume_efficiency(self, model_volume: float) -> float:
+        return self.total_force_kN / model_volume * 1e-3  # kN/dm³
 
     def step(self, action: int):
-        self._decode_action(action)
+        if self.env_config["opt_type"] == "size":
+            self._decode_action_for_size(action)
+        elif self.env_config["opt_type"] == "spacing":
+            self._decode_action_for_spacing(action)
+        else:
+            raise ValueError(f"Invalid opt type: {self.env_config['opt_type']}")
         self._current_step_count += 1
 
         generation_success, max_indicators = self._generate_model_and_state_from_current_params()
@@ -520,17 +557,24 @@ class StructuralEnv(gym.Env):
         ):
             reward = -10
             terminated = True
+            print("Failed to generate valid structural model or PyG data from action.")
             info["error"] = "Failed to generate valid structural model or PyG data from action."
             return next_state, reward, terminated, truncated, info
 
         current_model_volume = self._calculate_model_volume()
-        # Perform OpenSees Analysis
         try:
 
             if max_indicators:
                 max_disp_abs = max_indicators["max_abs_displacement"]
                 max_stress = max_indicators["max_abs_stress"]
-                reward = self._calculate_reward(max_disp_abs, max_stress, current_model_volume)
+                if self.env_config["opt_type"] == "size":
+                    reward = self._calculate_reward_for_size(max_disp_abs, max_stress, current_model_volume)
+                elif self.env_config["opt_type"] == "spacing":
+                    reward = self._calculate_reward_for_spacing(
+                        max_disp_abs, max_stress, current_model_volume
+                    )
+                else:
+                    raise ValueError(f"Invalid opt type: {self.env_config['opt_type']}")
 
                 self._last_max_disp_abs = max_disp_abs
                 self._last_max_stress = max_stress
@@ -540,11 +584,14 @@ class StructuralEnv(gym.Env):
                 info["max_stress"] = max_stress
                 info["model_volume_m3"] = current_model_volume
                 info["frame_length"] = self.current_params["length"]
+                info["normalized_volume"] = self._calculate_normalized_volume(current_model_volume)
+                info["volume_efficiency"] = self._calculate_volume_efficiency(current_model_volume)
 
                 if max_disp_abs < self.max_disp and max_stress < self.max_stress:
                     terminated = True
 
             else:
+                print("OpenSees static analysis failed.")
                 reward = -10
                 terminated = True
                 info["error"] = "OpenSees static analysis failed."
