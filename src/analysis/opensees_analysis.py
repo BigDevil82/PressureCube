@@ -830,6 +830,7 @@ class OpenSeesAnalyzer:
                 logger.error(f"Error processing pressure load for plate {plate_id}: {e}")
 
         self.pressure_load_applied = True
+        self.total_equi_force_N = total_equivalent_force
         logger.info(f"Pressure loads converted and applied to {pressure_loads_applied} nodes.")
         logger.info(f"Total equivalent force: {total_equivalent_force:.2f} N")
         logger.info(f"Pressure magnitude: {internal_pressure_pa} Pa ({pressure_mpa:.6f} MPa)")
@@ -1242,7 +1243,9 @@ if __name__ == "__main__":
     mesh_generator = MeshGenerator(model, mesh_params)
     mesh_generator.generate_mesh()
     model = mesh_generator.meshed_model
-    print("结构总质量: ", model.calculate_mass() / 1000, "t")
+    total_mass = model.calculate_mass()
+    print("结构总质量: ", f"{total_mass / 1000:.2f}", "t")
+    print("结构总体积: ", f"{total_mass / 7850.0:.2f}", "m³")
 
     analyzer = OpenSeesAnalyzer()
     try:
@@ -1270,35 +1273,35 @@ if __name__ == "__main__":
         max_nodal_coord = model.points[max_nodal_idx].coordinates()
         print("max_nodal_coord: ", max_nodal_coord)
 
-        ########################  modal analysis  ########################
-        num_modes = 6
-        with Timer("modal analysis cost"):
-            modal_results = analyzer.run_modal_analysis(num_modes=num_modes)
-            frequencies_hz, periods_s = analyzer._process_modal_analysis_results(modal_results)
+        # ########################  modal analysis  ########################
+        # num_modes = 6
+        # with Timer("modal analysis cost"):
+        #     modal_results = analyzer.run_modal_analysis(num_modes=num_modes)
+        #     frequencies_hz, periods_s = analyzer._process_modal_analysis_results(modal_results)
 
-        # analyzer.visualize_model()
-        modal_participation = analyzer.calculate_modal_participation_factors(numModes=num_modes)
-        data = []
-        for i in range(num_modes):
-            data.append(
-                [
-                    # f"Mode {i+1}",
-                    periods_s[i],
-                    frequencies_hz[i],
-                    modal_participation[i, 0],
-                    modal_participation[i, 1],
-                    modal_participation[i, 2],
-                ]
-            )
-        components = [
-            # "mode",
-            "periods(s)",
-            "freq(Hz)",
-            "φ_x(%)",
-            "φ_y(%)",
-            "φ_z(%)",
-        ]
-        fmt_display_components(np.array(data), components, "modal analysis results")
+        # # analyzer.visualize_model()
+        # modal_participation = analyzer.calculate_modal_participation_factors(numModes=num_modes)
+        # data = []
+        # for i in range(num_modes):
+        #     data.append(
+        #         [
+        #             # f"Mode {i+1}",
+        #             periods_s[i],
+        #             frequencies_hz[i],
+        #             modal_participation[i, 0],
+        #             modal_participation[i, 1],
+        #             modal_participation[i, 2],
+        #         ]
+        #     )
+        # components = [
+        #     # "mode",
+        #     "periods(s)",
+        #     "freq(Hz)",
+        #     "φ_x(%)",
+        #     "φ_y(%)",
+        #     "φ_z(%)",
+        # ]
+        # fmt_display_components(np.array(data), components, "modal analysis results")
 
         # analyzer.visualize_model()
 
