@@ -163,6 +163,15 @@ def plot_progress(
         linestyle="-",
         markersize=2,
     )
+    axs[1, 1].plot(
+        x_values,
+        metrics_history["volume_efficiencies"],
+        label="Volume Efficiency",
+        color="orange",
+        marker="o",
+        linestyle="-",
+        markersize=2,
+    )
     axs[1, 1].set_ylabel("Model Volume (m³)")
     axs[1, 1].set_xlabel(x_axis_label)
     axs[1, 1].set_title(f"Structure Volume per {x_axis_label}")

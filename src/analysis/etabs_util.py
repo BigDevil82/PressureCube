@@ -230,7 +230,7 @@ def define_Steel_Mat(
         ret_add = sap_model.PropMaterial.AddMaterial(
             material_name, MatType.Steel.value, "China", "GB", steel_level
         )
-        if ret_add != 0:
+        if ret_add[-1] != 0:
             # Non-zero might mean it exists. Some APIs are fine, others require Get/Set.
             # For now, we print a note and proceed. The decorator will report failure if subsequent calls fail.
             print(

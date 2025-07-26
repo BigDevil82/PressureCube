@@ -539,7 +539,7 @@ if __name__ == "__main__":
 
     from src.utils.model_utils import create_structural_model, load_config
 
-    config = load_config("config.yaml")
+    config = load_config("configs/opt_size_config.yaml")
     structural_model_instance = create_structural_model(config)
 
     if structural_model_instance:
