@@ -134,7 +134,7 @@ class DQNAgent:
         self.q_net.load_state_dict(torch.load(path))
         self.target_net.load_state_dict(self.q_net.state_dict())
 
-    def set_train_mode(self, eval=False):
+    def set_mode(self, eval=False):
         """Sets the networks to evaluation mode."""
         if eval:
             self.q_net.eval()

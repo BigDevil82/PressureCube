@@ -2,15 +2,15 @@
 
 # 结构参数
 structural_params:
-  length: 7.2 # 舱体长度 (y方向，米)
+  length: 12 # 舱体长度 (y方向，米)
   width: 3.6 # 舱体宽度 (x方向，米)
   height: 3.3 # 舱体高度 (z方向，米)
-  main_beam_spacing: 1.8 # 环向主梁间距 (米)
-  secondary_beam_spacing: 1.8 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
-  brace_spacing: 1.0 # 支撑梁间距 (米)
-  frame_section_index: 0
-  main_beam_section_index: 9
-  secondary_beam_section_index: 0
+  main_beam_spacing: 1.05 # 环向主梁间距 (米)
+  secondary_beam_spacing: 1.05 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
+  brace_spacing: 0.5 # 支撑梁间距 (米)
+  frame_section_index: 2 # □150×6
+  main_beam_section_index: 10 # HW150×150
+  secondary_beam_section_index: 2 #HN100×50
   brace_section_index: 19
   win_bottom: 1.0
   win_height: 1.5
@@ -31,6 +31,7 @@ structural_params:
 # 环境动作参数
 env_config:
   graph_type: beam_as_node # beam_as_node | beam_as_edge
+  opt_type: spacing # size | spacing
   action_dim: 6
   parameter_action_mapping:
     frame_section_index:

@@ -164,7 +164,7 @@ class DDPGAgent:
         self.critic_optimizer.load_state_dict(checkpoint["critic_optimizer_state_dict"])
         self.hebg_config = checkpoint["hebg_config"]
 
-    def set_train_mode(self, eval=False):
+    def set_mode(self, eval=False):
         """Sets the networks to evaluation mode."""
         if eval:
             self.actor.eval()

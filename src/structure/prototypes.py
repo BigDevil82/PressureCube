@@ -1,9 +1,7 @@
 import copy
 
-from src.utils.model_utils import load_config
 
-
-def get_prototype_configs(config_path="config.yaml"):
+def get_prototype_configs(base_config: dict):
     """
     加载基础配置并生成三个具有不同长度的原型结构配置。
 
@@ -13,7 +11,6 @@ def get_prototype_configs(config_path="config.yaml"):
     Returns:
         list: 包含三个原型配置字典的列表。
     """
-    base_config = load_config(config_path)
     prototypes = []
 
     lengths = [7.2, 9.6, 12.0]

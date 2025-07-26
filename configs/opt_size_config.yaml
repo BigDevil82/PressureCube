@@ -15,7 +15,7 @@ structural_params:
   win_bottom: 1.0
   win_height: 1.5
   plate_thickness: 0.005
-  pressure: 30 # 内压，kPa
+  pressure: 36 # 内压，kPa
   windows:
     [] # 窗户参数列表
     # - y_position: 1.275 # 窗户中心在y轴的位置 (米)
@@ -31,6 +31,7 @@ structural_params:
 # 环境动作参数
 env_config:
   graph_type: beam_as_node # beam_as_node | beam_as_edge
+  opt_type: size # size | spacing
   action_dim: 6
   parameter_action_mapping:
     frame_section_index:

@@ -50,13 +50,14 @@ def evaluate_on_prototypes(agent: Union[DDPGAgent, DQNAgent], config: dict, devi
     用当前agent评估所有原型结构，返回平均reward和详细表现。
     """
 
-    prototypes = get_prototype_configs(
-        config_path=config["config_path"] if "config_path" in config else "config.yaml"
-    )
+    prototypes = get_prototype_configs(config)
     results = []
     total_reward = 0
-    agent.set_train_mode(True)
+    agent.set_mode(eval=True)
     for proto_config in prototypes:
+        print("=" * 50)
+        print(f"Evaluating prototype: {proto_config['name']}")
+        print("=" * 50)
         env = StructuralEnv(initial_params_config=proto_config)
         state_pyg, info = env.reset()
         episode_reward = 0
@@ -67,6 +68,8 @@ def evaluate_on_prototypes(agent: Union[DDPGAgent, DQNAgent], config: dict, devi
                 # DDPGAgent和DQNAgent都支持training参数
                 action = agent.select_action(state_pyg, 0.0)
             next_state_pyg, reward, terminated, truncated, info = env.step(action)
+            env.render()
+            print()
             done = terminated or truncated
             episode_reward += reward
             state_pyg = next_state_pyg.to(device)
@@ -86,8 +89,9 @@ def evaluate_on_prototypes(agent: Union[DDPGAgent, DQNAgent], config: dict, devi
                 "is_feasible": is_feasible,
             }
         )
+        print(f"Prototype: {proto_config['name']} evaluated.\n\n")
     avg_reward = total_reward / len(prototypes)
-    agent.set_train_mode(False)
+    agent.set_mode(eval=False)
     return avg_reward, results
 
 
@@ -141,6 +145,7 @@ def train(args, config):
         "max_displacements": [],
         "max_stresses": [],
         "model_volumes": [],
+        "volume_efficiencies": [],
         "steps": [],
         "episode_numbers": [],
     }
@@ -195,15 +200,6 @@ def train(args, config):
                 next_states_list = [e[3] for e in experiences]
                 dones_tensor = torch.stack([e[4] for e in experiences])
 
-                # # 检查字典类型的属性
-                # for state in states_list:
-                #     for key in state.keys:
-                #         if isinstance(getattr(state, key), dict):
-                #             dict_attr = getattr(state, key)
-                #             print(f"Dict attribute '{key}': keys={list(dict_attr.keys())}")
-                #             if 3 not in dict_attr:  # 检查是否缺少键3
-                #                 print(f"⚠️ Missing key '3' in {key}!")
-
                 # Batch PyG Data objects
                 state_batch_pyg = Batch.from_data_list(states_list).to(device)
                 next_state_batch_pyg = Batch.from_data_list(next_states_list).to(device)
@@ -223,7 +219,8 @@ def train(args, config):
         metrics_history["rewards"].append(episode_reward)
         metrics_history["max_displacements"].append(info["max_displacement_mm"])
         metrics_history["max_stresses"].append(info["max_stress"])
-        metrics_history["model_volumes"].append(info["model_volume_m3"] / info_reset["base_volume"])
+        metrics_history["model_volumes"].append(info["normalized_volume"])
+        metrics_history["volume_efficiencies"].append(info["volume_efficiency"])
         metrics_history["steps"].append(step)  # Store number of steps taken
         metrics_history["episode_numbers"].append(episode + 1)
 
@@ -268,6 +265,7 @@ def train(args, config):
                 max_displacements=np.array(metrics_history["max_displacements"]),
                 max_stresses=np.array(metrics_history["max_stresses"]),
                 model_volumes=np.array(metrics_history["model_volumes"]),
+                volume_efficiencies=np.array(metrics_history["volume_efficiencies"]),
                 steps=np.array(metrics_history["steps"]),
                 episode_numbers=np.array(metrics_history["episode_numbers"]),
             )
@@ -286,6 +284,7 @@ def train(args, config):
         max_displacements=np.array(metrics_history["max_displacements"]),
         max_stresses=np.array(metrics_history["max_stresses"]),
         model_volumes=np.array(metrics_history["model_volumes"]),
+        volume_efficiencies=np.array(metrics_history["volume_efficiencies"]),
         steps=np.array(metrics_history["steps"]),
         episode_numbers=np.array(metrics_history["episode_numbers"]),
     )
@@ -305,102 +304,47 @@ def test(args, config):
 
     env_config = config["env_config"]
     rl_params = config["rl_params"]
+    model_base_name = rl_params["agent"]
 
     if args.resume_path:
         final_model_load_path = args.resume_path
     else:
-        model_base_name = "ddpg_agent"
         final_model_load_path = os.path.join(args.model_save_path, f"{model_base_name}_final.pth")
 
     if not os.path.exists(final_model_load_path):
         print(f"Error: Trained final model not found at {final_model_load_path}. Cannot run test.")
         return
 
-    checkpoint = torch.load(final_model_load_path, map_location=device)
-    hebg_config = checkpoint.get("hebg_config")
-
     env = StructuralEnv(initial_params_config=args.config)
-    action_dim = env_config["action_dim"]
+    sample_state, _ = env.reset()
 
-    agent = DDPGAgent(
-        hebg_config=hebg_config,
-        action_dim=action_dim,
-        hidden_dim_fc=rl_params.get("ddpg_fc_hidden_dim", 256),
-        actor_lr=rl_params.get("actor_lr", 1e-4),  # Added for completeness, though not strictly for inference
-        critic_lr=rl_params.get("critic_lr", 1e-3),  # Added for completeness
-        gamma=rl_params.get("gamma", 0.99),  # Added for completeness
-        tau=rl_params.get("tau", 0.005),  # Added for completeness
-        sigma=rl_params.get("sigma", 0.1),  # Added for completeness
-        device=device,  # Added for completeness
-    )
-    agent.load_model(final_model_load_path)
-    agent.actor.eval()  # Set to evaluation mode
-
-    num_test_episodes = rl_params.get("num_test_episodes", 1)
-    all_episode_rewards = []
-    test_plot_dir = os.path.join(args.model_save_path, "test_plots")
-    os.makedirs(test_plot_dir, exist_ok=True)
-
-    for episode in range(num_test_episodes):
-        state_pyg, info = env.reset()
-        current_frame_length = info["frame_length"]
-        print(f"\n--- Starting Test Episode {episode+1}/{num_test_episodes} ---")
-        print("Initial state:")
-        env.render()
-        print("-" * 100)
-        episode_reward = 0
-
-        # Metrics for this test episode
-        test_metrics_history = {
-            "rewards": [],
-            "max_displacements": [],
-            "max_stresses": [],
-            "model_volumes": [],
-        }
-
-        state_pyg = state_pyg.to(device)
-        done = False
-        step = 0
-        while not done:
-            step += 1
-            with torch.no_grad():  # Ensure no gradients are computed
-                action_tensor = agent.select_action(state_pyg, training=False)
-            action_np = action_tensor.cpu().numpy().squeeze(0)
-
-            next_state_pyg, reward, terminated, truncated, info = env.step(action_np)
-            done = terminated or truncated
-            episode_reward += reward
-
-            env.render()  # Optionally print parameters
-            print()
-
-            # Collect metrics
-            test_metrics_history["rewards"].append(reward)
-            test_metrics_history["max_displacements"].append(info["max_displacement_mm"])
-            test_metrics_history["max_stresses"].append(info["max_stress"])
-            test_metrics_history["model_volumes"].append(info["model_volume_m3"] / current_frame_length)
-
-            state_pyg = next_state_pyg.to(device)
-
-        all_episode_rewards.append(episode_reward)
-        print(f"--- Test Episode {episode+1} Finished ---")
-        print(f"Total Reward: {episode_reward:.2f}, Steps: {step}")
-        if info.get("error"):
-            print(f"  Episode ended with error: {info['error']}")
-
-        # Plot metrics for the completed episode
-        plot_progress(
-            test_metrics_history,
-            test_plot_dir,
-            filename=f"test_episode_{episode+1}_progress.png",
-            x_axis_label="Step",
-            main_title_prefix=f"Test Episode {episode+1}",
+    if model_base_name == "ddpg":
+        hebg_config = config["hebg_config"]
+        action_dim = env_config["action_dim"]
+        agent = DDPGAgent(
+            hebg_config=hebg_config,
+            action_dim=action_dim,
+            hidden_dim_fc=rl_params.get("ddpg_fc_hidden_dim", 256),
+            actor_lr=rl_params.get("actor_lr", 1e-4),
+            critic_lr=rl_params.get("critic_lr", 1e-3),
+            gamma=rl_params.get("gamma", 0.99),
+            tau=rl_params.get("tau", 0.005),
+            sigma=rl_params.get("sigma", 0.1),
+            device=device,
         )
-        print(f"Test plot for episode {episode+1} saved in {test_plot_dir}")
+        agent.load_model(final_model_load_path)
+        agent.actor.eval()  # Set to evaluation mode
+    elif model_base_name == "dqn":
+        agent = DQNAgent(
+            state_dim=sample_state.x.size(1),
+            glb_feat_dim=sample_state.global_features.size(1),
+            device=device,
+            gamma=rl_params["gamma"],
+            lr=rl_params["lr"],
+            target_update=rl_params["update_interval"],
+        )
 
-    print("\nTesting completed.")
-    avg_reward = np.mean(all_episode_rewards) if all_episode_rewards else 0
-    print(f"Average reward over {num_test_episodes} episodes: {avg_reward:.2f}")
+    evaluate_on_prototypes(agent, config, device)
 
 
 def main():
