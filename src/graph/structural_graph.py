@@ -416,21 +416,26 @@ class BeamAsNodeGraph:
             max_disp_abs = beam.response.max_disp_abs
             max_stress = beam.response.max_stress
 
+            # response violation
+            disp_violation = max(0, (max_disp_abs - 14.4) / 14.4)
+            stress_violation = max(0, (max_stress - 355) / 355)
+            response_violation = disp_violation + stress_violation
+
             # section property
             section_property = self.model.sections[beam.section]
-            Ix = section_property.Ix
-            Iy = section_property.Iy
-            area = section_property.area
+            Ix = section_property.Ix / self.model.section_library.max_Ix
+            Iy = section_property.Iy / self.model.section_library.max_Iy
+            area = section_property.area / self.model.section_library.max_area
 
             features = (
                 [beam_type_idx, beam_section_idx, length]
                 + list(direction_vec_normalized)
                 + list(centroid)
                 + [Ix, Iy, area]
-                + [max_disp_abs, max_stress]
+                + [max_disp_abs, max_stress, disp_violation, stress_violation, response_violation]
                 + beam.start_node_load.tolist()
                 + beam.end_node_load.tolist()
-                # + [env_info["frame_length"]]
+                + [env_info["pressure"] / 38]
             )
             node_features_list.append(features)
 
@@ -483,7 +488,7 @@ class BeamAsNodeGraph:
             pyg_edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
             pyg_edge_attr = torch.tensor(edge_attr_list, dtype=torch.float)
 
-        global_features = [env_info["frame_length"], env_info["pressure"]]
+        global_features = [env_info["frame_length"], env_info["pressure"] / 38]
 
         data = Data(x=pyg_x, edge_index=pyg_edge_index, edge_attr=pyg_edge_attr)
         data.num_nodes = pyg_x.size(0)

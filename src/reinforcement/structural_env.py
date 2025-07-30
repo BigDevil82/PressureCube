@@ -26,10 +26,10 @@ class StructuralEnv(gym.Env):
     def __init__(
         self,
         initial_params_config: Union[str, dict],
+        logger: Logger,
     ):
         super(StructuralEnv, self).__init__()
-        ts = datetime.now().strftime("%m%d_%H%M")
-        self.logger = Logger(f"rewards_{ts}.log")
+        self.logger = logger
 
         self.section_library = SectionLibrary()
         self.opensees_analyzer = OpenSeesAnalyzer()
@@ -185,6 +185,7 @@ class StructuralEnv(gym.Env):
             raise ValueError("Failed to run FEM analysis at reset.")
 
         self._last_model_volume = self._calculate_model_volume()
+        self.best_known_volume = self._last_model_volume
         self._calculate_volume_bounds()
         self.normalized_volume = self._calculate_normalized_volume(self._last_model_volume)
 
@@ -257,43 +258,139 @@ class StructuralEnv(gym.Env):
 
     def _decode_action_for_size(self, action: np.ndarray):
         if self.env_config["graph_type"] == "beam_as_node":
-            beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
-            beam_obj = self.current_structural_model.beams[beam_id]
-            frame_type = beam_obj.section
-            if frame_type.lower() in ["main", "secondary"]:
-                current_sec_idx_name = f"{frame_type.lower()}_beam_section_index"
-            else:
-                current_sec_idx_name = f"{frame_type.lower()}_section_index"
-            current_sec_idx = self.current_params[current_sec_idx_name]
+            # beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
+            # beam_obj = self.current_structural_model.beams[beam_id]
+            # frame_type = beam_obj.section
+            # if frame_type.lower() in ["main", "secondary"]:
+            #     current_sec_idx_name = f"{frame_type.lower()}_beam_section_index"
+            # else:
+            #     current_sec_idx_name = f"{frame_type.lower()}_section_index"
+            # current_sec_idx = self.current_params[current_sec_idx_name]
 
-            section_idx_upper_bound = self.section_library.section_num_by_frame_type(frame_type.lower())
-            updated_sec_idx = np.clip(current_sec_idx + 1, 0, section_idx_upper_bound - 1)
-            self.current_params[current_sec_idx_name] = updated_sec_idx
+            # section_idx_upper_bound = self.section_library.section_num_by_frame_type(frame_type.lower())
+            # updated_sec_idx = np.clip(current_sec_idx + 1, 0, section_idx_upper_bound - 1)
+            # self.current_params[current_sec_idx_name] = updated_sec_idx
+
+            ## 0: 降低框架梁截面尺寸，1: 提高框架梁截面尺寸，2: 降低主梁截面尺寸，3: 提高主梁截面尺寸，4: 降低次梁截面尺寸，5: 提高次梁截面尺寸，6: 降低支撑梁截面尺寸，7: 提高支撑梁截面尺寸
+            is_valid = True
+            if action == 0:
+                if self.current_params["frame_section_index"] == 0:
+                    return False
+                self.current_params["frame_section_index"] = np.clip(
+                    self.current_params["frame_section_index"] - 1,
+                    0,
+                    self.section_library.section_num_by_frame_type("frame") - 1,
+                )
+            elif action == 1:
+                if (
+                    self.current_params["frame_section_index"]
+                    == self.section_library.section_num_by_frame_type("frame") - 1
+                ):
+                    return False
+                self.current_params["frame_section_index"] = np.clip(
+                    self.current_params["frame_section_index"] + 1,
+                    0,
+                    self.section_library.section_num_by_frame_type("frame") - 1,
+                )
+            elif action == 2:
+                if self.current_params["main_beam_section_index"] == 0:
+                    return False
+                self.current_params["main_beam_section_index"] = np.clip(
+                    self.current_params["main_beam_section_index"] - 1,
+                    0,
+                    self.section_library.section_num_by_frame_type("main") - 1,
+                )
+            elif action == 3:
+                if (
+                    self.current_params["main_beam_section_index"]
+                    == self.section_library.section_num_by_frame_type("main") - 1
+                ):
+                    return False
+                self.current_params["main_beam_section_index"] = np.clip(
+                    self.current_params["main_beam_section_index"] + 1,
+                    0,
+                    self.section_library.section_num_by_frame_type("main") - 1,
+                )
+            elif action == 4:
+                if self.current_params["secondary_beam_section_index"] == 0:
+                    return False
+                self.current_params["secondary_beam_section_index"] = np.clip(
+                    self.current_params["secondary_beam_section_index"] - 1,
+                    0,
+                    self.section_library.section_num_by_frame_type("secondary") - 1,
+                )
+            elif action == 5:
+                if (
+                    self.current_params["secondary_beam_section_index"]
+                    == self.section_library.section_num_by_frame_type("secondary") - 1
+                ):
+                    return False
+                self.current_params["secondary_beam_section_index"] = np.clip(
+                    self.current_params["secondary_beam_section_index"] + 1,
+                    0,
+                    self.section_library.section_num_by_frame_type("secondary") - 1,
+                )
+            elif action == 6:
+                if self.current_params["brace_section_index"] == 0:
+                    return False
+                self.current_params["brace_section_index"] = np.clip(
+                    self.current_params["brace_section_index"] - 1,
+                    0,
+                    self.section_library.section_num_by_frame_type("brace") - 1,
+                )
+            elif action == 7:
+                if (
+                    self.current_params["brace_section_index"]
+                    == self.section_library.section_num_by_frame_type("brace") - 1
+                ):
+                    return False
+                self.current_params["brace_section_index"] = np.clip(
+                    self.current_params["brace_section_index"] + 1,
+                    0,
+                    self.section_library.section_num_by_frame_type("brace") - 1,
+                )
+            return is_valid
         else:
             raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
-        return beam_id
 
     def _decode_action_for_spacing(self, action: np.ndarray):
         # main_beam_spacing_range = np.linspace(1.8, 0.3, 16)
-        # brace_spacing_range = np.linspace(1.0, 0.1, 10)
+        # brace_spacing_range = np.linspace(1.0, 0.3, 10)
         if self.env_config["graph_type"] == "beam_as_node":
-            beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
-            beam_obj = self.current_structural_model.beams[beam_id]
-            frame_type = beam_obj.section
-            if frame_type.lower() in ["main", "secondary"]:
-                current_beam_spacing_name = f"main_beam_spacing"
-                current_beam_spacing = self.current_params[current_beam_spacing_name]
-                updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.8)
-            elif frame_type.lower() == "brace":
-                current_beam_spacing_name = f"brace_spacing"
-                current_beam_spacing = self.current_params[current_beam_spacing_name]
-                updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.0)
-            else:
-                return None
-            self.current_params[current_beam_spacing_name] = updated_beam_spacing
+            # beam_id = self.current_graph_converter.get_beam_id_from_pyg_idx(action)
+            # beam_obj = self.current_structural_model.beams[beam_id]
+            # frame_type = beam_obj.section
+            # if frame_type.lower() in ["main", "secondary"]:
+            #     current_beam_spacing_name = f"main_beam_spacing"
+            #     current_beam_spacing = self.current_params[current_beam_spacing_name]
+            #     updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.8)
+            # elif frame_type.lower() == "brace":
+            #     current_beam_spacing_name = f"brace_spacing"
+            #     current_beam_spacing = self.current_params[current_beam_spacing_name]
+            #     updated_beam_spacing = np.clip(current_beam_spacing - 0.1, 0.3, 1.0)
+            # else:
+            #     return None
+            # self.current_params[current_beam_spacing_name] = updated_beam_spacing
+
+            ### 0: 降低主梁间距，1: 提高主梁间距，2: 降低支撑梁间距，3: 提高支撑梁间距
+            if action == 0:
+                self.current_params["main_beam_spacing"] = np.clip(
+                    self.current_params["main_beam_spacing"] - 0.1, 0.3, 1.8
+                )
+            elif action == 1:
+                self.current_params["main_beam_spacing"] = np.clip(
+                    self.current_params["main_beam_spacing"] + 0.1, 0.3, 1.8
+                )
+            elif action == 2:
+                self.current_params["brace_spacing"] = np.clip(
+                    self.current_params["brace_spacing"] - 0.1, 0.3, 1.0
+                )
+            elif action == 3:
+                self.current_params["brace_spacing"] = np.clip(
+                    self.current_params["brace_spacing"] + 0.1, 0.3, 1.0
+                )
         else:
             raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
-        return beam_id
 
     def _run_fem_analysis(self) -> Optional[Dict[str, float]]:
         # create mesh
@@ -402,126 +499,121 @@ class StructuralEnv(gym.Env):
 
     #     return reward
 
-    # def _calculate_reward(self, max_disp_abs, max_stress, model_volume):
-    #     disp_constraint = self.max_disp
-    #     stress_constraint = self.max_stress
+    def _calculate_reward(self, max_disp_abs, max_stress, model_volume):
+        disp_constraint = self.max_disp
+        stress_constraint = self.max_stress
 
-    #     # 1. 计算约束满足度（0-1连续值）
-    #     # disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
-    #     # stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
-    #     # constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
+        # 1. 计算约束满足度（0-1连续值）
+        # disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
+        # stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
+        # constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
 
-    #     # 2. 材料效率奖励（鼓励用更少材料满足约束）
-    #     # 基准材料用量（经验值或初始设计）
-    #     baseline_volume = 1.73
-    #     volume_efficiency = max(0.1, baseline_volume / model_volume)  # 当前用量/基准用量
+        # 2. 材料效率奖励（鼓励用更少材料满足约束）
+        # 基准材料用量（经验值或初始设计）
+        baseline_volume = 1.73
+        volume_efficiency = max(0.1, baseline_volume / model_volume)  # 当前用量/基准用量
 
-    #     # 3. 改进奖励（与上一步比较）
-    #     delta_disp = self._last_max_disp_abs - max_disp_abs
-    #     delta_stress = self._last_max_stress - max_stress
-    #     delta_volume = self._last_model_volume - model_volume
+        # 3. 改进奖励（与上一步比较）
+        delta_disp = self._last_max_disp_abs - max_disp_abs
+        delta_stress = self._last_max_stress - max_stress
+        delta_volume = self._last_model_volume - model_volume
 
-    #     # 4. 核心奖励计算
-    #     if max_disp_abs < disp_constraint and max_stress < stress_constraint:
-    #         # 满足约束时的奖励 = 基础奖励 + 材料效率奖励
-    #         reward = 20.0 + 10 * volume_efficiency
-    #         self.logger.info(f"Reward: {reward:.2f}, volume_efficiency: {volume_efficiency:.2f}")
-    #     else:
-    #         # 未满足时的奖励 = 约束改进奖励 + 材料节省奖励
-    #         improvement_reward = 30 * delta_disp / disp_constraint + delta_stress / stress_constraint
-    #         volume_penalty = 5 * delta_volume / baseline_volume
-    #         if volume_penalty == 0:
-    #             volume_penalty = -2
+        # 4. 核心奖励计算
+        if max_disp_abs < disp_constraint and max_stress < stress_constraint:
+            # 满足约束时的奖励 = 基础奖励 + 材料效率奖励
+            reward = 20.0 + 10 * volume_efficiency
+            self.logger.info(f"Reward: {reward:.2f}, volume_efficiency: {volume_efficiency:.2f}")
+        else:
+            # 未满足时的奖励 = 约束改进奖励 + 材料节省奖励
+            improvement_reward = 30 * delta_disp / disp_constraint + delta_stress / stress_constraint
+            volume_penalty = 5 * delta_volume / baseline_volume
+            if volume_penalty == 0:
+                volume_penalty = -2
 
-    #         reward = improvement_reward + volume_penalty
+            reward = improvement_reward + volume_penalty
 
-    #         self.logger.info(
-    #             f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}"
-    #         )
+            self.logger.info(
+                f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}"
+            )
 
-    #     return reward
+        return reward
 
     def _calculate_reward_for_size(self, max_disp_abs, max_stress, model_volume):
+        # return self._calculate_reward(max_disp_abs, max_stress, model_volume)
+        # return self._calculate_reward_for_spacing(max_disp_abs, max_stress, model_volume)
         disp_constraint = self.max_disp
         stress_constraint = self.max_stress
 
         # 1. 计算标准化的材料效率
-        volume_ratio = model_volume / self.base_volume
+        normalized_volume = self._calculate_normalized_volume(model_volume)
 
         # 2. 计算约束满足度
-        disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
-        stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
-        constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
+        disp_violation = max(0, (max_disp_abs - disp_constraint) / disp_constraint)
+        stress_violation = max(0, (max_stress - stress_constraint) / stress_constraint)
+        constraint_violation = disp_violation + stress_violation
 
-        # 3. 计算安全裕度（鼓励接近边界）
-        disp_margin = (disp_constraint - max_disp_abs) / disp_constraint
-        stress_margin = (stress_constraint - max_stress) / stress_constraint
-        total_margin = disp_margin + stress_margin
+        last_disp_violation = max(0, (self._last_max_disp_abs - disp_constraint) / disp_constraint)
+        last_stress_violation = max(0, (self._last_max_stress - stress_constraint) / stress_constraint)
+        last_constraint_violation = last_disp_violation + last_stress_violation
+        delta_cv = last_constraint_violation - constraint_violation
 
-        # 4. 核心奖励计算
+        delta_volume = self._last_model_volume - model_volume
+
+        shaping_reward = 2 * delta_volume + 5 * delta_cv
+
+        # 核心奖励计算
         if max_disp_abs < disp_constraint and max_stress < stress_constraint:
-            # 基础奖励
-            base_reward = 10.0
-
-            # 材料效率奖励（二次函数鼓励接近最优）
-            efficiency_bonus = max(0, 10 * (1 - (volume_ratio - 0.9) ** 2))
-
-            # 安全裕度奖励（鼓励接近边界）
-            margin_bonus = max(0, 20 * (1 - total_margin))
-
-            reward = base_reward + efficiency_bonus + margin_bonus
-            self.logger.info(
-                f"Reward: {reward:.2f}, efficiency_bonus: {efficiency_bonus:.2f}, margin_bonus: {margin_bonus:.2f}, disp: {max_disp_abs:.2f}, stress: {max_stress:.2f}"
-            )
+            constraint_reward = 10 * (1.0 - normalized_volume)
         else:
-            # 改进奖励
-            disp_improvement = max(0, (self._last_max_disp_abs - max_disp_abs) / disp_constraint)
-            stress_improvement = max(0, (self._last_max_stress - max_stress) / stress_constraint)
-            improvement_reward = 30 * disp_improvement + stress_improvement
+            constraint_reward = -1 - 10 * constraint_violation
 
-            # 材料变化惩罚
-            volume_change = model_volume - self._last_model_volume
-            if volume_change < -0.01:  # 显著减少
-                volume_penalty = volume_change * 40
-            elif volume_change == 0:
-                volume_penalty = -2
-            elif volume_change < 0.02:  # 小幅变化
-                volume_penalty = volume_change * (-10)
-            else:  # 大幅增加
-                volume_penalty = volume_change * (-50)
-
-            reward = improvement_reward + volume_penalty + 5 * constraint_satisfaction
-            self.logger.info(
-                f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}, constraint_satisfaction: {constraint_satisfaction:.2f}"
-            )
-
+        reward = shaping_reward + constraint_reward
+        self.logger.info(
+            f"r: {reward:.2f}, shaping_r: {shaping_reward:.2f}, constraint_r: {constraint_reward:.2f}, δv: {delta_volume:.2f}, δcv: {delta_cv:.2f}, disp_vio: {disp_violation:.2f}, stress_vio: {stress_violation:.2f}"
+        )
         return reward
 
     def _calculate_reward_for_spacing(self, max_disp_abs, max_stress, model_volume):
         disp_constraint = self.max_disp
         stress_constraint = self.max_stress
+        normalized_volume = self._calculate_normalized_volume(model_volume)
 
-        delta_disp = disp_constraint - max_disp_abs
-        delta_stress = stress_constraint - max_stress
-        delta_volume = model_volume - self._last_model_volume
+        # 1. 计算关键指标
+        disp_ratio = max_disp_abs / disp_constraint
+        stress_ratio = max_stress / stress_constraint
 
-        delta = (delta_disp + delta_stress) * 0.1
+        # 2. 约束满足度（0-1）
+        feasibility = (disp_ratio + stress_ratio) / 2 if (disp_ratio < 1 and stress_ratio < 1) else 0.0
 
-        if delta_volume == 0:
-            self.logger.info(
-                f"delta_volume: {delta_volume:.2f}, delta_disp: {delta_disp:.2f}, delta_stress: {delta_stress:.2f}, delta: {delta:.2f}"
+        # 3. 材料效率奖励（核心）
+        # 鼓励接近最优材料用量
+        volume_efficiency = 1 - normalized_volume**2
+
+        # 4. 改进潜力指标
+        improvement_potential = 0
+        if feasibility > 0.5:
+            # 计算当前解与理论最优的材料差距
+            current_to_optimal = max(0, (model_volume - self.best_known_volume) / self.best_known_volume)
+            improvement_potential = 1 / (current_to_optimal + 0.1)
+
+        # 5. 核心奖励计算
+        if feasibility > 0:
+            reward = (
+                10 * feasibility  # 基础可行奖励
+                + 30 * volume_efficiency  # 材料效率（主驱动）
+                + 5 * improvement_potential  # 引导寻找更优解
+                - 0.5 * (disp_ratio + stress_ratio)  # 持续优化约束
             )
-            return -50
-
-        if delta_disp > 0 and delta_stress > 0:
-            delta0 = 0.01
-            r0 = 10
-            reward = 40 + 50 / delta - 3 * model_volume * model_volume
         else:
-            reward = delta
+            reward = -2
+
+        # 6. 发现新最优解的额外奖励
+        if feasibility > 0.8 and model_volume < self.best_known_volume:
+            reward += 50  # 大幅奖励突破性改进
+            self.best_known_volume = model_volume  # 更新已知最优
 
         self.logger.info(
-            f"Reward: {reward:.2f}, delta_disp: {delta_disp:.2f}, delta_stress: {delta_stress:.2f}, delta: {delta:.2f}"
+            f"Reward: {reward:.2f}, feasibility: {feasibility:.2f}, volume_efficiency: {volume_efficiency:.2f}, improvement_potential: {improvement_potential:.2f}, disp_ratio: {disp_ratio:.2f}, stress_ratio: {stress_ratio:.2f}, model_volume: {model_volume:.2f}, best_known_volume: {self.best_known_volume:.2f}"
         )
 
         return reward
@@ -531,16 +623,33 @@ class StructuralEnv(gym.Env):
         return (model_volume - self.min_volume) / (self.max_volume - self.min_volume)
 
     def _calculate_volume_efficiency(self, model_volume: float) -> float:
-        return self.total_force_kN / model_volume * 1e-3  # kN/dm³
+        return self.total_force_kN / model_volume * 1e-3  # kN/dm³ 量级大约为3-5
 
     def step(self, action: int):
         if self.env_config["opt_type"] == "size":
-            self._decode_action_for_size(action)
+            is_valid = self._decode_action_for_size(action)
         elif self.env_config["opt_type"] == "spacing":
-            self._decode_action_for_spacing(action)
+            is_valid = self._decode_action_for_spacing(action)
         else:
             raise ValueError(f"Invalid opt type: {self.env_config['opt_type']}")
+
         self._current_step_count += 1
+
+        if not is_valid:
+            return (
+                self.current_pyg_data_state,
+                -20,
+                False,
+                True if self._current_step_count >= self._max_steps_per_episode else False,
+                {
+                    "max_displacement_mm": self._last_max_disp_abs,
+                    "max_stress": self._last_max_stress,
+                    "model_volume_m3": self._last_model_volume,
+                    "frame_length": self.current_params["length"],
+                    "normalized_volume": self._calculate_normalized_volume(self._last_model_volume),
+                    "volume_efficiency": self._calculate_volume_efficiency(self._last_model_volume),
+                },
+            )
 
         generation_success, max_indicators = self._generate_model_and_state_from_current_params()
 
