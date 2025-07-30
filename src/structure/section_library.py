@@ -1,6 +1,7 @@
 import json
 import random
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Dict, List, Tuple, Union
 
 # Conversion factors
@@ -81,9 +82,36 @@ class SectionLibrary:
     def section_types(self) -> List[str]:
         return list(self.sections.keys())
 
-    @property
+    @cached_property
     def section_counts(self) -> Dict[str, int]:
         return {section_type: len(self.sections[section_type]) for section_type in self.section_types}
+
+    @cached_property
+    def max_Ix(self) -> float:
+        max_Ix = 0
+        for section_type in self.section_types:
+            for section in self.sections[section_type]:
+                if section.Ix > max_Ix:
+                    max_Ix = section.Ix
+        return max_Ix
+
+    @cached_property
+    def max_Iy(self) -> float:
+        max_Iy = 0
+        for section_type in self.section_types:
+            for section in self.sections[section_type]:
+                if section.Iy > max_Iy:
+                    max_Iy = section.Iy
+        return max_Iy
+
+    @cached_property
+    def max_area(self) -> float:
+        max_area = 0
+        for section_type in self.section_types:
+            for section in self.sections[section_type]:
+                if section.area > max_area:
+                    max_area = section.area
+        return max_area
 
     def section_num_by_frame_type(self, frame_type: str) -> int:
         frame_type = frame_type.lower()
