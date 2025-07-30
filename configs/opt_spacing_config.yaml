@@ -5,9 +5,9 @@ structural_params:
   length: 7.2 # 舱体长度 (y方向，米)
   width: 3.6 # 舱体宽度 (x方向，米)
   height: 3.3 # 舱体高度 (z方向，米)
-  main_beam_spacing: 1.8 # 环向主梁间距 (米)
-  secondary_beam_spacing: 1.8 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
-  brace_spacing: 1.0 # 支撑梁间距 (米)
+  main_beam_spacing: 1.5 # 环向主梁间距 (米)
+  secondary_beam_spacing: 1.05 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
+  brace_spacing: 1.5 # 支撑梁间距 (米)
   frame_section_index: 0
   main_beam_section_index: 6
   secondary_beam_section_index: 5
@@ -69,13 +69,13 @@ rl_params:
   gamma: 0.98 # 折扣因子
   tau: 0.005 # 目标网络软更新参数
   sigma: 0.2 # 探索高斯噪声的标准差
-  min_replay_buffer_fill: 10
-  batch_size: 4 # 批次大小
+  min_replay_buffer_fill: 32
+  batch_size: 32 # 批次大小
   buffer_size: 10000 # 经验回放缓冲区大小
   update_interval: 10 # 更新间隔
   ddpg_fc_hidden_dim: 256 # 隐藏层大小
   max_episodes: 1000 # 最大训练回合数
-  max_steps_per_episode: 64 # 每个回合的最大步数
+  max_steps_per_episode: 20 # 每个回合的最大步数
   eval_interval: 20 # 在原型结构上的评估间隔
   save_interval: 100 # 模型保存间隔
   plot_interval: 1 # 训练指标绘制间隔

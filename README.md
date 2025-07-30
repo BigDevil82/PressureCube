@@ -13,10 +13,9 @@
 
 ## 系统要求
 
-- Python 3.8+
+- Python 3.9.12
 - PyTorch 1.9+
-- PyTorch Geometric 2.0+
-- OpenSees 3.3.0+
+- PyTorch Geometric
 - 其他依赖见 requirements.txt
 
 ## 安装
