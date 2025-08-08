@@ -171,6 +171,28 @@ class StructuralEnv(gym.Env):
                 if key in self.current_params:
                     self.current_params[key] = random_params[key]
 
+        # 添加随机起点扰动以提升探索连通性
+        if options and options.get("random_start_perturbation", False):
+            perturbation_prob = options.get("perturbation_prob", 0.3)
+            if np.random.random() < perturbation_prob:
+                # 随机扰动截面索引在小邻域内
+                section_types = [
+                    "frame_section_index",
+                    "main_beam_section_index",
+                    "secondary_beam_section_index",
+                    "brace_section_index",
+                ]
+                frame_types = ["frame", "main", "secondary", "brace"]
+
+                for section_type, frame_type in zip(section_types, frame_types):
+                    max_idx = self.section_library.section_num_by_frame_type(frame_type) - 1
+                    current_idx = self.current_params[section_type]
+
+                    # 在当前值附近±2的范围内随机扰动
+                    perturbation = np.random.randint(-2, 3)
+                    new_idx = np.clip(current_idx + perturbation, 0, max_idx)
+                    self.current_params[section_type] = new_idx
+
         self._current_step_count = 0
 
         generation_success, max_indicators = self._generate_model_and_state_from_current_params()
@@ -499,79 +521,185 @@ class StructuralEnv(gym.Env):
 
     #     return reward
 
-    def _calculate_reward(self, max_disp_abs, max_stress, model_volume):
+    # def _calculate_reward(self, max_disp_abs, max_stress, model_volume):
+    #     disp_constraint = self.max_disp
+    #     stress_constraint = self.max_stress
+
+    #     # 1. 计算约束满足度（0-1连续值）
+    #     # disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
+    #     # stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
+    #     # constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
+
+    #     # 2. 材料效率奖励（鼓励用更少材料满足约束）
+    #     # 基准材料用量（经验值或初始设计）
+    #     baseline_volume = 1.73
+    #     volume_efficiency = max(0.1, baseline_volume / model_volume)  # 当前用量/基准用量
+
+    #     # 3. 改进奖励（与上一步比较）
+    #     delta_disp = self._last_max_disp_abs - max_disp_abs
+    #     delta_stress = self._last_max_stress - max_stress
+    #     delta_volume = self._last_model_volume - model_volume
+
+    #     # 4. 核心奖励计算
+    #     if max_disp_abs < disp_constraint and max_stress < stress_constraint:
+    #         # 满足约束时的奖励 = 基础奖励 + 材料效率奖励
+    #         reward = 20.0 + 10 * volume_efficiency
+    #         self.logger.info(f"Reward: {reward:.2f}, volume_efficiency: {volume_efficiency:.2f}")
+    #     else:
+    #         # 未满足时的奖励 = 约束改进奖励 + 材料节省奖励
+    #         improvement_reward = 30 * delta_disp / disp_constraint + delta_stress / stress_constraint
+    #         volume_penalty = 5 * delta_volume / baseline_volume
+    #         if volume_penalty == 0:
+    #             volume_penalty = -2
+
+    #         reward = improvement_reward + volume_penalty
+
+    #         self.logger.info(
+    #             f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}"
+    #         )
+
+    #     return reward
+
+    def _calculate_reward_for_size(self, max_disp_abs, max_stress, model_volume):
+        """
+        改进的两阶段奖励函数:
+        1. 不可行阶段: 只奖励约束改善，不考虑体积
+        2. 可行阶段: 主要奖励体积最小化
+        """
         disp_constraint = self.max_disp
         stress_constraint = self.max_stress
 
-        # 1. 计算约束满足度（0-1连续值）
-        # disp_satisfaction = max(0, 1 - max_disp_abs / disp_constraint)
-        # stress_satisfaction = max(0, 1 - max_stress / stress_constraint)
-        # constraint_satisfaction = (disp_satisfaction + stress_satisfaction) / 2
+        # 计算约束违反度
+        disp_ratio = max_disp_abs / disp_constraint
+        stress_ratio = max_stress / stress_constraint
+        violation = max(0, disp_ratio - 1) + max(0, stress_ratio - 1)
 
-        # 2. 材料效率奖励（鼓励用更少材料满足约束）
-        # 基准材料用量（经验值或初始设计）
-        baseline_volume = 1.73
-        volume_efficiency = max(0.1, baseline_volume / model_volume)  # 当前用量/基准用量
+        # 计算上一步的约束违反度
+        last_disp_ratio = self._last_max_disp_abs / disp_constraint
+        last_stress_ratio = self._last_max_stress / stress_constraint
+        last_violation = max(0, last_disp_ratio - 1) + max(0, last_stress_ratio - 1)
 
-        # 3. 改进奖励（与上一步比较）
-        delta_disp = self._last_max_disp_abs - max_disp_abs
-        delta_stress = self._last_max_stress - max_stress
+        # 约束改善量
+        delta_violation = last_violation - violation
+
+        # 体积相关
+        normalized_volume = self._calculate_normalized_volume(model_volume)
         delta_volume = self._last_model_volume - model_volume
 
-        # 4. 核心奖励计算
-        if max_disp_abs < disp_constraint and max_stress < stress_constraint:
-            # 满足约束时的奖励 = 基础奖励 + 材料效率奖励
-            reward = 20.0 + 10 * volume_efficiency
-            self.logger.info(f"Reward: {reward:.2f}, volume_efficiency: {volume_efficiency:.2f}")
-        else:
-            # 未满足时的奖励 = 约束改进奖励 + 材料节省奖励
-            improvement_reward = 30 * delta_disp / disp_constraint + delta_stress / stress_constraint
-            volume_penalty = 5 * delta_volume / baseline_volume
-            if volume_penalty == 0:
-                volume_penalty = -2
+        # 步数惩罚(鼓励更快收敛)
+        step_penalty = 0.1
 
-            reward = improvement_reward + volume_penalty
+        # 两阶段奖励设计
+        if violation > 0:
+            # 不可行阶段: 只关注约束改善
+            c_v = 8.0  # 约束改善系数
+            w_v = 15.0  # 约束违反惩罚权重
+
+            shaping_reward = c_v * delta_violation
+            base_penalty = -w_v * violation
+            reward = shaping_reward + base_penalty - step_penalty
 
             self.logger.info(
-                f"Reward: {reward:.2f}, improvement_reward: {improvement_reward:.2f}, volume_penalty: {volume_penalty:.2f}"
+                f"[不可行] r: {reward:.2f}, shaping: {shaping_reward:.2f}, base: {base_penalty:.2f}, "
+                f"δviolation: {delta_violation:.3f}, violation: {violation:.3f}"
+            )
+        else:
+            # 可行阶段: 主要奖励体积最小化
+            R_feasible = 5.0
+            alpha = 40.0  # 体积优化权重
+
+            # 基础可行奖励 + 体积优化奖励
+            ongoing_reward = R_feasible + alpha * (1 - normalized_volume) - step_penalty
+
+            # 如果刚从不可行变为可行，给额外奖励
+            terminal_bonus = 0
+            if last_violation > 0:  # 刚刚达到可行
+                B_success = 80.0
+                terminal_bonus = B_success * (1 - normalized_volume)
+
+            reward = ongoing_reward + terminal_bonus
+
+            self.logger.info(
+                f"[可行] r: {reward:.2f}, ongoing: {ongoing_reward:.2f}, bonus: {terminal_bonus:.2f}, "
+                f"norm_vol: {normalized_volume:.3f}, vol: {model_volume:.3f}"
             )
 
         return reward
 
-    def _calculate_reward_for_size(self, max_disp_abs, max_stress, model_volume):
-        # return self._calculate_reward(max_disp_abs, max_stress, model_volume)
-        # return self._calculate_reward_for_spacing(max_disp_abs, max_stress, model_volume)
-        disp_constraint = self.max_disp
-        stress_constraint = self.max_stress
+    def get_action_mask(self):
+        """
+        获取当前状态下的动作掩码
+        返回长度为8的布尔数组，True表示该动作有效
+        """
+        mask = [True] * 8
 
-        # 1. 计算标准化的材料效率
-        normalized_volume = self._calculate_normalized_volume(model_volume)
+        # 检查框架梁 (actions 0, 1)
+        if self.current_params["frame_section_index"] == 0:
+            mask[0] = False  # 不能再降低
+        if (
+            self.current_params["frame_section_index"]
+            >= self.section_library.section_num_by_frame_type("frame") - 1
+        ):
+            mask[1] = False  # 不能再提高
 
-        # 2. 计算约束满足度
-        disp_violation = max(0, (max_disp_abs - disp_constraint) / disp_constraint)
-        stress_violation = max(0, (max_stress - stress_constraint) / stress_constraint)
-        constraint_violation = disp_violation + stress_violation
+        # 检查主梁 (actions 2, 3)
+        if self.current_params["main_beam_section_index"] == 0:
+            mask[2] = False
+        if (
+            self.current_params["main_beam_section_index"]
+            >= self.section_library.section_num_by_frame_type("main") - 1
+        ):
+            mask[3] = False
 
-        last_disp_violation = max(0, (self._last_max_disp_abs - disp_constraint) / disp_constraint)
-        last_stress_violation = max(0, (self._last_max_stress - stress_constraint) / stress_constraint)
-        last_constraint_violation = last_disp_violation + last_stress_violation
-        delta_cv = last_constraint_violation - constraint_violation
+        # 检查次梁 (actions 4, 5)
+        if self.current_params["secondary_beam_section_index"] == 0:
+            mask[4] = False
+        if (
+            self.current_params["secondary_beam_section_index"]
+            >= self.section_library.section_num_by_frame_type("secondary") - 1
+        ):
+            mask[5] = False
 
-        delta_volume = self._last_model_volume - model_volume
+        # 检查支撑梁 (actions 6, 7)
+        if self.current_params["brace_section_index"] == 0:
+            mask[6] = False
+        if (
+            self.current_params["brace_section_index"]
+            >= self.section_library.section_num_by_frame_type("brace") - 1
+        ):
+            mask[7] = False
 
-        shaping_reward = 2 * delta_volume + 5 * delta_cv
+        return mask
 
-        # 核心奖励计算
-        if max_disp_abs < disp_constraint and max_stress < stress_constraint:
-            constraint_reward = 10 * (1.0 - normalized_volume)
-        else:
-            constraint_reward = -1 - 10 * constraint_violation
+    def _decode_action_for_size_with_mask(self, action: int):
+        """
+        带动作掩码的动作解码，无效动作作为no-op处理
+        """
+        mask = self.get_action_mask()
 
-        reward = shaping_reward + constraint_reward
-        self.logger.info(
-            f"r: {reward:.2f}, shaping_r: {shaping_reward:.2f}, constraint_r: {constraint_reward:.2f}, δv: {delta_volume:.2f}, δcv: {delta_cv:.2f}, disp_vio: {disp_violation:.2f}, stress_vio: {stress_violation:.2f}"
-        )
-        return reward
+        if not mask[action]:
+            # 无效动作，作为no-op处理
+            return True, True  # (is_valid, is_noop)
+
+        # 有效动作，按原逻辑执行
+        if action == 0:
+            self.current_params["frame_section_index"] -= 1
+        elif action == 1:
+            self.current_params["frame_section_index"] += 1
+        elif action == 2:
+            self.current_params["main_beam_section_index"] -= 1
+        elif action == 3:
+            self.current_params["main_beam_section_index"] += 1
+        elif action == 4:
+            self.current_params["secondary_beam_section_index"] -= 1
+        elif action == 5:
+            self.current_params["secondary_beam_section_index"] += 1
+        elif action == 6:
+            self.current_params["brace_section_index"] -= 1
+        elif action == 7:
+            self.current_params["brace_section_index"] += 1
+
+        return True, False  # (is_valid, is_noop)
 
     def _calculate_reward_for_spacing(self, max_disp_abs, max_stress, model_volume):
         disp_constraint = self.max_disp
@@ -627,18 +755,21 @@ class StructuralEnv(gym.Env):
 
     def step(self, action: int):
         if self.env_config["opt_type"] == "size":
-            is_valid = self._decode_action_for_size(action)
+            is_valid, is_noop = self._decode_action_for_size_with_mask(action)
         elif self.env_config["opt_type"] == "spacing":
             is_valid = self._decode_action_for_spacing(action)
+            is_noop = False  # spacing不支持action masking
         else:
             raise ValueError(f"Invalid opt type: {self.env_config['opt_type']}")
 
         self._current_step_count += 1
 
+        # 处理无效动作或no-op动作
         if not is_valid:
+            # 对于spacing类型的旧式无效动作处理
             return (
                 self.current_pyg_data_state,
-                -20,
+                -0.5,  # 减小惩罚避免优势方差爆炸
                 False,
                 True if self._current_step_count >= self._max_steps_per_episode else False,
                 {
@@ -648,6 +779,24 @@ class StructuralEnv(gym.Env):
                     "frame_length": self.current_params["length"],
                     "normalized_volume": self._calculate_normalized_volume(self._last_model_volume),
                     "volume_efficiency": self._calculate_volume_efficiency(self._last_model_volume),
+                },
+            )
+
+        if is_noop:
+            # no-op动作：给小惩罚但不改变状态
+            return (
+                self.current_pyg_data_state,
+                -0.5,  # 小惩罚引导避免无效动作
+                False,
+                True if self._current_step_count >= self._max_steps_per_episode else False,
+                {
+                    "max_displacement_mm": self._last_max_disp_abs,
+                    "max_stress": self._last_max_stress,
+                    "model_volume_m3": self._last_model_volume,
+                    "frame_length": self.current_params["length"],
+                    "normalized_volume": self._calculate_normalized_volume(self._last_model_volume),
+                    "volume_efficiency": self._calculate_volume_efficiency(self._last_model_volume),
+                    "action_type": "noop",
                 },
             )
 
@@ -708,7 +857,7 @@ class StructuralEnv(gym.Env):
         except Exception as e:
             print(f"Error during OpenSees analysis in env.step: {e}")
             # import traceback; traceback.print_exc() # For detailed debugging
-            reward = -250.0
+            reward = -15.0  # 减小极端惩罚，避免优势方差爆炸
             terminated = True
             info["error"] = f"OpenSees analysis exception: {type(e).__name__} - {str(e)}"
 

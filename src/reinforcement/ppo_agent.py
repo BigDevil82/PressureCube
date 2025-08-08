@@ -16,6 +16,7 @@ class Memory:
         self.rewards = []
         self.dones = []
         self.values = []
+        self.action_masks = []
 
     def clear_memory(self):
         del self.actions[:]
@@ -24,6 +25,7 @@ class Memory:
         del self.rewards[:]
         del self.dones[:]
         del self.values[:]
+        del self.action_masks[:]
 
 
 class ActorCritic(nn.Module):
@@ -42,7 +44,7 @@ class ActorCritic(nn.Module):
         # Critic head
         self.critic = nn.Sequential(nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, 1))
 
-    def forward(self, data: Data):
+    def forward(self, data: Data, action_mask=None):
         # Get node embeddings
         node_embeddings = self.encoder(data)
         global_features: torch.Tensor = self.global_feature_encoder(data.global_features)
@@ -65,19 +67,26 @@ class ActorCritic(nn.Module):
             x = global_mean_pool(x, batch)
 
         action_logits = self.actor(x)
+
+        # 应用动作掩码
+        if action_mask is not None:
+            # action_mask: [batch_size, num_actions] 布尔张量
+            mask_value = -1e9
+            action_logits = action_logits.masked_fill(~action_mask, mask_value)
+
         state_values = self.critic(x)
 
         return action_logits, state_values
 
-    def act(self, state):
-        action_logits, state_value = self.forward(state)
+    def act(self, state, action_mask=None):
+        action_logits, state_value = self.forward(state, action_mask)
         dist = Categorical(logits=action_logits)
         action = dist.sample()
         action_logprob = dist.log_prob(action)
         return action.item(), action_logprob, state_value
 
-    def evaluate(self, state, action):
-        action_logits, state_value = self.forward(state)
+    def evaluate(self, state, action, action_mask=None):
+        action_logits, state_value = self.forward(state, action_mask)
         dist = Categorical(logits=action_logits)
         action_logprobs = dist.log_prob(action)
         dist_entropy = dist.entropy()
@@ -90,34 +99,58 @@ class PPOAgent:
         state_dim,
         glb_feat_dim,
         device,
-        lr=1e-4,
+        lr=5e-5,  # 降低学习率
         gamma=0.99,
         k_epochs=4,
         eps_clip=0.2,
         gae_lambda=0.95,
+        ent_coef: float = 0.05,  # 提高初始熵系数
+        vf_coef: float = 0.5,
+        max_grad_norm: float = 0.5,
+        clip_range_decay: float = 0.999,  # eps_clip衰减率
+        ent_coef_decay: float = 0.9995,  # 熵系数衰减率
     ):
         self.gamma = gamma
         self.eps_clip = eps_clip
+        self.initial_eps_clip = eps_clip
         self.k_epochs = k_epochs
         self.device = device
         self.gae_lambda = gae_lambda
+        self.ent_coef = ent_coef
+        self.initial_ent_coef = ent_coef
+        self.vf_coef = vf_coef
+        self.max_grad_norm = max_grad_norm
+        self.clip_range_decay = clip_range_decay
+        self.ent_coef_decay = ent_coef_decay
 
         self.policy = ActorCritic(state_dim, glb_feat_dim).to(device)
-        self.optimizer = optim.Adam(self.policy.parameters(), lr=lr, betas=(0.9, 0.9))
+        self.optimizer = optim.Adam(self.policy.parameters(), lr=lr, betas=(0.9, 0.999))
 
         self.policy_old = ActorCritic(state_dim, glb_feat_dim).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
         self.mse_loss = nn.MSELoss()
 
-    def select_action(self, state, memory: Memory):
+    def select_action(self, state, memory: Memory, action_mask=None):
         with torch.no_grad():
-            action, log_prob, value = self.policy_old.act(state)
+            # 将action_mask转换为torch张量
+            if action_mask is not None:
+                action_mask_tensor = torch.tensor(
+                    action_mask, dtype=torch.bool, device=self.device
+                ).unsqueeze(0)
+            else:
+                action_mask_tensor = None
+
+            action, log_prob, value = self.policy_old.act(state, action_mask_tensor)
 
         memory.states.append(state)
         memory.actions.append(torch.tensor(action, device=self.device))
-        memory.logprobs.append(log_prob)
-        memory.values.append(value)
+        memory.logprobs.append(log_prob.detach())
+        memory.values.append(value.detach())
+        if action_mask is not None:
+            memory.action_masks.append(torch.tensor(action_mask, dtype=torch.bool, device=self.device))
+        else:
+            memory.action_masks.append(None)
 
         return action
 
@@ -155,27 +188,41 @@ class PPOAgent:
         # convert list to tensor
         old_states = Batch.from_data_list(memory.states).to(self.device)
         old_actions = torch.stack(memory.actions, dim=0).detach()  # Shape: [num_steps]
-        old_logprobs = torch.stack(memory.logprobs, dim=0).detach()  # Shape: [num_steps, 1]
+        old_logprobs = torch.stack(memory.logprobs, dim=0).detach()  # Shape: [num_steps]
+
+        # 处理action masks
+        old_action_masks = None
+        if any(mask is not None for mask in memory.action_masks):
+            valid_masks = [
+                mask if mask is not None else torch.ones(8, dtype=torch.bool, device=self.device)
+                for mask in memory.action_masks
+            ]
+            old_action_masks = torch.stack(valid_masks, dim=0)
 
         # Optimize policy for K epochs
         for i in range(self.k_epochs):
-            # Evaluate old actions and values
-            logprobs, state_values, dist_entropy = self.policy.evaluate(old_states, old_actions)
-
-            # logprobs: [num_steps], state_values: [num_steps, 1], dist_entropy: [num_steps]
+            # Evaluate old actions and values with action masks
+            logprobs, state_values, dist_entropy = self.policy.evaluate(
+                old_states, old_actions, old_action_masks
+            )
+            # Ensure shapes are consistent: [num_steps]
+            logprobs = logprobs.view(-1)
+            old_logprobs_view = old_logprobs.view(-1)
+            advantages_view = advantages.view(-1)
+            returns_view = returns.view(-1, 1)
 
             # Finding the ratio (pi_theta / pi_theta__old)
-            ratios = torch.exp(logprobs.unsqueeze(1) - old_logprobs)  # Shape: [num_steps, 1]
+            ratios = torch.exp(logprobs - old_logprobs_view)  # Shape: [num_steps]
 
             # Finding Surrogate Loss
-            surr1 = ratios * advantages
-            surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
+            surr1 = ratios * advantages_view
+            surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages_view
 
-            loss = (
-                -torch.min(surr1, surr2).mean()
-                + 0.5 * self.mse_loss(state_values, returns)
-                - 0.01 * dist_entropy.mean()
-            )
+            policy_loss = -torch.min(surr1, surr2).mean()
+            value_loss = self.mse_loss(state_values, returns)
+            entropy_loss = -dist_entropy.mean()
+
+            loss = policy_loss + self.vf_coef * value_loss + self.ent_coef * entropy_loss
 
             # take gradient step
             self.optimizer.zero_grad()
@@ -183,9 +230,13 @@ class PPOAgent:
             # The retain_graph=True is crucial for the inner loop of PPO
             # as the graph is needed for the subsequent updates in the same batch.
             is_last_epoch = i == self.k_epochs - 1
-            loss.mean().backward(retain_graph=not is_last_epoch)
-            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
+            loss.backward(retain_graph=not is_last_epoch)
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
             self.optimizer.step()
+
+        # 衰减超参数
+        self.eps_clip = max(0.1, self.eps_clip * self.clip_range_decay)
+        self.ent_coef = max(0.005, self.ent_coef * self.ent_coef_decay)
 
         # Copy new weights into old policy
         self.policy_old.load_state_dict(self.policy.state_dict())
