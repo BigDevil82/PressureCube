@@ -1236,7 +1236,7 @@ if __name__ == "__main__":
     from src.utils.util import Timer
 
     logger.info("Testing OpenSeesAnalyzer...")
-    config_path = "configs/opt_spacing_config.yaml"
+    config_path = "config.yaml"
     config = load_config(config_path)
     model = create_structural_model(config)
     mesh_params = MeshParameters(max_grid_size=0.2)

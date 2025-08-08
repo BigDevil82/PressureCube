@@ -170,13 +170,12 @@ def train(args, config):
     is_ppo = isinstance(agent, PPOAgent)
     if is_ppo:
         memory = Memory()
+    else:
+        replay_buffer = deque(maxlen=rl_params["buffer_size"])
 
     if args.resume_path:
         agent.load_model(args.resume_path)
         print(f"Model resumed from {args.resume_path}")
-
-    if not is_ppo:
-        replay_buffer = deque(maxlen=rl_params["buffer_size"])
 
     # For plotting and saving metrics
     metrics_history = {

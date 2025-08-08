@@ -13,7 +13,7 @@ def get_prototype_configs(base_config: dict):
     """
     prototypes = []
 
-    lengths = [9.6]
+    lengths = [7.2, 9.6]
 
     for length in lengths:
         proto_config = copy.deepcopy(base_config)

@@ -103,7 +103,7 @@ class PPOAgent:
         self.gae_lambda = gae_lambda
 
         self.policy = ActorCritic(state_dim, glb_feat_dim).to(device)
-        self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
+        self.optimizer = optim.Adam(self.policy.parameters(), lr=lr, betas=(0.9, 0.9))
 
         self.policy_old = ActorCritic(state_dim, glb_feat_dim).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
@@ -184,7 +184,7 @@ class PPOAgent:
             # as the graph is needed for the subsequent updates in the same batch.
             is_last_epoch = i == self.k_epochs - 1
             loss.mean().backward(retain_graph=not is_last_epoch)
-
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
             self.optimizer.step()
 
         # Copy new weights into old policy
