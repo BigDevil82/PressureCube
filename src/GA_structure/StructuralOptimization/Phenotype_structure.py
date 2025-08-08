@@ -2,12 +2,14 @@
 import numpy as np
 # from src.analysis.opensees_analysis import OpenSeesAnalyzer
 from ...analysis.opensees_analysis import OpenSeesAnalyzer
-
+from ...utils.GA_utils import setup_logger
 
 # from src.utils.model_utils import create_structural_model
 from ...utils.model_utils import create_structural_model
 # from src.structure.mesh_generator import MeshGenerator, MeshParameters
 from ...structure.mesh_generator import MeshGenerator, MeshParameters
+logger = setup_logger()
+
 
 class PhenotypeStructure:
     MAX_STRESS = 355.0  # MPa
