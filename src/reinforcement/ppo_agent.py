@@ -29,7 +29,7 @@ class Memory:
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, state_dim, global_feature_dim):
+    def __init__(self, state_dim, action_dim, global_feature_dim):
         super().__init__()
         self.encoder = GraphSAGEEncoder(
             in_channels=state_dim, hidden_channels=64, out_channels=32, num_layers=3
@@ -39,7 +39,7 @@ class ActorCritic(nn.Module):
         )
 
         # Actor head
-        self.actor = nn.Sequential(nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, 8))
+        self.actor = nn.Sequential(nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, action_dim))
 
         # Critic head
         self.critic = nn.Sequential(nn.Linear(64, 64), nn.ReLU(), nn.Linear(64, 1))
@@ -98,6 +98,7 @@ class PPOAgent:
         self,
         state_dim,
         glb_feat_dim,
+        action_dim,
         device,
         lr=5e-5,  # 降低学习率
         gamma=0.99,
@@ -123,10 +124,10 @@ class PPOAgent:
         self.clip_range_decay = clip_range_decay
         self.ent_coef_decay = ent_coef_decay
 
-        self.policy = ActorCritic(state_dim, glb_feat_dim).to(device)
+        self.policy = ActorCritic(state_dim, action_dim, glb_feat_dim).to(device)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=lr, betas=(0.9, 0.999))
 
-        self.policy_old = ActorCritic(state_dim, glb_feat_dim).to(device)
+        self.policy_old = ActorCritic(state_dim, action_dim, glb_feat_dim).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
         self.mse_loss = nn.MSELoss()

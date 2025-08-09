@@ -85,6 +85,7 @@ def get_agent(config: dict, device: torch.device, sample_state: Data):
         agent = PPOAgent(
             state_dim=sample_state.x.size(1),
             glb_feat_dim=sample_state.global_features.size(1),
+            action_dim=config["env_config"]["action_dim"],
             device=device,
             lr=config["rl_params"]["lr"],
             gamma=config["rl_params"]["gamma"],
@@ -128,7 +129,9 @@ def evaluate_on_prototypes(
                     # 在评估时也使用动作掩码
                     action_mask = None
                     if config["env_config"]["opt_type"] == "size":
-                        action_mask = env.get_action_mask()
+                        action_mask = env.get_action_mask_for_size()
+                    elif config["env_config"]["opt_type"] == "spacing":
+                        action_mask = env.get_action_mask_for_spacing()
                     action = agent.select_action(state_pyg, memory, action_mask)
                 else:
                     action = agent.select_action(state_pyg, 0.0)
@@ -220,7 +223,9 @@ def evaluate_model_optimality(
             if isinstance(agent, PPOAgent):
                 action_mask = None
                 if config["env_config"]["opt_type"] == "size":
-                    action_mask = env.get_action_mask()
+                    action_mask = env.get_action_mask_for_size()
+                elif config["env_config"]["opt_type"] == "spacing":
+                    action_mask = env.get_action_mask_for_spacing()
                 action = agent.select_action(state_pyg, memory, action_mask)
             else:
                 action = agent.select_action(state_pyg, 0.0)
@@ -339,7 +344,9 @@ def train(args, config):
                 # 获取动作掩码(仅对size优化类型)
                 action_mask = None
                 if config["env_config"]["opt_type"] == "size":
-                    action_mask = env.get_action_mask()
+                    action_mask = env.get_action_mask_for_size()
+                elif config["env_config"]["opt_type"] == "spacing":
+                    action_mask = env.get_action_mask_for_spacing()
                 action = agent.select_action(state_pyg, memory, action_mask)
             else:
                 action = agent.select_action(state_pyg, epsilon_scheduler.get_epsilon())

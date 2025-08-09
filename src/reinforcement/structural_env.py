@@ -397,20 +397,21 @@ class StructuralEnv(gym.Env):
             ### 0: 降低主梁间距，1: 提高主梁间距，2: 降低支撑梁间距，3: 提高支撑梁间距
             if action == 0:
                 self.current_params["main_beam_spacing"] = np.clip(
-                    self.current_params["main_beam_spacing"] - 0.1, 0.3, 1.8
+                    self.current_params["main_beam_spacing"] - 0.05, 0.3, 1.8
                 )
             elif action == 1:
                 self.current_params["main_beam_spacing"] = np.clip(
-                    self.current_params["main_beam_spacing"] + 0.1, 0.3, 1.8
+                    self.current_params["main_beam_spacing"] + 0.05, 0.3, 1.8
                 )
             elif action == 2:
                 self.current_params["brace_spacing"] = np.clip(
-                    self.current_params["brace_spacing"] - 0.1, 0.3, 1.0
+                    self.current_params["brace_spacing"] - 0.05, 0.3, 1.0
                 )
             elif action == 3:
                 self.current_params["brace_spacing"] = np.clip(
-                    self.current_params["brace_spacing"] + 0.1, 0.3, 1.0
+                    self.current_params["brace_spacing"] + 0.05, 0.3, 1.0
                 )
+            return True
         else:
             raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
 
@@ -626,7 +627,7 @@ class StructuralEnv(gym.Env):
 
         return reward
 
-    def get_action_mask(self):
+    def get_action_mask_for_size(self):
         """
         获取当前状态下的动作掩码
         返回长度为8的布尔数组，True表示该动作有效
@@ -671,11 +672,27 @@ class StructuralEnv(gym.Env):
 
         return mask
 
+    def get_action_mask_for_spacing(self):
+        """
+        获取当前状态下的动作掩码
+        返回长度为8的布尔数组，True表示该动作有效
+        """
+        mask = [True] * 4
+        if self.current_params["main_beam_spacing"] <= 0.3:
+            mask[0] = False
+        if self.current_params["main_beam_spacing"] >= 1.8:
+            mask[1] = False
+        if self.current_params["brace_spacing"] <= 0.3:
+            mask[2] = False
+        if self.current_params["brace_spacing"] >= 1.0:
+            mask[3] = False
+        return mask
+
     def _decode_action_for_size_with_mask(self, action: int):
         """
         带动作掩码的动作解码，无效动作作为no-op处理
         """
-        mask = self.get_action_mask()
+        mask = self.get_action_mask_for_size()
 
         if not mask[action]:
             # 无效动作，作为no-op处理
@@ -701,50 +718,65 @@ class StructuralEnv(gym.Env):
 
         return True, False  # (is_valid, is_noop)
 
+    def _decode_action_for_spacing_with_mask(self, action: int):
+        mask = self.get_action_mask_for_spacing()
+        if not mask[action]:
+            return True, True  # (is_valid, is_noop)
+        if action == 0:
+            self.current_params["main_beam_spacing"] -= 0.05
+        elif action == 1:
+            self.current_params["main_beam_spacing"] += 0.05
+        elif action == 2:
+            self.current_params["brace_spacing"] -= 0.05
+        elif action == 3:
+            self.current_params["brace_spacing"] += 0.05
+        return True, False  # (is_valid, is_noop)
+
     def _calculate_reward_for_spacing(self, max_disp_abs, max_stress, model_volume):
-        disp_constraint = self.max_disp
-        stress_constraint = self.max_stress
-        normalized_volume = self._calculate_normalized_volume(model_volume)
+        return self._calculate_reward_for_size(max_disp_abs, max_stress, model_volume)
+        # disp_constraint = self.max_disp
+        # stress_constraint = self.max_stress
+        # normalized_volume = self._calculate_normalized_volume(model_volume)
 
-        # 1. 计算关键指标
-        disp_ratio = max_disp_abs / disp_constraint
-        stress_ratio = max_stress / stress_constraint
+        # # 1. 计算关键指标
+        # disp_ratio = max_disp_abs / disp_constraint
+        # stress_ratio = max_stress / stress_constraint
 
-        # 2. 约束满足度（0-1）
-        feasibility = (disp_ratio + stress_ratio) / 2 if (disp_ratio < 1 and stress_ratio < 1) else 0.0
+        # # 2. 约束满足度（0-1）
+        # feasibility = (disp_ratio + stress_ratio) / 2 if (disp_ratio < 1 and stress_ratio < 1) else 0.0
 
-        # 3. 材料效率奖励（核心）
-        # 鼓励接近最优材料用量
-        volume_efficiency = 1 - normalized_volume**2
+        # # 3. 材料效率奖励（核心）
+        # # 鼓励接近最优材料用量
+        # volume_efficiency = 1 - normalized_volume**2
 
-        # 4. 改进潜力指标
-        improvement_potential = 0
-        if feasibility > 0.5:
-            # 计算当前解与理论最优的材料差距
-            current_to_optimal = max(0, (model_volume - self.best_known_volume) / self.best_known_volume)
-            improvement_potential = 1 / (current_to_optimal + 0.1)
+        # # 4. 改进潜力指标
+        # improvement_potential = 0
+        # if feasibility > 0.5:
+        #     # 计算当前解与理论最优的材料差距
+        #     current_to_optimal = max(0, (model_volume - self.best_known_volume) / self.best_known_volume)
+        #     improvement_potential = 1 / (current_to_optimal + 0.1)
 
-        # 5. 核心奖励计算
-        if feasibility > 0:
-            reward = (
-                10 * feasibility  # 基础可行奖励
-                + 30 * volume_efficiency  # 材料效率（主驱动）
-                + 5 * improvement_potential  # 引导寻找更优解
-                - 0.5 * (disp_ratio + stress_ratio)  # 持续优化约束
-            )
-        else:
-            reward = -2
+        # # 5. 核心奖励计算
+        # if feasibility > 0:
+        #     reward = (
+        #         10 * feasibility  # 基础可行奖励
+        #         + 30 * volume_efficiency  # 材料效率（主驱动）
+        #         + 5 * improvement_potential  # 引导寻找更优解
+        #         - 0.5 * (disp_ratio + stress_ratio)  # 持续优化约束
+        #     )
+        # else:
+        #     reward = -2
 
-        # 6. 发现新最优解的额外奖励
-        if feasibility > 0.8 and model_volume < self.best_known_volume:
-            reward += 50  # 大幅奖励突破性改进
-            self.best_known_volume = model_volume  # 更新已知最优
+        # # 6. 发现新最优解的额外奖励
+        # if feasibility > 0.8 and model_volume < self.best_known_volume:
+        #     reward += 50  # 大幅奖励突破性改进
+        #     self.best_known_volume = model_volume  # 更新已知最优
 
-        self.logger.info(
-            f"Reward: {reward:.2f}, feasibility: {feasibility:.2f}, volume_efficiency: {volume_efficiency:.2f}, improvement_potential: {improvement_potential:.2f}, disp_ratio: {disp_ratio:.2f}, stress_ratio: {stress_ratio:.2f}, model_volume: {model_volume:.2f}, best_known_volume: {self.best_known_volume:.2f}"
-        )
+        # self.logger.info(
+        #     f"Reward: {reward:.2f}, feasibility: {feasibility:.2f}, volume_efficiency: {volume_efficiency:.2f}, improvement_potential: {improvement_potential:.2f}, disp_ratio: {disp_ratio:.2f}, stress_ratio: {stress_ratio:.2f}, model_volume: {model_volume:.2f}, best_known_volume: {self.best_known_volume:.2f}"
+        # )
 
-        return reward
+        # return reward
 
     def _calculate_normalized_volume(self, model_volume: float) -> float:
         """计算归一化的材料用量"""
@@ -757,8 +789,7 @@ class StructuralEnv(gym.Env):
         if self.env_config["opt_type"] == "size":
             is_valid, is_noop = self._decode_action_for_size_with_mask(action)
         elif self.env_config["opt_type"] == "spacing":
-            is_valid = self._decode_action_for_spacing(action)
-            is_noop = False  # spacing不支持action masking
+            is_valid, is_noop = self._decode_action_for_spacing_with_mask(action)
         else:
             raise ValueError(f"Invalid opt type: {self.env_config['opt_type']}")
 
