@@ -688,6 +688,14 @@ class StructuralEnv(gym.Env):
             mask[3] = False
         return mask
 
+    def get_action_mask_for_both(self):
+        mask = [True] * 12
+        size_mask = self.get_action_mask_for_size()
+        spacing_mask = self.get_action_mask_for_spacing()
+        mask[0:8] = size_mask
+        mask[8:12] = spacing_mask
+        return mask
+
     def _decode_action_for_size_with_mask(self, action: int):
         """
         带动作掩码的动作解码，无效动作作为no-op处理
@@ -730,6 +738,16 @@ class StructuralEnv(gym.Env):
             self.current_params["brace_spacing"] -= 0.05
         elif action == 3:
             self.current_params["brace_spacing"] += 0.05
+        return True, False  # (is_valid, is_noop)
+
+    def _decode_action_for_both_with_mask(self, action: int):
+        mask = self.get_action_mask_for_both()
+        if not mask[action]:
+            return True, True  # (is_valid, is_noop)
+        if action < 8:
+            self._decode_action_for_size_with_mask(action)
+        else:
+            self._decode_action_for_spacing_with_mask(action - 8)
         return True, False  # (is_valid, is_noop)
 
     def _calculate_reward_for_spacing(self, max_disp_abs, max_stress, model_volume):
@@ -778,6 +796,9 @@ class StructuralEnv(gym.Env):
 
         # return reward
 
+    def _calculate_reward_for_both(self, max_disp_abs, max_stress, model_volume):
+        return self._calculate_reward_for_size(max_disp_abs, max_stress, model_volume)
+
     def _calculate_normalized_volume(self, model_volume: float) -> float:
         """计算归一化的材料用量"""
         return (model_volume - self.min_volume) / (self.max_volume - self.min_volume)
@@ -790,6 +811,8 @@ class StructuralEnv(gym.Env):
             is_valid, is_noop = self._decode_action_for_size_with_mask(action)
         elif self.env_config["opt_type"] == "spacing":
             is_valid, is_noop = self._decode_action_for_spacing_with_mask(action)
+        elif self.env_config["opt_type"] == "both":
+            is_valid, is_noop = self._decode_action_for_both_with_mask(action)
         else:
             raise ValueError(f"Invalid opt type: {self.env_config['opt_type']}")
 
@@ -862,6 +885,8 @@ class StructuralEnv(gym.Env):
                     reward = self._calculate_reward_for_spacing(
                         max_disp_abs, max_stress, current_model_volume
                     )
+                elif self.env_config["opt_type"] == "both":
+                    reward = self._calculate_reward_for_both(max_disp_abs, max_stress, current_model_volume)
                 else:
                     raise ValueError(f"Invalid opt type: {self.env_config['opt_type']}")
 
@@ -886,7 +911,7 @@ class StructuralEnv(gym.Env):
                 info["error"] = "OpenSees static analysis failed."
 
         except Exception as e:
-            print(f"Error during OpenSees analysis in env.step: {e}")
+            print(f"Error during env.step: {e}")
             # import traceback; traceback.print_exc() # For detailed debugging
             reward = -15.0  # 减小极端惩罚，避免优势方差爆炸
             terminated = True

@@ -1,0 +1,95 @@
+# 高海拔增压建筑智能设计系统配置文件
+
+# 结构参数
+structural_params:
+  length: 7.2 # 舱体长度 (y方向，米)
+  width: 3.6 # 舱体宽度 (x方向，米)
+  height: 3.3 # 舱体高度 (z方向，米)
+  main_beam_spacing: 1.5 # 环向主梁间距 (米)
+  secondary_beam_spacing: 1.5 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
+  brace_spacing: 1.0 # 支撑梁间距 (米)
+  frame_section_index: 0
+  main_beam_section_index: 0
+  secondary_beam_section_index: 0
+  brace_section_index: 0
+  win_bottom: 1.0
+  win_height: 1.5
+  plate_thickness: 0.005
+  pressure: 30 # 内压，kPa
+  windows:
+    [] # 窗户参数列表
+    # - y_position: 1.275 # 窗户中心在y轴的位置 (米)
+    #   on_face: "left" # 窗户所在面 ('front', 'back', 'left')
+    # - y_position: 1.275 # 窗户中心在y轴的位置 (米)
+    #   on_face: "right" # 窗户所在面 ('front', 'back', 'left')
+    #   is_door: true
+    # - y_position: 1.575 # 窗户中心在y轴的位置 (米)
+    #   on_face: "front" # 窗户所在面
+    # - y_position: 2.625 # 窗户中心在y轴的位置 (米)
+    #   on_face: "back" # 窗户所在面
+
+# 环境动作参数
+env_config:
+  graph_type: beam_as_node # beam_as_node | beam_as_edge
+  opt_type: both # size | spacing | both
+  action_dim: 13
+  parameter_action_mapping:
+    frame_section_index:
+      action_idx: 0
+      type: discrete
+      num_options: 4 # Example: 4 choices for frame sections
+    main_beam_section_index:
+      action_idx: 1
+      type: discrete
+      num_options: 11 # Example: 21 choices for main beam sections
+    secondary_beam_section_index:
+      action_idx: 2
+      type: discrete
+      num_options: 10
+    brace_section_index:
+      action_idx: 3
+      type: discrete
+      num_options: 20
+    main_beam_spacing:
+      action_idx: 4
+      type: continuous
+      bounds: [0.7, 1.5]
+      module: 0.1
+    brace_spacing:
+      action_idx: 5
+      type: discrete
+      bounds: [1, 4] # 代表两个次梁间的跨数
+
+# 强化学习参数
+rl_params:
+  agent: "ppo"
+  lr: 1.0e-4
+  actor_lr: 1.0e-4 # Actor网络学习率
+  critic_lr: 1.0e-3 # Critic网络学习率
+  gamma: 0.98 # 折扣因子
+  gae_lambda: 0.95
+  k_epochs: 10
+  eps_clip: 0.2
+  tau: 0.005 # 目标网络软更新参数
+  sigma: 0.2 # 探索高斯噪声的标准差
+  min_replay_buffer_fill: 50
+  batch_size: 32 # 批次大小
+  buffer_size: 10000 # 经验回放缓冲区大小
+  update_interval: 10 # 更新间隔
+  ddpg_fc_hidden_dim: 256 # 隐藏层大小
+  max_episodes: 1000 # 最大训练回合数
+  max_steps_per_episode: 40 # 每个回合的最大步数
+  eval_interval: 20 # 在原型结构上的评估间隔
+  save_interval: 100 # 模型保存间隔
+  plot_interval: 1 # 训练指标绘制间隔
+
+# 图神经网络参数
+hebg_config:
+  hidden_channels: 64 # 隐藏层维度
+  out_channels: 128 # 输出特征维度
+  num_beam_types: 4 # 梁的种类
+
+# OpenSees分析参数
+analysis_params:
+  max_stress: 355 # 最大应力
+  max_disp: 14.4 # 最大位移

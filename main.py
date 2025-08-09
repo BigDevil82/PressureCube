@@ -132,6 +132,8 @@ def evaluate_on_prototypes(
                         action_mask = env.get_action_mask_for_size()
                     elif config["env_config"]["opt_type"] == "spacing":
                         action_mask = env.get_action_mask_for_spacing()
+                    elif config["env_config"]["opt_type"] == "both":
+                        action_mask = env.get_action_mask_for_both()
                     action = agent.select_action(state_pyg, memory, action_mask)
                 else:
                     action = agent.select_action(state_pyg, 0.0)
@@ -226,6 +228,8 @@ def evaluate_model_optimality(
                     action_mask = env.get_action_mask_for_size()
                 elif config["env_config"]["opt_type"] == "spacing":
                     action_mask = env.get_action_mask_for_spacing()
+                elif config["env_config"]["opt_type"] == "both":
+                    action_mask = env.get_action_mask_for_both()
                 action = agent.select_action(state_pyg, memory, action_mask)
             else:
                 action = agent.select_action(state_pyg, 0.0)
@@ -327,8 +331,8 @@ def train(args, config):
         # 增加随机起点扰动以提升探索性
         reset_options = {
             "random_structure": {"random_keys": ["pressure"]},
-            # "random_start_perturbation": True,
-            # "perturbation_prob": 0.3,
+            "random_start_perturbation": True,
+            "perturbation_prob": 0.3,
         }
         state_pyg, info_reset = env.reset(options=reset_options)
         step = 0
@@ -347,6 +351,8 @@ def train(args, config):
                     action_mask = env.get_action_mask_for_size()
                 elif config["env_config"]["opt_type"] == "spacing":
                     action_mask = env.get_action_mask_for_spacing()
+                elif config["env_config"]["opt_type"] == "both":
+                    action_mask = env.get_action_mask_for_both()
                 action = agent.select_action(state_pyg, memory, action_mask)
             else:
                 action = agent.select_action(state_pyg, epsilon_scheduler.get_epsilon())
