@@ -330,7 +330,7 @@ def train(args, config):
     for episode in range(args.max_episodes):
         # 增加随机起点扰动以提升探索性
         reset_options = {
-            "random_structure": {"random_keys": ["pressure"]},
+            "random_structure": {"random_keys": ["pressure", "length"]},
             "random_start_perturbation": True,
             "perturbation_prob": 0.3,
         }

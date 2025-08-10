@@ -261,7 +261,7 @@ class ConvergenceChecker:
         return gap
 
 
-def quick_convergence_test(config_path: str, pressure_values: List[float] = None):
+def quick_convergence_test(config_path: str, pressure_values: Optional[List[float]] = None):
     """
     快速收敛性测试函数
 
