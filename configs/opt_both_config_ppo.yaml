@@ -32,7 +32,7 @@ structural_params:
 env_config:
   graph_type: beam_as_node # beam_as_node | beam_as_edge
   opt_type: both # size | spacing | both
-  action_dim: 13
+  action_dim: 12
   parameter_action_mapping:
     frame_section_index:
       action_idx: 0

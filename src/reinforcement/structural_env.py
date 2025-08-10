@@ -61,6 +61,7 @@ class StructuralEnv(gym.Env):
         self._last_max_disp_abs = 0.0
         self._last_max_stress = 0.0
         self._last_model_volume = 0.0
+        self._last_action = None
 
     def _calculate_volume_for_params(self, params_dict: dict) -> float:
         """根据给定的参数字典计算并返回结构体积"""
@@ -797,7 +798,156 @@ class StructuralEnv(gym.Env):
         # return reward
 
     def _calculate_reward_for_both(self, max_disp_abs, max_stress, model_volume):
-        return self._calculate_reward_for_size(max_disp_abs, max_stress, model_volume)
+        """
+        改进的多任务奖励函数（同时优化尺寸和间距）:
+        1. 向量化约束违反度，优先处理最严重违反
+        2. 不平衡惩罚，避免对某一约束过度调整
+        3. 动作成本区分，间距调整成本更高
+        4. 可行后贴边减材策略
+        """
+        disp_constraint = self.max_disp
+        stress_constraint = self.max_stress
+
+        # 计算向量化约束违反度
+        v_disp = max(0, max_disp_abs / disp_constraint - 1)
+        v_stress = max(0, max_stress / stress_constraint - 1)
+
+        # 计算上一步的约束违反度
+        last_v_disp = max(0, self._last_max_disp_abs / disp_constraint - 1)
+        last_v_stress = max(0, self._last_max_stress / stress_constraint - 1)
+
+        # 距离指标
+        d_l2 = np.sqrt(v_disp**2 + v_stress**2)
+        d_inf = max(v_disp, v_stress)
+        last_d_l2 = np.sqrt(last_v_disp**2 + last_v_stress**2)
+        last_d_inf = max(last_v_disp, last_v_stress)
+
+        # 距离改善量
+        delta_d_l2 = last_d_l2 - d_l2
+        delta_d_inf = last_d_inf - d_inf
+
+        # 各维约束改善量
+        delta_v_disp = last_v_disp - v_disp
+        delta_v_stress = last_v_stress - v_stress
+
+        # 不平衡指标
+        imbalance = abs(v_disp - v_stress)
+
+        # 体积相关
+        normalized_volume = self._calculate_normalized_volume(model_volume)
+
+        # 步数惩罚
+        step_penalty = 0.1
+
+        # 获取最后一个动作（用于动作成本）
+        action_cost = self._get_action_cost()
+
+        # 两阶段奖励设计
+        if v_disp > 0 or v_stress > 0:  # 不可行阶段
+            # 超参数
+            c_delta = 8.0  # 距离改善奖励系数
+            c2 = 2.0  # L2距离改善系数
+            w_d = 15.0  # 距离惩罚权重
+            beta = 2.0  # 不平衡惩罚权重
+            kappa_reg = 6.0  # 退化惩罚权重
+
+            # 主要奖励：优先改善最严重违反（L∞为主，L2为辅）
+            distance_reward = c_delta * delta_d_inf + c2 * delta_d_l2
+
+            # 当前状态惩罚
+            distance_penalty = -w_d * d_inf
+
+            # 不平衡惩罚（避免单边过度优化）
+            imbalance_penalty = -beta * imbalance
+
+            # 退化惩罚（任何一维恶化都要惩罚）
+            degradation_penalty = -kappa_reg * (max(-delta_v_disp, 0) + max(-delta_v_stress, 0))
+
+            # 总奖励
+            reward = (
+                distance_reward
+                + distance_penalty
+                + imbalance_penalty
+                + degradation_penalty
+                - action_cost
+                - step_penalty
+            )
+
+            self.logger.info(
+                f"[不可行] r: {reward:.2f}, dist_r: {distance_reward:.2f}, dist_p: {distance_penalty:.2f}, "
+                f"imbal_p: {imbalance_penalty:.2f}, degrad_p: {degradation_penalty:.2f}, "
+                f"action_c: {action_cost:.2f}, v_disp: {v_disp:.3f}, v_stress: {v_stress:.3f}, "
+                f"d_inf: {d_inf:.3f}, imbalance: {imbalance:.3f}"
+            )
+
+        else:  # 可行阶段
+            # 超参数
+            R0 = 5.0  # 基础可行奖励
+            alpha = 50.0  # 体积优化权重
+            mu = 8.0  # 过度安全惩罚权重
+            B_success = 100.0  # 突破奖励系数
+            tau = 0.98  # 贴边阈值
+
+            # 基础可行奖励 + 体积优化
+            base_reward = R0 + alpha * (1 - normalized_volume)
+
+            # 计算当前约束比率
+            disp_ratio = max_disp_abs / disp_constraint
+            stress_ratio = max_stress / stress_constraint
+            current_max_ratio = max(disp_ratio, stress_ratio)
+
+            # 过度安全惩罚（鼓励贴边工作）
+            distance_inside = max(0, tau - current_max_ratio)
+            safety_penalty = -mu * distance_inside
+
+            # 刚达可行的突破奖励
+            breakthrough_bonus = 0
+            if last_v_disp > 0 or last_v_stress > 0:  # 刚从不可行变为可行
+                breakthrough_bonus = B_success * (1 - normalized_volume)
+
+            reward = base_reward + safety_penalty + breakthrough_bonus - action_cost - step_penalty
+
+            self.logger.info(
+                f"[可行] r: {reward:.2f}, base: {base_reward:.2f}, safety_p: {safety_penalty:.2f}, "
+                f"breakthrough: {breakthrough_bonus:.2f}, action_c: {action_cost:.2f}, "
+                f"norm_vol: {normalized_volume:.3f}, max_ratio: {current_max_ratio:.3f}, "
+                f"distance_inside: {distance_inside:.3f}"
+            )
+
+        # 回退保护：如果非主要违反维度恶化超过阈值
+        epsilon = 0.05  # 5%的恶化阈值
+        gamma = 8.0  # 回退惩罚权重
+
+        # 识别主要违反维度
+        if last_v_disp > last_v_stress:  # 位移是主要问题
+            if delta_v_stress < -epsilon:  # 应力恶化超过阈值
+                excess = abs(delta_v_stress) - epsilon
+                reward -= gamma * excess
+                self.logger.info(f"[回退保护] 应力恶化 {delta_v_stress:.3f}, 扣分: {gamma * excess:.2f}")
+        elif last_v_stress > last_v_disp:  # 应力是主要问题
+            if delta_v_disp < -epsilon:  # 位移恶化超过阈值
+                excess = abs(delta_v_disp) - epsilon
+                reward -= gamma * excess
+                self.logger.info(f"[回退保护] 位移恶化 {delta_v_disp:.3f}, 扣分: {gamma * excess:.2f}")
+
+        return reward
+
+    def _get_action_cost(self):
+        """
+        计算动作成本，间距调整比尺寸调整成本更高
+        """
+        # 如果没有记录最后动作，返回0
+        if not hasattr(self, "_last_action"):
+            return 0.0
+
+        action = self._last_action
+        lambda_size = 0.1  # 尺寸调整成本
+        lambda_space = 0.3  # 间距调整成本（更高）
+
+        if action < 8:  # 尺寸调整动作 (0-7)
+            return lambda_size
+        else:  # 间距调整动作 (8-11)
+            return lambda_space
 
     def _calculate_normalized_volume(self, model_volume: float) -> float:
         """计算归一化的材料用量"""
@@ -807,6 +957,9 @@ class StructuralEnv(gym.Env):
         return self.total_force_kN / model_volume * 1e-3  # kN/dm³ 量级大约为3-5
 
     def step(self, action: int):
+        # 记录动作用于计算动作成本
+        self._last_action = action
+
         if self.env_config["opt_type"] == "size":
             is_valid, is_noop = self._decode_action_for_size_with_mask(action)
         elif self.env_config["opt_type"] == "spacing":
