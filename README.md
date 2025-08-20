@@ -484,6 +484,70 @@ python src/surrogate_model/generate_dataset.py
 - **可解释性**：清晰的两阶段奖励设计便于理解和调试
 - **可评估性**：客观的最优性gap指标量化模型性能
 
+## 论文插图生成 📊
+
+### 新增功能：符合期刊规范的专业绘图系统
+
+为了支持《建筑结构学报》等期刊的投稿要求，新增了专业的论文插图生成功能：
+
+#### 核心特点
+
+1. **期刊规范适配**：
+   - 图宽：5.5cm，图芯：5cm
+   - 中文字体：宋体
+   - 英文字体：Times New Roman
+   - 分辨率：300 DPI
+   - 坐标轴刻度朝内，无网格线
+
+2. **三类专业图表**：
+   - **累积奖励曲线**：训练过程中的奖励变化，包含原始数据和滑动平均
+   - **最大位移曲线**：结构最大位移变化，含14.4mm限值线
+   - **最大应力曲线**：结构最大应力变化，含355MPa限值线
+
+3. **智能字体配置**：
+   - 自动适配不同操作系统的中文字体
+   - Windows：宋体 + Times New Roman
+   - macOS：华文宋体 + Times New Roman
+   - Linux：DejaVu Sans + Times New Roman
+
+#### 使用方法
+
+1. **快速生成所有图表**：
+   ```bash
+   python scripts/generate_plots.py --metrics_path results/your_experiment/metrics.npz
+   ```
+
+2. **生成特定类型图表**：
+   ```bash
+   # 只生成奖励曲线，使用20个episode的滑动平均
+   python scripts/generate_plots.py --metrics_path results/experiment1/metrics.npz --plot_type reward --window_size 20
+   
+   # 只生成位移曲线
+   python scripts/generate_plots.py --metrics_path results/experiment1/metrics.npz --plot_type displacement
+   
+   # 只生成应力曲线
+   python scripts/generate_plots.py --metrics_path results/experiment1/metrics.npz --plot_type stress
+   ```
+
+3. **指定输出目录**：
+   ```bash
+   python scripts/generate_plots.py --metrics_path results/experiment1/metrics.npz --output_dir figures/
+   ```
+
+#### 输出文件
+
+生成的图表文件将保存为：
+- `reward_curve.png`：累积奖励变化曲线
+- `displacement_curve.png`：最大位移变化曲线  
+- `stress_curve.png`：最大应力变化曲线
+
+#### 技术实现
+
+- **字体管理**：`setup_matplotlib_fonts()` 函数自动配置中英文混合字体
+- **数据处理**：智能提取每个episode的最终指标值
+- **滑动平均**：`apply_moving_average()` 函数提供平滑的趋势展示
+- **格式规范**：严格按照期刊要求设置图表参数
+
 ## 后续工作
 
 *   **代理模型开发**: 训练快速预测结构响应的神经网络模型，进一步提升优化效率。
