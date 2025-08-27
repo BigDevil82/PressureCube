@@ -88,7 +88,12 @@ def calculate_rectangle_iou(
 
 
 def plot_progress(
-    metrics_history, save_dir, filename, x_axis_label="Episode", main_title_prefix="Training Progress"
+    metrics_history,
+    save_dir,
+    filename,
+    hline=355,
+    x_axis_label="Episode",
+    main_title_prefix="Training Progress",
 ):
     """Plots and saves the progress for various metrics."""
     if not os.path.exists(save_dir):
@@ -151,7 +156,7 @@ def plot_progress(
     axs[1, 0].set_title(f"Maximum Stress per {x_axis_label}")
     axs[1, 0].legend()
     axs[1, 0].grid(True)
-    axs[1, 0].axhline(y=355, color="r", linestyle="--", label="Constraint")
+    axs[1, 0].axhline(y=hline, color="r", linestyle="--", label="Constraint")
 
     # Plot Model Volume
     axs[1, 1].plot(

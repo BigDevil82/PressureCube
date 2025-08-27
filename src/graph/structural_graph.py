@@ -413,8 +413,12 @@ class BeamAsNodeGraph:
             centroid = (start_node_obj.coordinates() + end_node_obj.coordinates()) / 2.0
 
             # response
-            max_disp_abs = beam.response.max_disp_abs
-            max_stress = beam.response.max_stress
+            if beam.response is not None:
+                max_disp_abs = beam.response.max_disp_abs
+                max_stress = beam.response.max_stress
+            else:
+                max_disp_abs = 0
+                max_stress = 0
 
             # response violation
             disp_violation = max(0, (max_disp_abs - 14.4) / 14.4)
@@ -507,27 +511,27 @@ if __name__ == "__main__":
     config = load_config(config_path)
     model = create_structural_model(config)
 
-    # Test StructuralGraph (joints as nodes, beams as edges)
-    print("\n--- Testing StructuralGraph (joints as nodes) ---")
-    graph_type1 = BeamAsEdgeGraph(model)
-    print(f"Created: {graph_type1}")
-    pyg_data_type1 = graph_type1.to_pyg_data()
-    print("PyG Data (Type 1):")
-    print(pyg_data_type1)
-    if pyg_data_type1:
-        print(f"  Node features shape: {pyg_data_type1.x.shape if pyg_data_type1.x is not None else 'N/A'}")
-        print(
-            f"  Edge index shape: {pyg_data_type1.edge_index.shape if pyg_data_type1.edge_index is not None else 'N/A'}"
-        )
-        print(
-            f"  Edge features shape: {pyg_data_type1.edge_attr.shape if pyg_data_type1.edge_attr is not None else 'N/A'}"
-        )
+    # # Test StructuralGraph (joints as nodes, beams as edges)
+    # print("\n--- Testing StructuralGraph (joints as nodes) ---")
+    # graph_type1 = BeamAsEdgeGraph(model)
+    # print(f"Created: {graph_type1}")
+    # pyg_data_type1 = graph_type1.to_pyg_data()
+    # print("PyG Data (Type 1):")
+    # print(pyg_data_type1)
+    # if pyg_data_type1:
+    #     print(f"  Node features shape: {pyg_data_type1.x.shape if pyg_data_type1.x is not None else 'N/A'}")
+    #     print(
+    #         f"  Edge index shape: {pyg_data_type1.edge_index.shape if pyg_data_type1.edge_index is not None else 'N/A'}"
+    #     )
+    #     print(
+    #         f"  Edge features shape: {pyg_data_type1.edge_attr.shape if pyg_data_type1.edge_attr is not None else 'N/A'}"
+    #     )
 
     # Test BeamAsNodeGraph (beams as nodes, connections as edges)
     print("\n--- Testing BeamAsNodeGraph (beams as nodes) ---")
     graph_type2 = BeamAsNodeGraph(model)
     print(f"Created: {graph_type2}")
-    pyg_data_type2 = graph_type2.to_pyg_data()
+    pyg_data_type2 = graph_type2.to_pyg_data({"pressure": 30, "frame_length": 10})
     print("PyG Data (Type 2):")
     print(pyg_data_type2)
     if pyg_data_type2:

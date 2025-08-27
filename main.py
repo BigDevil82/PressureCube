@@ -293,6 +293,7 @@ def train(args, config):
     logger = Logger(f"rewards_{ts}.log")
 
     rl_params = config["rl_params"]
+    stress_limit = config["analysis_params"]["max_stress"]
 
     env = StructuralEnv(initial_params_config=args.config, logger=logger)
     epsilon_scheduler = EpsilonScheduler()
@@ -422,7 +423,9 @@ def train(args, config):
 
         # Plot progress after each episode
         if episode % rl_params.get("plot_interval", 10) == 0:
-            plot_progress(metrics_history, plot_save_dir, filename="training_progress.png")
+            plot_progress(
+                metrics_history, plot_save_dir, filename="training_progress.png", hline=stress_limit
+            )
 
         print(
             f"Episode {episode+1}/{args.max_episodes}, Episode Return: {episode_reward:.2f}, Steps: {step}, Info: {info.get('error', 'OK')}"
@@ -489,7 +492,7 @@ def train(args, config):
     print("训练完成.")
     # Plot final combined metrics
     if metrics_history["rewards"]:
-        plot_progress(metrics_history, plot_save_dir, "training_progress.png")
+        plot_progress(metrics_history, plot_save_dir, "training_progress.png", hline=stress_limit)
         print(f"Final training plot saved in {plot_save_dir}")
 
 
