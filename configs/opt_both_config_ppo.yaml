@@ -91,5 +91,5 @@ hebg_config:
 
 # OpenSees分析参数
 analysis_params:
-  max_stress: 284 # 最大应力
+  max_stress: 355 # 最大应力
   max_disp: 14.4 # 最大位移
