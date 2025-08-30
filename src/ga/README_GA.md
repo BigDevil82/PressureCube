@@ -31,7 +31,7 @@
 ## 文件结构
 
 ```
-src/
+src/ga
 ├── steel_frame_ga.py              # 遗传算法核心实现
 ├── run_steel_frame_optimization.py # 主运行程序
 ├── test_ga.py                     # 测试脚本
@@ -79,19 +79,6 @@ python run_steel_frame_optimization.py
 2. **多参数对比**: 使用不同参数设置运行多次优化进行对比
 3. **退出程序**
 
-### 3. 运行测试
-
-```bash
-cd src
-python test_ga.py
-```
-
-测试程序会验证：
-- 染色体创建和操作
-- 种群初始化
-- 遗传操作（交叉、变异）
-- 单个个体评估
-- 小规模优化运行
 
 ## 核心类和方法
 
@@ -179,9 +166,7 @@ else:
    - 适应度收敛过程
    - 材料用量优化过程
 
-3. **截面详细信息** (`section_details.json`):
-   - 各类型梁的具体截面参数
-   - 间距参数
+
 
 ## 性能调优建议
 

@@ -102,6 +102,7 @@ def save_optimization_results(optimizer: SteelFrameGA, output_dir: str):
             "elite_ratio": optimizer.ga_params.elite_ratio,
             "seed": optimizer.ga_params.seed,
         },
+        "structural_params": optimizer.base_config["structural_params"],
         "constraints": {
             "max_stress": optimizer.constraints.max_stress,
             "max_displacement": optimizer.constraints.max_displacement,
@@ -124,6 +125,7 @@ def save_optimization_results(optimizer: SteelFrameGA, output_dir: str):
         "optimization_history": {
             "best_fitness": optimizer.best_fitness_history,
             "avg_fitness": optimizer.avg_fitness_history,
+            "material_volume": optimizer.material_history,
         },
     }
 
@@ -183,13 +185,21 @@ def run_optimization_with_different_parameters():
         {
             "name": "小规模快速测试",
             "params": GAParameters(
-                population_size=20, max_generations=10, crossover_rate=0.8, mutation_rate=0.1, elite_ratio=0.1
+                population_size=20,
+                max_generations=40,
+                crossover_rate=0.8,
+                mutation_rate=0.25,
+                elite_ratio=0.2,
             ),
         },
         {
             "name": "中等规模优化",
             "params": GAParameters(
-                population_size=50, max_generations=30, crossover_rate=0.8, mutation_rate=0.1, elite_ratio=0.1
+                population_size=50,
+                max_generations=60,
+                crossover_rate=0.8,
+                mutation_rate=0.2,
+                elite_ratio=0.1,
             ),
         },
         {
@@ -258,7 +268,7 @@ def run_single_optimization():
 
     # 设置遗传算法参数
     ga_params = GAParameters(
-        population_size=40, max_generations=100, crossover_rate=0.8, mutation_rate=0.1, elite_ratio=0.1
+        population_size=20, max_generations=50, crossover_rate=0.8, mutation_rate=0.25, elite_ratio=0.2
     )
 
     # 创建优化器
@@ -332,22 +342,19 @@ def main():
     """主函数"""
     print("钢框架结构遗传算法优化程序")
     print("=" * 50)
-    run_single_optimization()
+    # run_single_optimization()
 
-    # print("1. 运行单次优化")
-    # print("2. 运行多参数对比优化")
-    # print("3. 退出")
+    print("1. 运行单次优化")
+    print("2. 运行多参数对比优化")
 
-    # choice = input("\n请选择运行模式 (1-3): ").strip()
+    choice = input("\n请选择运行模式 (1-2): ").strip()
 
-    # if choice == "1":
-    #     run_single_optimization()
-    # elif choice == "2":
-    #     run_optimization_with_different_parameters()
-    # elif choice == "3":
-    #     print("程序退出")
-    # else:
-    #     print("无效选择，请输入1-3")
+    if choice == "1":
+        run_single_optimization()
+    elif choice == "2":
+        run_optimization_with_different_parameters()
+    else:
+        print("无效选择，请输入1-2")
 
 
 if __name__ == "__main__":
