@@ -132,7 +132,7 @@ class PPOAgent:
 
         self.mse_loss = nn.MSELoss()
 
-    def select_action(self, state, memory: Memory, action_mask=None):
+    def select_action(self, state, memory: Memory = None, action_mask=None):
         with torch.no_grad():
             # 将action_mask转换为torch张量
             if action_mask is not None:
@@ -144,14 +144,15 @@ class PPOAgent:
 
             action, log_prob, value = self.policy_old.act(state, action_mask_tensor)
 
-        memory.states.append(state)
-        memory.actions.append(torch.tensor(action, device=self.device))
-        memory.logprobs.append(log_prob.detach())
-        memory.values.append(value.detach())
-        if action_mask is not None:
-            memory.action_masks.append(torch.tensor(action_mask, dtype=torch.bool, device=self.device))
-        else:
-            memory.action_masks.append(None)
+        if memory is not None:
+            memory.states.append(state)
+            memory.actions.append(torch.tensor(action, device=self.device))
+            memory.logprobs.append(log_prob.detach())
+            memory.values.append(value.detach())
+            if action_mask is not None:
+                memory.action_masks.append(torch.tensor(action_mask, dtype=torch.bool, device=self.device))
+            else:
+                memory.action_masks.append(None)
 
         return action
 
