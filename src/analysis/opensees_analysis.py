@@ -1255,23 +1255,29 @@ if __name__ == "__main__":
         with Timer("static analysis cost"):
             analyzer.run_static_analysis()
         max_indicators = analyzer.get_max_indicators()
-        components = ["Nx", "Ny", "Nxy", "Mx", "My", "Mxy", "Qx", "Qy"]
-        fmt_display_components(max_indicators["max_force"], components, "max force(kN/m)|(kNm/m)")
-        fmt_display_components(max_indicators["min_force"], components, "min force(kN/m)|(kNm/m)")
-        components = ["σx+", "σx-", "σy+", "σy-", "τxy+", "τxy-", "τxz", "τyz"]
-        fmt_display_components(max_indicators["max_stress"], components, "max stress(MPa)")
-        fmt_display_components(max_indicators["min_stress"], components, "min stress(MPa)")
-        for key, value in max_indicators.items():
-            if isinstance(value, np.ndarray):
-                print(f"{key}: {' '.join(value.round(2).astype(str).tolist())}")
-            else:
-                print(f"{key}: {value}")
+        # components = ["Nx", "Ny", "Nxy", "Mx", "My", "Mxy", "Qx", "Qy"]
+        # fmt_display_components(max_indicators["max_force"], components, "max force(kN/m)|(kNm/m)")
+        # fmt_display_components(max_indicators["min_force"], components, "min force(kN/m)|(kNm/m)")
+        # components = ["σx+", "σx-", "σy+", "σy-", "τxy+", "τxy-", "τxz", "τyz"]
+        # fmt_display_components(max_indicators["max_stress"], components, "max stress(MPa)")
+        # fmt_display_components(max_indicators["min_stress"], components, "min stress(MPa)")
+        # for key, value in max_indicators.items():
+        #     if isinstance(value, np.ndarray):
+        #         print(f"{key}: {' '.join(value.round(2).astype(str).tolist())}")
+        #     else:
+        #         print(f"{key}: {value}")
 
-        # max_nodal_idx
-        max_nodal_idx = max_indicators["max_abs_displacement_idx"]
-        # coordinates of the max nodal
-        max_nodal_coord = model.points[max_nodal_idx].coordinates()
-        print("max_nodal_coord: ", max_nodal_coord)
+        # # max_nodal_idx
+        # max_nodal_idx = max_indicators["max_abs_displacement_idx"]
+        # # coordinates of the max nodal
+        # max_nodal_coord = model.points[max_nodal_idx].coordinates()
+        # print("max_nodal_coord: ", max_nodal_coord)
+
+        disp_sign = "✅" if max_indicators["max_abs_displacement"] < 14.4 else "❌"
+        stress_sign = "✅" if max_indicators["max_abs_stress"] < 355.0 else "❌"
+
+        print(f"{disp_sign} max displacement: ", max_indicators["max_abs_displacement"])
+        print(f"{stress_sign} max stress: ", max_indicators["max_abs_stress"])
 
         # ########################  modal analysis  ########################
         # num_modes = 6
