@@ -44,15 +44,14 @@ def parse_args():
     )
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--resume_path", type=str, default=None, help="恢复训练路径")
-    parser.add_argument(
-        "--max_episodes", type=int, default=500, help="最大训练回合数"
-    )  # Reduced for quicker test runs
+    parser.add_argument("--max_episodes", type=int, default=500, help="最大训练回合数")
     parser.add_argument(
         "--model_save_path",
         type=str,
         default="./results/models",
         help="Path to save/load trained model",
     )
+    parser.add_argument("--prototype", type=bool, default=False, help="是否评估原型结构")
     return parser.parse_args()
 
 
@@ -98,6 +97,49 @@ def get_agent(config: dict, device: torch.device, sample_state: Data):
     return agent
 
 
+def eval_on_config(
+    agent: Union[DQNSpacingAgent, DQNSizeAgent, PPOAgent],
+    config: dict,
+    device: torch.device,
+    logger: Logger,
+):
+    agent.set_mode(eval=True)
+    env = StructuralEnv(initial_params_config=config, logger=logger)
+    state_pyg, info = env.reset()
+    episode_reward = 0
+    done = False
+    state_pyg = state_pyg.to(device)
+    while not done:
+        with torch.no_grad():
+            # DDPGAgent和DQNAgent都支持training参数
+            if isinstance(agent, PPOAgent):
+                # 在评估时也使用动作掩码
+                action_mask = None
+                if config["env_config"]["opt_type"] == "size":
+                    action_mask = env.get_action_mask_for_size()
+                elif config["env_config"]["opt_type"] == "spacing":
+                    action_mask = env.get_action_mask_for_spacing()
+                elif config["env_config"]["opt_type"] == "both":
+                    action_mask = env.get_action_mask_for_both()
+                action = agent.select_action(state_pyg, None, action_mask)
+            else:
+                action = agent.select_action(state_pyg, 0.0)
+        next_state_pyg, reward, terminated, truncated, info = env.step(action)
+        env.render()
+        print()
+        done = terminated or truncated
+        episode_reward += reward
+        state_pyg = next_state_pyg.to(device)
+    analysis_params = config["analysis_params"]
+    info["is_feasible"] = (
+        info["max_displacement_mm"] <= analysis_params["max_disp"]
+        and info["max_stress"] <= analysis_params["max_stress"]
+    )
+    info["episode_reward"] = episode_reward
+    agent.set_mode(eval=False)
+    return info
+
+
 def evaluate_on_prototypes(
     agent: Union[DQNSpacingAgent, DQNSizeAgent, PPOAgent],
     config: dict,
@@ -111,57 +153,26 @@ def evaluate_on_prototypes(
     prototypes = get_prototype_configs(config)
     results = []
     total_reward = 0
-    agent.set_mode(eval=True)
-    memory = Memory()
+
     for proto_config in prototypes:
         print("=" * 50)
         print(f"Evaluating prototype: {proto_config['name']}")
         print("=" * 50)
-        env = StructuralEnv(initial_params_config=proto_config, logger=logger)
-        state_pyg, info = env.reset()
-        episode_reward = 0
-        done = False
-        state_pyg = state_pyg.to(device)
-        while not done:
-            with torch.no_grad():
-                # DDPGAgent和DQNAgent都支持training参数
-                if isinstance(agent, PPOAgent):
-                    # 在评估时也使用动作掩码
-                    action_mask = None
-                    if config["env_config"]["opt_type"] == "size":
-                        action_mask = env.get_action_mask_for_size()
-                    elif config["env_config"]["opt_type"] == "spacing":
-                        action_mask = env.get_action_mask_for_spacing()
-                    elif config["env_config"]["opt_type"] == "both":
-                        action_mask = env.get_action_mask_for_both()
-                    action = agent.select_action(state_pyg, memory, action_mask)
-                else:
-                    action = agent.select_action(state_pyg, 0.0)
-            next_state_pyg, reward, terminated, truncated, info = env.step(action)
-            env.render()
-            print()
-            done = terminated or truncated
-            episode_reward += reward
-            state_pyg = next_state_pyg.to(device)
+        res = eval_on_config(agent, proto_config, device, logger)
+        episode_reward = res["episode_reward"]
         total_reward += episode_reward
-        analysis_params = config["analysis_params"]
-        is_feasible = (
-            info["max_displacement_mm"] <= analysis_params["max_disp"]
-            and info["max_stress"] <= analysis_params["max_stress"]
-        )
         results.append(
             {
                 "prototype": proto_config["name"],
-                "reward": episode_reward,
-                "final_displacement": info["max_displacement_mm"],
-                "final_stress": info["max_stress"],
-                "final_volume": info["model_volume_m3"],
-                "is_feasible": is_feasible,
+                "reward": res["episode_reward"],
+                "final_displacement": res["max_displacement_mm"],
+                "final_stress": res["max_stress"],
+                "final_volume": res["model_volume_m3"],
+                "is_feasible": res["is_feasible"],
             }
         )
         print(f"Prototype: {proto_config['name']} evaluated.\n\n")
     avg_reward = total_reward / len(prototypes)
-    agent.set_mode(eval=False)
     return avg_reward, results
 
 
@@ -522,11 +533,16 @@ def test(args, config):
     agent = get_agent(config, device, sample_state)
     agent.load_model(final_model_load_path)
 
-    # 基本原型评估
-    print("\n" + "=" * 60)
-    print("原型结构评估...")
-    print("=" * 60)
-    evaluate_on_prototypes(agent, config, device, logger)
+    if args.prototype:
+        # 基本原型评估
+        print("\n" + "=" * 60)
+        print("原型结构评估...")
+        print("=" * 60)
+        evaluate_on_prototypes(agent, config, device, logger)
+    else:
+        fname = os.path.basename(args.config).split(".")[0]
+        print(f"在 {fname} 上评估智能体...")
+        eval_on_config(agent, config, device, logger)
 
     # 最优性评估 (仅对size优化)
     if config["env_config"]["opt_type"] == "size":
