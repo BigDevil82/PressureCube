@@ -187,11 +187,12 @@ class StructuralEnv(gym.Env):
 
                 for section_type, frame_type in zip(section_types, frame_types):
                     max_idx = self.section_library.section_num_by_frame_type(frame_type) - 1
-                    current_idx = self.current_params[section_type]
+                    # current_idx = self.current_params[section_type]
 
-                    # 在当前值附近±2的范围内随机扰动
-                    perturbation = np.random.randint(-2, 3)
-                    new_idx = np.clip(current_idx + perturbation, 0, max_idx)
+                    # # 在当前值附近±2的范围内随机扰动
+                    # perturbation = np.random.randint(-2, 3)
+                    # new_idx = np.clip(current_idx + perturbation, 0, max_idx)
+                    new_idx = np.random.randint(0, max_idx)
                     self.current_params[section_type] = new_idx
 
         self._current_step_count = 0
@@ -1015,16 +1016,22 @@ class StructuralEnv(gym.Env):
         truncated = False
         info = {}
 
-        if (
-            not generation_success
-            or self.current_structural_model is None
-            or not self.current_structural_model.beams
-        ):
-            reward = -10
-            terminated = True
-            print("Failed to generate valid structural model or PyG data from action.")
-            info["error"] = "Failed to generate valid structural model or PyG data from action."
-            return next_state, reward, terminated, truncated, info
+        # if (
+        #     not generation_success
+        #     or self.current_structural_model is None
+        #     or not self.current_structural_model.beams
+        # ):
+        #     reward = -10
+        #     terminated = True
+        #     print("Failed to generate valid structural model or PyG data from action.")
+        #     info["error"] = "Failed to generate valid structural model or PyG data from action."
+        #     return next_state, reward, terminated, truncated, info
+
+        p = self.current_params
+        self.logger.info(
+            f"Spacing: {p['main_beam_spacing']:.2f}, {p['brace_spacing']:.2f}, "
+            + f"Section: {p['frame_section_index']}, {p['main_beam_section_index']}, {p['secondary_beam_section_index']}, {p['brace_section_index']}"
+        )
 
         current_model_volume = self._calculate_model_volume()
         try:

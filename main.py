@@ -331,9 +331,9 @@ def train(args, config):
     for episode in range(args.max_episodes):
         # 增加随机起点扰动以提升探索性
         reset_options = {
-            "random_structure": {"random_keys": ["pressure", "length"]},
-            "random_start_perturbation": True,
-            "perturbation_prob": 0.3,
+            "random_structure": {"random_keys": ["pressure"]},
+            "random_start_perturbation": False,
+            "perturbation_prob": 1,
         }
         state_pyg, info_reset = env.reset(options=reset_options)
         step = 0
@@ -439,7 +439,7 @@ def train(args, config):
             print(f"[Prototype Eval] Episode {episode+1}: avg_reward={eval_avg_reward:.2f}")
             for res in eval_results:
                 print(
-                    f"  原型: {res['prototype']} | reward: {res['reward']:.2f} | displacement: {res['final_displacement']:.2f} | stress: {res['final_stress']:.2f} | feasible: {'是' if res['is_feasible'] else '否'}"
+                    f"  原型: {res['prototype']} | Vol: {res['final_volume']:.2f} | displacement: {res['final_displacement']:.2f} | stress: {res['final_stress']:.2f} | feasible: {'是' if res['is_feasible'] else '否'}"
                 )
             # 若当前模型优于历史最佳，则保存
             if eval_avg_reward > best_eval_avg_reward:

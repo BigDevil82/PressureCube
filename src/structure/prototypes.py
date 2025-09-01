@@ -14,12 +14,14 @@ def get_prototype_configs(base_config: dict):
     prototypes = []
 
     lengths = [7.2, 9.6]
+    pressures = [30, 35]
 
-    for length in lengths:
+    for length, pressure in zip(lengths, pressures):
         proto_config = copy.deepcopy(base_config)
         proto_config["structural_params"]["length"] = length
+        proto_config["structural_params"]["pressure"] = pressure
         # 为了区分，我们可以给每个原型起个名字
-        proto_config["name"] = f"prototype_{length}m"
+        proto_config["name"] = f"prototype_{length}m_{pressure}kPa"
         prototypes.append(proto_config)
 
     return prototypes

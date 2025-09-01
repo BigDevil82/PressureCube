@@ -10,12 +10,12 @@ structural_params:
   brace_spacing: 1.0 # 支撑梁间距 (米)
   frame_section_index: 0 # □150×6
   main_beam_section_index: 0 # HW150×150
-  secondary_beam_section_index: 1 #HN100×50
+  secondary_beam_section_index: 6 #HN100×50
   brace_section_index: 0 # C10槽钢
   win_bottom: 1.0
   win_height: 1.5
   plate_thickness: 0.005
-  pressure: 30 # 内压，kPa
+  pressure: 38 # 内压，kPa
   windows:
     [] # 窗户参数列表
     # - y_position: 1.275 # 窗户中心在y轴的位置 (米)
