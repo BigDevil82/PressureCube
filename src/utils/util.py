@@ -187,3 +187,21 @@ def plot_progress(
     plot_filename = os.path.join(save_dir, filename)
     plt.savefig(plot_filename)
     plt.close(fig)
+
+
+def convert_to_serializable(obj):
+    """转换numpy类型为Python原生类型以便JSON序列化"""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer, np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, (np.bool_, np.bool8)):
+        return bool(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_to_serializable(item) for item in obj]
+    else:
+        return obj

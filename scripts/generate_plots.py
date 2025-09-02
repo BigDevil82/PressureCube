@@ -10,6 +10,9 @@ python scripts/generate_plots.py --metrics_path results/your_experiment/metrics.
 - displacement_curve: 最大位移变化曲线（含14.4mm限值线）
 - stress_curve: 最大应力变化曲线（含355MPa限值线）
 
+遗传算法结果绘图:
+python scripts/generate_plots.py --plot_type ga_evolution --ga_csv_path path/to/evolution.csv
+
 支持的输出格式：
 - EPS: 矢量图，适合期刊投稿（推荐）
 - PDF: 矢量图，适合文档嵌入
@@ -27,6 +30,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.post_process.plot import (
     plot_all_curves,
     plot_displacement_curve,
+    plot_ga_evolution_curves,
     plot_reward_curve,
     plot_stress_curve,
 )
@@ -38,8 +42,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例用法:
-  # 生成所有图表（EPS矢量格式，推荐用于期刊投稿）
+  # 生成所有RL训练图表（EPS矢量格式，推荐用于期刊投稿）
   python scripts/generate_plots.py --metrics_path results/experiment1/metrics.npz
+  
+  # 生成遗传算法进化曲线
+  python scripts/generate_plots.py --plot_type ga_evolution --ga_csv_path paper_draft/GA_result/proto1/structure_optimization_evolution.csv
   
   # 生成PDF格式的图表
   python scripts/generate_plots.py --metrics_path results/experiment1/metrics.npz --format pdf
@@ -55,6 +62,13 @@ def main():
   - pdf: PDF矢量格式（适合文档嵌入）
   - svg: SVG矢量格式（适合网页显示）
   - png: PNG位图格式（适合预览）
+
+支持的图表类型：
+  - all: 生成所有RL训练图表
+  - reward: 累积奖励曲线
+  - displacement: 最大位移曲线
+  - stress: 最大应力曲线
+  - ga_evolution: 遗传算法进化曲线
         """,
     )
 
@@ -67,7 +81,7 @@ def main():
     parser.add_argument(
         "--plot_type",
         type=str,
-        choices=["all", "reward", "displacement", "stress"],
+        choices=["all", "reward", "displacement", "stress", "ga_evolution"],
         default="all",
         help="要生成的图表类型 (默认: all)",
     )
@@ -98,19 +112,25 @@ def main():
     print(f"图表类型: {args.plot_type}")
     print(f"输出格式: {args.format.upper()}")
 
-    if args.plot_type == "reward":
+    if args.plot_type in ["reward", "all"]:
         print(f"滑动平均窗口大小: {args.window_size}")
 
     # 生成图表
     try:
-        if args.plot_type == "all":
+        if args.plot_type == "ga_evolution":
+            plot_ga_evolution_curves(args.metrics_path, args.output_dir, args.format)
+        elif args.plot_type == "all":
             plot_all_curves(args.metrics_path, args.output_dir, args.window_size, args.format)
         elif args.plot_type == "reward":
             plot_reward_curve(args.metrics_path, args.output_dir, args.window_size, args.format)
         elif args.plot_type == "displacement":
-            plot_displacement_curve(args.metrics_path, args.output_dir, file_format=args.format)
+            plot_displacement_curve(
+                args.metrics_path, args.output_dir, file_format=args.format, window_size=args.window_size
+            )
         elif args.plot_type == "stress":
-            plot_stress_curve(args.metrics_path, args.output_dir, file_format=args.format)
+            plot_stress_curve(
+                args.metrics_path, args.output_dir, file_format=args.format, window_size=args.window_size
+            )
 
         print("\n✅ 图表生成完成!")
 

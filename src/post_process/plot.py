@@ -380,9 +380,109 @@ def plot_episode_final_results(
         plot_all_curves(npz_file_path, save_dir, 1, file_format)
 
 
+def plot_ga_evolution_curves(csv_file_path, save_dir=None, file_format="eps"):
+    """
+    绘制遗传算法不同变异率下的适应度变化曲线
+
+    Args:
+        csv_file_path: CSV文件路径
+        save_dir: 保存目录
+        file_format: 输出文件格式 ('eps', 'pdf', 'svg', 'png')
+    """
+    import pandas as pd
+
+    setup_matplotlib_fonts()
+
+    if not os.path.exists(csv_file_path):
+        print(f"Error: CSV file not found at {csv_file_path}")
+        return
+
+    if save_dir is None:
+        save_dir = os.path.dirname(csv_file_path)
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 读取CSV文件
+    df = pd.read_csv(csv_file_path)
+
+    # 过滤掉耗时行（iteration为空的行）
+    df_filtered = df.dropna(subset=["iteration"])
+
+    if len(df_filtered) == 0:
+        print("Error: No valid data found in CSV file")
+        return
+
+    # 获取所有变异率
+    mutation_rates = sorted(df_filtered["mutation_rate"].unique())
+
+    # 计算每个变异率的最终适应度（最后一代的适应度）
+    final_fitness_by_rate = {}
+    for rate in mutation_rates:
+        rate_data = df_filtered[df_filtered["mutation_rate"] == rate]
+        if len(rate_data) > 0:
+            final_fitness = rate_data["fitness"].iloc[-1]  # 最后一代的适应度
+            final_fitness_by_rate[rate] = final_fitness
+
+    # 找到最终结果最好的变异率（适应度最小）
+    best_rate = min(final_fitness_by_rate, key=final_fitness_by_rate.get)
+
+    # 创建图形
+    fig, ax = plt.subplots()
+
+    # 生成简约的配色方案
+    base_color = "#CCCCCC"  # 浅灰色用于普通曲线
+    highlight_color = "#FF6B35"  # 橙红色用于最佳曲线
+
+    # 绘制所有变异率的曲线
+    for i, rate in enumerate(mutation_rates):
+        rate_data = df_filtered[df_filtered["mutation_rate"] == rate].copy()
+
+        if len(rate_data) == 0:
+            continue
+
+        iterations = rate_data["iteration"].values[:16]
+        fitness_values = rate_data["fitness"].values[:16] / 7850.0
+
+        if rate == best_rate:
+            # 突出显示最佳曲线
+            ax.plot(
+                iterations,
+                fitness_values,
+                color=highlight_color,
+                linewidth=0.8,
+                marker="o",
+                markersize=3,
+                # label=f"变异率={rate:.2f} (最佳)",
+                # zorder=10,
+            )  # 确保最佳曲线在最上层
+        # else:
+        #     # 普通曲线使用浅色
+        #     ax.plot(iterations, fitness_values, color=base_color, linewidth=0.5, alpha=0.7, zorder=1)
+
+    # 设置坐标轴标签
+    ax.set_xlabel("代数")
+    ax.set_ylabel("材料用量 (m³)")
+
+    # 只为最佳曲线添加图例
+    # ax.legend(frameon=False, loc="upper right")
+
+    # 设置y轴范围，让图形更清晰
+    # y_min = df_filtered["fitness"].min()
+    # y_max = df_filtered["fitness"].max()
+    # y_range = y_max - y_min
+    # ax.set_ylim(y_min - y_range * 0.05, y_max + y_range * 0.05)
+
+    # 保存图形
+    save_path = save_figure(fig, save_dir, "ga_evolution_curves", file_format)
+    plt.close()
+
+    print(f"GA evolution curves saved to {save_path}")
+    print(f"Best mutation rate: {best_rate:.2f} with final fitness: {final_fitness_by_rate[best_rate]:.2f}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate publication-quality plots for journal submission.")
-    parser.add_argument("--metrics_path", type=str, required=True, help="Path to the metrics.npz file.")
+    parser.add_argument("--metrics_path", type=str, default=None, help="Path to the metrics.npz file.")
+    parser.add_argument("--ga_csv_path", type=str, default=None, help="Path to the GA evolution CSV file.")
     parser.add_argument("--save_dir", type=str, default=None, help="Directory to save the plots.")
     parser.add_argument(
         "--window_size",
@@ -393,7 +493,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--plot_type",
         type=str,
-        choices=["all", "reward", "displacement", "stress"],
+        choices=["all", "reward", "displacement", "stress", "ga_evolution"],
         default="all",
         help="Type of plot to generate. Default is 'all'.",
     )
@@ -407,7 +507,15 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.plot_type == "all":
+    if args.plot_type == "ga_evolution":
+        if args.ga_csv_path is None:
+            print("Error: --ga_csv_path is required for GA evolution plot")
+            exit(1)
+        plot_ga_evolution_curves(args.ga_csv_path, args.save_dir, args.format)
+    elif args.metrics_path is None:
+        print("Error: --metrics_path is required for RL training plots")
+        exit(1)
+    elif args.plot_type == "all":
         plot_all_curves(args.metrics_path, args.save_dir, args.window_size, args.format)
     elif args.plot_type == "reward":
         plot_reward_curve(args.metrics_path, args.save_dir, args.window_size, args.format)
