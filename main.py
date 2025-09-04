@@ -103,6 +103,7 @@ def eval_on_config(
     device: torch.device,
     logger: Logger,
 ):
+    t0 = time()
     agent.set_mode(eval=True)
     env = StructuralEnv(initial_params_config=config, logger=logger)
     state_pyg, info = env.reset()
@@ -137,6 +138,8 @@ def eval_on_config(
     )
     info["episode_reward"] = episode_reward
     agent.set_mode(eval=False)
+    t1 = time()
+    print(f"Evaluation time: {t1 - t0:.2f} seconds")
     return info
 
 
@@ -343,8 +346,8 @@ def train(args, config):
         # 增加随机起点扰动以提升探索性
         reset_options = {
             "random_structure": {"random_keys": ["pressure"]},
-            "random_start_perturbation": False,
-            "perturbation_prob": 1,
+            "random_start_perturbation": True,
+            "perturbation_prob": 0.3,
         }
         state_pyg, info_reset = env.reset(options=reset_options)
         step = 0
