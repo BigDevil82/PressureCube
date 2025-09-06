@@ -1251,7 +1251,8 @@ if __name__ == "__main__":
     try:
         with Timer("setup opensees model cost"):
             analyzer.setup_opensees_model(model)
-            analyzer.apply_pressure_loads(internal_pressure_pa=30000.0)
+            pressure = config["structural_params"]["pressure"]
+            analyzer.apply_pressure_loads(internal_pressure_pa=pressure * 1000.0)
         with Timer("static analysis cost"):
             analyzer.run_static_analysis()
         max_indicators = analyzer.get_max_indicators()

@@ -4,9 +4,11 @@ from typing import Dict, Optional, Union
 
 import gym
 import numpy as np
+import torch
 
 from src.analysis.opensees_analysis import OpenSeesAnalyzer
-from src.graph.structural_graph import BeamAsEdgeGraph, BeamAsNodeGraph
+
+# from src.graph.structural_graph import BeamAsEdgeGraph, BeamAsNodeGraph
 from src.structure.mesh_generator import MeshGenerator, MeshParameters
 from src.structure.random_structure import RandomStructure
 from src.structure.structural_model import (
@@ -52,7 +54,7 @@ class StructuralEnv(gym.Env):
         self.current_params: Optional[dict] = None
 
         self.current_structural_model: Optional[StructuralModel] = None
-        self.current_graph_converter: Optional[Union[BeamAsNodeGraph, BeamAsEdgeGraph]] = None
+        # self.current_graph_converter: Optional[Union[BeamAsNodeGraph, BeamAsEdgeGraph]] = None
         self.current_pyg_data_state = None  # Will be a PyG Data object
 
         self._max_steps_per_episode = initial_full_config["rl_params"]["max_steps_per_episode"]
@@ -144,22 +146,32 @@ class StructuralEnv(gym.Env):
             print(f"Error during OpenSees analysis in _generate_model_and_state_from_current_params: {e}")
             return False, None
 
-        try:
-            if self.env_config["graph_type"] == "beam_as_node":
-                self.current_graph_converter = BeamAsNodeGraph(self.current_structural_model)
-            elif self.env_config["graph_type"] == "beam_as_edge":
-                self.current_graph_converter = BeamAsEdgeGraph(self.current_structural_model)
-            else:
-                raise ValueError(f"Invalid graph type: {self.env_config['graph_type']}")
+        frame_section_num = self.section_library.section_num_by_frame_type("frame")
+        main_beam_section_num = self.section_library.section_num_by_frame_type("main")
+        secondary_beam_section_num = self.section_library.section_num_by_frame_type("secondary")
+        brace_section_num = self.section_library.section_num_by_frame_type("brace")
+        p = self.current_params
 
-            env_info = {
-                "frame_length": self.current_params["length"],
-                "pressure": self.current_params["pressure"],
-            }
-            self.current_pyg_data_state = self.current_graph_converter.to_pyg_data(env_info)
-        except Exception as e:
-            print(f"Error during graph conversion in _generate_model_and_state_from_current_params: {e}")
-            return False, None
+        max_disp_abs = max_indicators["max_abs_displacement"]
+        max_stress = max_indicators["max_abs_stress"]
+        model_volume = self._calculate_model_volume()
+
+        features = [
+            p["frame_section_index"] / (frame_section_num - 1),
+            p["main_beam_section_index"] / (main_beam_section_num - 1),
+            p["secondary_beam_section_index"] / (secondary_beam_section_num - 1),
+            p["brace_section_index"] / (brace_section_num - 1),
+            (p["main_beam_spacing"] - 0.3) / 1.8,
+            (p["brace_spacing"] - 0.3) / 1.0,
+            (p["pressure"] - 28) / 38.0,
+            max_disp_abs / 14.4,
+            max_stress / 355.0,
+            model_volume,
+            self._last_max_disp_abs / 14.4,
+            self._last_max_stress / 355.0,
+            self._last_model_volume,
+        ]
+        self.current_pyg_data_state = torch.tensor(features)
 
         return True, max_indicators
 
@@ -213,9 +225,31 @@ class StructuralEnv(gym.Env):
             raise ValueError("Failed to run FEM analysis at reset.")
 
         self._last_model_volume = self._calculate_model_volume()
-        self.best_known_volume = self._last_model_volume
         self._calculate_volume_bounds()
         self.normalized_volume = self._calculate_normalized_volume(self._last_model_volume)
+
+        # 目标区与稳定终止相关参数
+        self.target_radius = self.env_config.get("target_radius", 0.02)
+        self.in_target_required_steps = self.env_config.get("in_target_required_steps", 2)
+        self.volume_gate_dist2 = self.env_config.get("volume_gate_dist2", 0.2)
+        self._inside_target_steps = 0
+        self._outside_target_steps = 0
+
+        # # reset() 末尾，初始化 best_phi
+        # phi0 = (
+        #     1.0 * max(0.0, self._last_max_disp_abs / self.max_disp - 1.0)
+        #     + 1.0 * max(0.0, self._last_max_stress / self.max_stress - 1.0)
+        #     + 0.5 * self._calculate_normalized_volume(self._last_model_volume)
+        # )
+        # self._best_phi = phi0
+
+        self._prev_phi = self._compute_phi(
+            self._last_max_disp_abs, self._last_max_stress, self._last_model_volume
+        )
+        # if self._last_max_disp_abs < self.max_disp and self._last_max_stress < self.max_stress:
+        #     self._is_feasible = True
+        # else:
+        #     self._is_feasible = False
 
         self.logger.info(
             "\n\n"
@@ -468,6 +502,46 @@ class StructuralEnv(gym.Env):
     def _calculate_model_volume(self) -> float:
         return self.current_structural_model.calculate_mass() / 7850.0
 
+    def _compute_phi(self, max_disp_abs: float, max_stress: float, model_volume: float, log=True) -> float:
+        s = max_stress / self.max_stress
+        d = max_disp_abs / self.max_disp
+        # 目标中心与权重（可从配置读取）
+        s_c = self.env_config.get("target_s_center", 0.98)
+        d_c = self.env_config.get("target_d_center", 0.98)
+        ws = self.env_config.get("target_ws", 1.0)
+        wd = self.env_config.get("target_wd", 1.0)
+        dist2 = ws * (s - s_c) ** 2 + wd * (d - d_c) ** 2
+
+        # 固定、归一的体积项，仅在近场参与
+        v_norm = self._calculate_normalized_volume(model_volume)
+        lambda_vol = self.env_config.get("lambda_vol", 0.1)
+        phi = dist2 + (lambda_vol * v_norm if dist2 <= self.volume_gate_dist2 else 0.0)
+
+        self.dist2 = dist2
+        if log:
+            self.logger.info(
+                f"phi: {phi:.3f}, dist2: {dist2:.3f}, s: {s:.3f}, δs: {s - s_c:.3f}, d: {d:.3f}, δd: {d - d_c:.3f}, v: {model_volume:.3f}"
+            )
+        return phi
+
+    def _calculate_reward_simple(self, max_disp_abs: float, max_stress: float, model_volume: float) -> float:
+        """简化的潜力差分奖励：统一不可行与可行阶段
+        phi = k_v * (violation_disp + violation_stress) + k_vol * normalized_volume
+        reward = phi(prev) - phi(curr) - step_penalty
+        """
+        # 权重（可根据训练情况微调，但保持同一量级以降低方差）
+        k_phi = 1.0
+        step_penalty = 0.1
+
+        # 潜力函数
+        phi_curr = self._compute_phi(max_disp_abs, max_stress, model_volume)
+        reward = k_phi * (self._prev_phi - phi_curr) - step_penalty
+        self.logger.info(f"Reward: {reward:.2f}, phi_curr: {phi_curr:.2f}, phi_prev: {self._prev_phi:.2f}\n")
+
+        self._prev_phi = phi_curr
+
+        return reward
+
     # def _calculate_reward(self, max_disp_abs: float, max_stress: float, model_volume: float):
     #     disp_constraint = 14.4
     #     stress_constraint = 355.0
@@ -577,70 +651,7 @@ class StructuralEnv(gym.Env):
         return reward
 
     def _calculate_reward_for_size(self, max_disp_abs, max_stress, model_volume):
-        """
-        改进的两阶段奖励函数:
-        1. 不可行阶段: 只奖励约束改善，不考虑体积
-        2. 可行阶段: 主要奖励体积最小化
-        """
-        disp_constraint = self.max_disp
-        stress_constraint = self.max_stress
-
-        # 计算约束违反度
-        disp_ratio = max_disp_abs / disp_constraint
-        stress_ratio = max_stress / stress_constraint
-        violation = max(0, disp_ratio - 1) + max(0, stress_ratio - 1)
-
-        # 计算上一步的约束违反度
-        last_disp_ratio = self._last_max_disp_abs / disp_constraint
-        last_stress_ratio = self._last_max_stress / stress_constraint
-        last_violation = max(0, last_disp_ratio - 1) + max(0, last_stress_ratio - 1)
-
-        # 约束改善量
-        delta_violation = last_violation - violation
-
-        # 体积相关
-        normalized_volume = self._calculate_normalized_volume(model_volume)
-        delta_volume = self._last_model_volume - model_volume
-
-        # 步数惩罚(鼓励更快收敛)
-        step_penalty = 0.1
-
-        # 两阶段奖励设计
-        if violation > 0:
-            # 不可行阶段: 只关注约束改善
-            c_v = 8.0  # 约束改善系数
-            w_v = 15.0  # 约束违反惩罚权重
-
-            shaping_reward = c_v * delta_violation
-            base_penalty = -w_v * violation
-            reward = shaping_reward + base_penalty - step_penalty
-
-            self.logger.info(
-                f"[不可行] r: {reward:.2f}, shaping: {shaping_reward:.2f}, base: {base_penalty:.2f}, "
-                f"δviolation: {delta_violation:.3f}, violation: {violation:.3f}"
-            )
-        else:
-            # 可行阶段: 主要奖励体积最小化
-            R_feasible = 5.0
-            alpha = 40.0  # 体积优化权重
-
-            # 基础可行奖励 + 体积优化奖励
-            ongoing_reward = R_feasible + alpha * (1 - normalized_volume) - step_penalty
-
-            # 如果刚从不可行变为可行，给额外奖励
-            terminal_bonus = 0
-            if last_violation > 0:  # 刚刚达到可行
-                B_success = 80.0
-                terminal_bonus = B_success * (1 - normalized_volume)
-
-            reward = ongoing_reward + terminal_bonus
-
-            self.logger.info(
-                f"[可行] r: {reward:.2f}, ongoing: {ongoing_reward:.2f}, bonus: {terminal_bonus:.2f}, "
-                f"norm_vol: {normalized_volume:.3f}, vol: {model_volume:.3f}"
-            )
-
-        return reward
+        return self._calculate_reward_simple(max_disp_abs, max_stress, model_volume)
 
     def get_action_mask_for_size(self):
         """
@@ -746,20 +757,20 @@ class StructuralEnv(gym.Env):
         mask = self.get_action_mask_for_spacing()
         if not mask[action]:
             return True
+        step_sz = 0.02 if getattr(self, "_near_field", False) else 0.05
         if action == 0:
-            self.current_params["main_beam_spacing"] -= 0.05
+            self.current_params["main_beam_spacing"] -= step_sz
         elif action == 1:
-            self.current_params["main_beam_spacing"] += 0.05
+            self.current_params["main_beam_spacing"] += step_sz
         elif action == 2:
-            print("action 2")
-            self.current_params["brace_spacing"] -= 0.05
+            self.current_params["brace_spacing"] -= step_sz
         elif action == 3:
-            self.current_params["brace_spacing"] += 0.05
+            self.current_params["brace_spacing"] += step_sz
         return False
 
     def _decode_action_for_both_with_mask(self, action: int):
         mask = self.get_action_mask_for_both()
-        self.logger.info(f"action: {action}, mask: {mask}")
+        # self.logger.info(f"action: {action}, mask: {mask}")
         if not mask[action]:
             return True
         if action < 8:
@@ -769,7 +780,7 @@ class StructuralEnv(gym.Env):
         return False
 
     def _calculate_reward_for_spacing(self, max_disp_abs, max_stress, model_volume):
-        return self._calculate_reward_for_size(max_disp_abs, max_stress, model_volume)
+        return self._calculate_reward_simple(max_disp_abs, max_stress, model_volume)
         # disp_constraint = self.max_disp
         # stress_constraint = self.max_stress
         # normalized_volume = self._calculate_normalized_volume(model_volume)
@@ -815,139 +826,7 @@ class StructuralEnv(gym.Env):
         # return reward
 
     def _calculate_reward_for_both(self, max_disp_abs, max_stress, model_volume):
-        """
-        改进的多任务奖励函数（同时优化尺寸和间距）:
-        1. 向量化约束违反度，优先处理最严重违反
-        2. 不平衡惩罚，避免对某一约束过度调整
-        3. 动作成本区分，间距调整成本更高
-        4. 可行后贴边减材策略
-        """
-        disp_constraint = self.max_disp
-        stress_constraint = self.max_stress
-
-        # 计算向量化约束违反度
-        v_disp = max(0, max_disp_abs / disp_constraint - 1)
-        v_stress = max(0, max_stress / stress_constraint - 1)
-
-        # 计算上一步的约束违反度
-        last_v_disp = max(0, self._last_max_disp_abs / disp_constraint - 1)
-        last_v_stress = max(0, self._last_max_stress / stress_constraint - 1)
-
-        # 距离指标
-        d_l2 = np.sqrt(v_disp**2 + v_stress**2)
-        d_inf = max(v_disp, v_stress)
-        last_d_l2 = np.sqrt(last_v_disp**2 + last_v_stress**2)
-        last_d_inf = max(last_v_disp, last_v_stress)
-
-        # 距离改善量
-        delta_d_l2 = last_d_l2 - d_l2
-        delta_d_inf = last_d_inf - d_inf
-
-        # 各维约束改善量
-        delta_v_disp = last_v_disp - v_disp
-        delta_v_stress = last_v_stress - v_stress
-
-        # 不平衡指标
-        imbalance = abs(v_disp - v_stress)
-
-        # 体积相关
-        normalized_volume = self._calculate_normalized_volume(model_volume)
-
-        # 步数惩罚
-        step_penalty = 0.1
-
-        # 获取最后一个动作（用于动作成本）
-        action_cost = self._get_action_cost()
-
-        # 两阶段奖励设计
-        if v_disp > 0 or v_stress > 0:  # 不可行阶段
-            # 超参数
-            c_delta = 8.0  # 距离改善奖励系数
-            c2 = 2.0  # L2距离改善系数
-            w_d = 15.0  # 距离惩罚权重
-            beta = 2.0  # 不平衡惩罚权重
-            kappa_reg = 6.0  # 退化惩罚权重
-
-            # 主要奖励：优先改善最严重违反（L∞为主，L2为辅）
-            distance_reward = c_delta * delta_d_inf + c2 * delta_d_l2
-
-            # 当前状态惩罚
-            distance_penalty = -w_d * d_inf
-
-            # 不平衡惩罚（避免单边过度优化）
-            imbalance_penalty = -beta * imbalance
-
-            # 退化惩罚（任何一维恶化都要惩罚）
-            degradation_penalty = -kappa_reg * (max(-delta_v_disp, 0) + max(-delta_v_stress, 0))
-
-            # 总奖励
-            reward = (
-                distance_reward
-                + distance_penalty
-                + imbalance_penalty
-                + degradation_penalty
-                - action_cost
-                - step_penalty
-            )
-
-            self.logger.info(
-                f"[不可行] r: {reward:.2f}, dist_r: {distance_reward:.2f}, dist_p: {distance_penalty:.2f}, "
-                f"imbal_p: {imbalance_penalty:.2f}, degrad_p: {degradation_penalty:.2f}, "
-                f"action_c: {action_cost:.2f}, v_disp: {v_disp:.3f}, v_stress: {v_stress:.3f}, "
-                f"d_inf: {d_inf:.3f}, imbalance: {imbalance:.3f}"
-            )
-
-        else:  # 可行阶段
-            # 超参数
-            R0 = 5.0  # 基础可行奖励
-            alpha = 50.0  # 体积优化权重
-            mu = 500.0  # 过度安全惩罚权重
-            B_success = 100.0  # 突破奖励系数
-            tau = 0.999  # 贴边阈值
-
-            # 基础可行奖励 + 体积优化
-            base_reward = R0 + alpha * (1 - normalized_volume)
-
-            # 计算当前约束比率
-            disp_ratio = max_disp_abs / disp_constraint
-            stress_ratio = max_stress / stress_constraint
-            current_max_ratio = min(disp_ratio, stress_ratio)
-
-            # 过度安全惩罚（鼓励贴边工作）
-            distance_inside = max(0, tau - current_max_ratio)
-            safety_penalty = -mu * distance_inside**2
-
-            # 刚达可行的突破奖励
-            breakthrough_bonus = 0
-            if last_v_disp > 0 or last_v_stress > 0:  # 刚从不可行变为可行
-                breakthrough_bonus = B_success * (1 - normalized_volume)
-
-            reward = base_reward + safety_penalty + breakthrough_bonus - action_cost - step_penalty
-
-            self.logger.info(
-                f"[可行] r: {reward:.2f}, base: {base_reward:.2f}, safety_p: {safety_penalty:.2f}, "
-                f"breakthrough: {breakthrough_bonus:.2f}, action_c: {action_cost:.2f}, "
-                f"norm_vol: {normalized_volume:.3f}, max_ratio: {current_max_ratio:.3f}, "
-                f"distance_inside: {distance_inside:.3f}"
-            )
-
-        # 回退保护：如果非主要违反维度恶化超过阈值
-        epsilon = 0.05  # 5%的恶化阈值
-        gamma = 8.0  # 回退惩罚权重
-
-        # 识别主要违反维度
-        if last_v_disp > last_v_stress:  # 位移是主要问题
-            if delta_v_stress < -epsilon:  # 应力恶化超过阈值
-                excess = abs(delta_v_stress) - epsilon
-                reward -= gamma * excess
-                self.logger.info(f"[回退保护] 应力恶化 {delta_v_stress:.3f}, 扣分: {gamma * excess:.2f}")
-        elif last_v_stress > last_v_disp:  # 应力是主要问题
-            if delta_v_disp < -epsilon:  # 位移恶化超过阈值
-                excess = abs(delta_v_disp) - epsilon
-                reward -= gamma * excess
-                self.logger.info(f"[回退保护] 位移恶化 {delta_v_disp:.3f}, 扣分: {gamma * excess:.2f}")
-
-        return reward
+        return self._calculate_reward_simple(max_disp_abs, max_stress, model_volume)
 
     def _get_action_cost(self):
         """
@@ -1048,9 +927,20 @@ class StructuralEnv(gym.Env):
                 info["frame_length"] = self.current_params["length"]
                 info["normalized_volume"] = self._calculate_normalized_volume(current_model_volume)
                 info["volume_efficiency"] = self._calculate_volume_efficiency(current_model_volume)
+                # 近场自动减小间距步长，降低边界抖动
+                if self.dist2 <= 4 * (self.target_radius**2):
+                    self._near_field = True
+                else:
+                    self._near_field = False
 
-                # if max_disp_abs < self.max_disp and max_stress < self.max_stress:
-                #     terminated = True
+                # 稳定终止：连续 in_target_required_steps 步位于目标半径内
+                if np.sqrt(self.dist2) <= self.target_radius:
+                    reward += 2
+                    self._inside_target_steps += 1
+                else:
+                    self._inside_target_steps = 0
+                if self._inside_target_steps >= self.in_target_required_steps:
+                    terminated = True
 
             else:
                 print("OpenSees static analysis failed.")
@@ -1074,8 +964,15 @@ class StructuralEnv(gym.Env):
         # Optional: Implement visualization (e.g., using matplotlib or a 3D viewer)
         # For now, print current parameters.
         p = self.current_params
-        print(f"Step: {self._current_step_count}")
-        print("Frame Length: ", p["length"], "Pressure: ", p["pressure"])
+        # print(f"Step: {self._current_step_count}")
+        print(
+            "Frame Length: ",
+            p["length"],
+            "Pressure: ",
+            p["pressure"],
+            "Total step: ",
+            self._current_step_count,
+        )
         print(
             f"  Main Spacing: {p['main_beam_spacing']:.2f}, Secondary Spacing: {p['main_beam_spacing']:.2f}, Brace Spacing: {p['brace_spacing']:.2f}"
         )
@@ -1085,23 +982,23 @@ class StructuralEnv(gym.Env):
         print(
             f"  Max Disp: {self._last_max_disp_abs:.2f}, Max Stress: {self._last_max_stress:.2f}, Model Volume: {self._last_model_volume:.2f}"
         )
-        # print section info
-        print(
-            "Frame Section:",
-            self.section_library.sections["方钢"][p["frame_section_index"]].name,
-        )
-        print(
-            "Main Beam Section:",
-            self.section_library.sections["H型钢-主梁"][p["main_beam_section_index"]].name,
-        )
-        print(
-            "Secondary Beam Section:",
-            self.section_library.sections["H型钢-次梁"][p["secondary_beam_section_index"]].name,
-        )
-        print(
-            "Brace Section:",
-            self.section_library.sections["C型钢"][p["brace_section_index"]].name,
-        )
+        # # print section info
+        # print(
+        #     "Frame Section:",
+        #     self.section_library.sections["方钢"][p["frame_section_index"]].name,
+        # )
+        # print(
+        #     "Main Beam Section:",
+        #     self.section_library.sections["H型钢-主梁"][p["main_beam_section_index"]].name,
+        # )
+        # print(
+        #     "Secondary Beam Section:",
+        #     self.section_library.sections["H型钢-次梁"][p["secondary_beam_section_index"]].name,
+        # )
+        # print(
+        #     "Brace Section:",
+        #     self.section_library.sections["C型钢"][p["brace_section_index"]].name,
+        # )
 
     def close(self):
         # Clean up any resources if needed (e.g., OpenSees model if ops.wipe() isn't sufficient)

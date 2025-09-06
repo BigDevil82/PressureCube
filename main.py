@@ -16,7 +16,10 @@ from src.reinforcement.dqn_agent import DQNAgent
 from src.reinforcement.dqn_size_agent import DQNSizeAgent
 from src.reinforcement.dqn_spacing_agent import DQNSpacingAgent
 from src.reinforcement.epsilon_scheduler import EpsilonScheduler
-from src.reinforcement.ppo_agent import Memory, PPOAgent
+
+# from src.reinforcement.ppo_agent import Memory, PPOAgent
+from src.reinforcement.ppo_vector_agent import Memory as VectorMemory
+from src.reinforcement.ppo_vector_agent import VectorPPOAgent
 from src.reinforcement.rl_agent import DDPGAgent  # Added
 from src.reinforcement.structural_env import StructuralEnv  # Added
 from src.structure.prototypes import get_prototype_configs
@@ -81,9 +84,8 @@ def get_agent(config: dict, device: torch.device, sample_state: Data):
             device=device,
         )
     elif config["rl_params"]["agent"] == "ppo":
-        agent = PPOAgent(
-            state_dim=sample_state.x.size(1),
-            glb_feat_dim=sample_state.global_features.size(1),
+        agent = VectorPPOAgent(
+            state_dim=len(sample_state),
             action_dim=config["env_config"]["action_dim"],
             device=device,
             lr=config["rl_params"]["lr"],
@@ -98,7 +100,7 @@ def get_agent(config: dict, device: torch.device, sample_state: Data):
 
 
 def eval_on_config(
-    agent: Union[DQNSpacingAgent, DQNSizeAgent, PPOAgent],
+    agent: Union[DQNSpacingAgent, DQNSizeAgent, VectorPPOAgent],
     config: dict,
     device: torch.device,
     logger: Logger,
@@ -113,7 +115,7 @@ def eval_on_config(
     while not done:
         with torch.no_grad():
             # DDPGAgent和DQNAgent都支持training参数
-            if isinstance(agent, PPOAgent):
+            if isinstance(agent, VectorPPOAgent):
                 # 在评估时也使用动作掩码
                 action_mask = None
                 if config["env_config"]["opt_type"] == "size":
@@ -126,11 +128,12 @@ def eval_on_config(
             else:
                 action = agent.select_action(state_pyg, 0.0)
         next_state_pyg, reward, terminated, truncated, info = env.step(action)
-        env.render()
-        print()
         done = terminated or truncated
         episode_reward += reward
         state_pyg = next_state_pyg.to(device)
+        if done:
+            env.render()
+            print()
     analysis_params = config["analysis_params"]
     info["is_feasible"] = (
         info["max_displacement_mm"] <= analysis_params["max_disp"]
@@ -144,7 +147,7 @@ def eval_on_config(
 
 
 def evaluate_on_prototypes(
-    agent: Union[DQNSpacingAgent, DQNSizeAgent, PPOAgent],
+    agent: Union[DQNSpacingAgent, DQNSizeAgent, VectorPPOAgent],
     config: dict,
     device: torch.device,
     logger: Logger,
@@ -180,7 +183,7 @@ def evaluate_on_prototypes(
 
 
 def evaluate_model_optimality(
-    agent: Union[DQNSpacingAgent, DQNSizeAgent, PPOAgent],
+    agent: Union[DQNSpacingAgent, DQNSizeAgent, VectorPPOAgent],
     config: dict,
     device: torch.device,
     logger: Logger,
@@ -231,12 +234,12 @@ def evaluate_model_optimality(
         done = False
         step = 0
         max_steps = 50  # 防止无限循环
-        memory = Memory()
+        memory = VectorMemory()
 
         while not done and step < max_steps:
             step += 1
 
-            if isinstance(agent, PPOAgent):
+            if isinstance(agent, VectorPPOAgent):
                 action_mask = None
                 if config["env_config"]["opt_type"] == "size":
                     action_mask = env.get_action_mask_for_size()
@@ -304,7 +307,7 @@ def train(args, config):
     print(f"开始训练 DDPG 智能体，设备: {args.device}")
     device = torch.device(args.device)
     ts = datetime.now().strftime("%m%d_%H%M")
-    logger = Logger(f"rewards_{ts}.log")
+    logger = Logger(f"{args.model_save_path}/rewards_{ts}.log")
 
     rl_params = config["rl_params"]
     stress_limit = config["analysis_params"]["max_stress"]
@@ -316,9 +319,9 @@ def train(args, config):
     sample_state, _ = env.reset()
 
     agent = get_agent(config, device, sample_state)
-    is_ppo = isinstance(agent, PPOAgent)
+    is_ppo = isinstance(agent, VectorPPOAgent)
     if is_ppo:
-        memory = Memory()
+        memory = VectorMemory()
     else:
         replay_buffer = deque(maxlen=rl_params["buffer_size"])
 
@@ -347,9 +350,11 @@ def train(args, config):
         reset_options = {
             "random_structure": {"random_keys": ["pressure"]},
             "random_start_perturbation": True,
-            "perturbation_prob": 0.3,
+            "perturbation_prob": episode / args.max_episodes,
         }
         state_pyg, info_reset = env.reset(options=reset_options)
+        print("=" * 50)
+        env.render()
         step = 0
         episode_reward = 0
         done = False
@@ -445,6 +450,7 @@ def train(args, config):
             f"Episode {episode+1}/{args.max_episodes}, Episode Return: {episode_reward:.2f}, Steps: {step}, Info: {info.get('error', 'OK')}"
         )
         env.render()
+        print("=" * 50)
         print()
 
         # 评估当前模型在prototypes上的表现

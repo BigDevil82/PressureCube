@@ -15,4 +15,4 @@ python main.py --mode test --config ./configs/opt_size_config.yaml --resume_path
 python main.py --mode test --config ./configs/opt_spacing_config_ppo.yaml --resume_path ./results/models/0809_1/ppo_final.pth
 
 # ppo_both
- python main.py --mode test --config ./configs/opt_both_config_ppo.yaml --resume_path ./results/models/0809_3/ppo_final.pth
+python main.py --mode test --config ./configs/opt_both_config_ppo.yaml --resume_path ./results/models/0809_3/ppo_final.pth

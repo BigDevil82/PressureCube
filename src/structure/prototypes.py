@@ -13,8 +13,8 @@ def get_prototype_configs(base_config: dict):
     """
     prototypes = []
 
-    lengths = [7.2, 7.2, 7.2]
-    pressures = [30, 35, 38]
+    lengths = [7.2]
+    pressures = [35]
 
     for length, pressure in zip(lengths, pressures):
         proto_config = copy.deepcopy(base_config)

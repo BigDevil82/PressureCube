@@ -5,12 +5,12 @@ structural_params:
   length: 7.2 # 舱体长度 (y方向，米)
   width: 3.6 # 舱体宽度 (x方向，米)
   height: 3.3 # 舱体高度 (z方向，米)
-  main_beam_spacing: 1.5 # 环向主梁间距 (米)
+  main_beam_spacing: 1.2 # 环向主梁间距 (米)
   secondary_beam_spacing: 1.5 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
-  brace_spacing: 1.0 # 支撑梁间距 (米)
+  brace_spacing: 0.8 # 支撑梁间距 (米)
   frame_section_index: 0
-  main_beam_section_index: 0
-  secondary_beam_section_index: 0
+  main_beam_section_index: 6
+  secondary_beam_section_index: 5
   brace_section_index: 0
   win_bottom: 1.0
   win_height: 1.5
@@ -63,7 +63,7 @@ env_config:
 # 强化学习参数
 rl_params:
   agent: "ppo"
-  lr: 1.0e-4
+  lr: 3.0e-4
   actor_lr: 1.0e-4 # Actor网络学习率
   critic_lr: 1.0e-3 # Critic网络学习率
   gamma: 0.98 # 折扣因子
@@ -78,7 +78,7 @@ rl_params:
   update_interval: 10 # 更新间隔
   ddpg_fc_hidden_dim: 256 # 隐藏层大小
   max_episodes: 1000 # 最大训练回合数
-  max_steps_per_episode: 50 # 每个回合的最大步数
+  max_steps_per_episode: 40 # 每个回合的最大步数
   eval_interval: 20 # 在原型结构上的评估间隔
   save_interval: 100 # 模型保存间隔
   plot_interval: 1 # 训练指标绘制间隔

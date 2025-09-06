@@ -25,7 +25,7 @@ class Logger:
         self.max_bytes = max_bytes
 
         # if it's a filename, save log file in log directory
-        if not log_file.startswith("logs/"):
+        if "/" not in log_file and "\\" not in log_file:
             log_file = "logs/" + log_file
         log_dir = os.path.dirname(log_file)
         if not os.path.exists(log_dir):
