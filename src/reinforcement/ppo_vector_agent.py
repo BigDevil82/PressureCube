@@ -371,7 +371,7 @@ class VectorPPOAgent:
 
         # 衰减超参数
         self.eps_clip = max(0.05, self.eps_clip * self.clip_range_decay)
-        self.ent_coef = max(0.001, self.ent_coef * self.ent_coef_decay)
+        # self.ent_coef = max(0.001, self.ent_coef * self.ent_coef_decay)
 
         # 更新旧策略
         self.policy_old.load_state_dict(self.policy.state_dict())

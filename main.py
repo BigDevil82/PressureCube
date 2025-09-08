@@ -349,12 +349,12 @@ def train(args, config):
         # 增加随机起点扰动以提升探索性
         reset_options = {
             "random_structure": {"random_keys": ["pressure"]},
-            "random_start_perturbation": True,
-            "perturbation_prob": episode / args.max_episodes,
+            "random_start_perturbation": False,
+            "perturbation_prob": 0.5,
         }
         state_pyg, info_reset = env.reset(options=reset_options)
         print("=" * 50)
-        env.render()
+        # env.render()
         step = 0
         episode_reward = 0
         done = False
@@ -570,6 +570,8 @@ def main():
     random.seed(args.seed)  # For replay buffer sampling consistency
 
     config = load_config(args.config)
+    # copy config file to save path
+    shutil.copy(args.config, args.model_save_path)
 
     if args.mode == "train":
         train(args, config)

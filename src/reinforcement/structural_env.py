@@ -161,9 +161,9 @@ class StructuralEnv(gym.Env):
             p["main_beam_section_index"] / (main_beam_section_num - 1),
             p["secondary_beam_section_index"] / (secondary_beam_section_num - 1),
             p["brace_section_index"] / (brace_section_num - 1),
-            (p["main_beam_spacing"] - 0.3) / 1.8,
-            (p["brace_spacing"] - 0.3) / 1.0,
-            (p["pressure"] - 28) / 38.0,
+            p["main_beam_spacing"] / 1.8,
+            p["brace_spacing"] / 1.0,
+            p["pressure"] / 38.0,
             max_disp_abs / 14.4,
             max_stress / 355.0,
             model_volume,
@@ -225,31 +225,9 @@ class StructuralEnv(gym.Env):
             raise ValueError("Failed to run FEM analysis at reset.")
 
         self._last_model_volume = self._calculate_model_volume()
+        self.best_known_volume = self._last_model_volume
         self._calculate_volume_bounds()
         self.normalized_volume = self._calculate_normalized_volume(self._last_model_volume)
-
-        # 目标区与稳定终止相关参数
-        self.target_radius = self.env_config.get("target_radius", 0.02)
-        self.in_target_required_steps = self.env_config.get("in_target_required_steps", 2)
-        self.volume_gate_dist2 = self.env_config.get("volume_gate_dist2", 0.2)
-        self._inside_target_steps = 0
-        self._outside_target_steps = 0
-
-        # # reset() 末尾，初始化 best_phi
-        # phi0 = (
-        #     1.0 * max(0.0, self._last_max_disp_abs / self.max_disp - 1.0)
-        #     + 1.0 * max(0.0, self._last_max_stress / self.max_stress - 1.0)
-        #     + 0.5 * self._calculate_normalized_volume(self._last_model_volume)
-        # )
-        # self._best_phi = phi0
-
-        self._prev_phi = self._compute_phi(
-            self._last_max_disp_abs, self._last_max_stress, self._last_model_volume
-        )
-        # if self._last_max_disp_abs < self.max_disp and self._last_max_stress < self.max_stress:
-        #     self._is_feasible = True
-        # else:
-        #     self._is_feasible = False
 
         self.logger.info(
             "\n\n"
@@ -502,43 +480,37 @@ class StructuralEnv(gym.Env):
     def _calculate_model_volume(self) -> float:
         return self.current_structural_model.calculate_mass() / 7850.0
 
-    def _compute_phi(self, max_disp_abs: float, max_stress: float, model_volume: float, log=True) -> float:
-        s = max_stress / self.max_stress
-        d = max_disp_abs / self.max_disp
-        # 目标中心与权重（可从配置读取）
-        s_c = self.env_config.get("target_s_center", 0.98)
-        d_c = self.env_config.get("target_d_center", 0.98)
-        ws = self.env_config.get("target_ws", 1.0)
-        wd = self.env_config.get("target_wd", 1.0)
-        dist2 = ws * (s - s_c) ** 2 + wd * (d - d_c) ** 2
-
-        # 固定、归一的体积项，仅在近场参与
-        v_norm = self._calculate_normalized_volume(model_volume)
-        lambda_vol = self.env_config.get("lambda_vol", 0.1)
-        phi = dist2 + (lambda_vol * v_norm if dist2 <= self.volume_gate_dist2 else 0.0)
-
-        self.dist2 = dist2
-        if log:
-            self.logger.info(
-                f"phi: {phi:.3f}, dist2: {dist2:.3f}, s: {s:.3f}, δs: {s - s_c:.3f}, d: {d:.3f}, δd: {d - d_c:.3f}, v: {model_volume:.3f}"
-            )
-        return phi
-
     def _calculate_reward_simple(self, max_disp_abs: float, max_stress: float, model_volume: float) -> float:
         """简化的潜力差分奖励：统一不可行与可行阶段
         phi = k_v * (violation_disp + violation_stress) + k_vol * normalized_volume
         reward = phi(prev) - phi(curr) - step_penalty
         """
         # 权重（可根据训练情况微调，但保持同一量级以降低方差）
-        k_phi = 1.0
+        k_v = 1.0
+        k_vol = 0.5
         step_penalty = 0.1
 
-        # 潜力函数
-        phi_curr = self._compute_phi(max_disp_abs, max_stress, model_volume)
-        reward = k_phi * (self._prev_phi - phi_curr) - step_penalty
-        self.logger.info(f"Reward: {reward:.2f}, phi_curr: {phi_curr:.2f}, phi_prev: {self._prev_phi:.2f}\n")
+        # 当前与上一时刻的违反度与体积归一化
+        disp_ratio = max_disp_abs / self.max_disp
+        stress_ratio = max_stress / self.max_stress
+        violation_curr = max(0.0, disp_ratio - 1.0) + max(0.0, stress_ratio - 1.0)
+        norm_vol_curr = self._calculate_normalized_volume(model_volume)
 
-        self._prev_phi = phi_curr
+        disp_ratio_prev = self._last_max_disp_abs / self.max_disp
+        stress_ratio_prev = self._last_max_stress / self.max_stress
+        violation_prev = max(0.0, disp_ratio_prev - 1.0) + max(0.0, stress_ratio_prev - 1.0)
+        norm_vol_prev = self._calculate_normalized_volume(self._last_model_volume)
+
+        # 潜力函数
+        phi_curr = k_v * violation_curr + k_vol * norm_vol_curr
+        phi_prev = k_v * violation_prev + k_vol * norm_vol_prev
+
+        reward = (phi_prev - phi_curr) - step_penalty
+
+        self.logger.info(
+            f"[simple] r: {reward:.2f}, phi: {phi_curr:.3f}, d_phi: {(phi_prev - phi_curr):.3f}, "
+            f"viol: {violation_curr:.3f}, vol_n: {norm_vol_curr:.3f}"
+        )
 
         return reward
 
@@ -757,20 +729,20 @@ class StructuralEnv(gym.Env):
         mask = self.get_action_mask_for_spacing()
         if not mask[action]:
             return True
-        step_sz = 0.02 if getattr(self, "_near_field", False) else 0.05
+        step = 0.05
         if action == 0:
-            self.current_params["main_beam_spacing"] -= step_sz
+            self.current_params["main_beam_spacing"] -= step
         elif action == 1:
-            self.current_params["main_beam_spacing"] += step_sz
+            self.current_params["main_beam_spacing"] += step
         elif action == 2:
-            self.current_params["brace_spacing"] -= step_sz
+            self.current_params["brace_spacing"] -= step
         elif action == 3:
-            self.current_params["brace_spacing"] += step_sz
+            self.current_params["brace_spacing"] += step
         return False
 
     def _decode_action_for_both_with_mask(self, action: int):
         mask = self.get_action_mask_for_both()
-        # self.logger.info(f"action: {action}, mask: {mask}")
+        self.logger.info(f"action: {action}, mask: {mask}")
         if not mask[action]:
             return True
         if action < 8:
@@ -927,19 +899,8 @@ class StructuralEnv(gym.Env):
                 info["frame_length"] = self.current_params["length"]
                 info["normalized_volume"] = self._calculate_normalized_volume(current_model_volume)
                 info["volume_efficiency"] = self._calculate_volume_efficiency(current_model_volume)
-                # 近场自动减小间距步长，降低边界抖动
-                if self.dist2 <= 4 * (self.target_radius**2):
-                    self._near_field = True
-                else:
-                    self._near_field = False
 
-                # 稳定终止：连续 in_target_required_steps 步位于目标半径内
-                if np.sqrt(self.dist2) <= self.target_radius:
-                    reward += 2
-                    self._inside_target_steps += 1
-                else:
-                    self._inside_target_steps = 0
-                if self._inside_target_steps >= self.in_target_required_steps:
+                if max_disp_abs < self.max_disp and max_stress < self.max_stress:
                     terminated = True
 
             else:
@@ -964,15 +925,8 @@ class StructuralEnv(gym.Env):
         # Optional: Implement visualization (e.g., using matplotlib or a 3D viewer)
         # For now, print current parameters.
         p = self.current_params
-        # print(f"Step: {self._current_step_count}")
-        print(
-            "Frame Length: ",
-            p["length"],
-            "Pressure: ",
-            p["pressure"],
-            "Total step: ",
-            self._current_step_count,
-        )
+        print(f"Step: {self._current_step_count}")
+        print("Frame Length: ", p["length"], "Pressure: ", p["pressure"])
         print(
             f"  Main Spacing: {p['main_beam_spacing']:.2f}, Secondary Spacing: {p['main_beam_spacing']:.2f}, Brace Spacing: {p['brace_spacing']:.2f}"
         )

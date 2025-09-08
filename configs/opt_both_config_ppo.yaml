@@ -9,8 +9,8 @@ structural_params:
   secondary_beam_spacing: 1.5 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
   brace_spacing: 0.8 # 支撑梁间距 (米)
   frame_section_index: 0
-  main_beam_section_index: 6
-  secondary_beam_section_index: 5
+  main_beam_section_index: 0
+  secondary_beam_section_index: 0
   brace_section_index: 0
   win_bottom: 1.0
   win_height: 1.5
