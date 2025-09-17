@@ -27,16 +27,17 @@ def setup_matplotlib_fonts():
         english_font = "Times New Roman"
 
     # 配置matplotlib
-    plt.rcParams["font.sans-serif"] = [chinese_font, english_font]
-    plt.rcParams["font.serif"] = [english_font, chinese_font]
+    plt.rcParams["font.family"] = [english_font, chinese_font]
+    # plt.rcParams["font.sans-serif"] = [chinese_font, english_font]
+    # plt.rcParams["font.serif"] = [english_font, chinese_font]
     plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
 
     # 设置默认字体大小和其他参数
-    plt.rcParams["font.size"] = 7
-    plt.rcParams["axes.labelsize"] = 7
-    plt.rcParams["xtick.labelsize"] = 6
-    plt.rcParams["ytick.labelsize"] = 6
-    plt.rcParams["legend.fontsize"] = 6
+    plt.rcParams["font.size"] = 9
+    plt.rcParams["axes.labelsize"] = 8
+    plt.rcParams["xtick.labelsize"] = 7
+    plt.rcParams["ytick.labelsize"] = 7
+    plt.rcParams["legend.fontsize"] = 8
 
     # 设置图形尺寸（调整为7cm宽，高度相应增加）
     plt.rcParams["figure.figsize"] = [7.2 / 2.54, 5.0 / 2.54]  # 转换为英寸
@@ -158,6 +159,9 @@ def plot_reward_curve(
     # 设置坐标轴标签
     ax.set_xlabel("Episode")
     ax.set_ylabel("累积奖励")
+
+    # for label in ax.get_xticklabels() + ax.get_yticklabels():
+    #     label.set_family("Times New Roman")
 
     # 添加图例
     ax.legend(frameon=False)
