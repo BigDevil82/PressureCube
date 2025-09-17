@@ -63,7 +63,7 @@ def main():
                     degree = 270
             else:
                 degree = 0
-            f.write(f"{beam_id+1}\t{degree}\t{section_num}\n")
+            f.write(f"{degree}\t{section_num}\n")
 
     print(f"梁截面信息已导出到: {beam_sections_path}")
 
@@ -72,6 +72,10 @@ def main():
 
     # 创建一个从节点对到梁ID的映射，以便快速查找
     beam_map = {frozenset([b.start_node, b.end_node]): b.id for b in model.beams.values()}
+
+    top_plates = []
+    top_plates_id_path = os.path.join(output_dir, "bottom_plates_id.txt")
+    plate_count = 0
 
     with open(plates_path, "w", encoding="utf-8") as f:
         sorted_plate_ids = sorted(model.plates.keys())
@@ -100,6 +104,13 @@ def main():
 
             if len(edge_beam_ids) == 4:
                 f.write(",".join(map(str, edge_beam_ids)) + "\n")
+                plate_count += 1
+                if plate.on_face == "bottom":
+                    top_plates.append(plate_count)
+
+    with open(top_plates_id_path, "w", encoding="utf-8") as f:
+        for plate_id in top_plates:
+            f.write(f"{plate_id}\n")
 
     print(f"板信息已导出到: {plates_path}")
 
