@@ -181,19 +181,42 @@ def run_optimization_with_different_parameters():
     """使用不同参数运行多次优化"""
 
     # 定义不同的参数组合
+    # parameter_sets = [
+    #     {
+    #         "name": "小规模快速测试",
+    #         "params": GAParameters(
+    #             population_size=20,
+    #             max_generations=40,
+    #             crossover_rate=0.8,
+    #             mutation_rate=0.25,
+    #             elite_ratio=0.2,
+    #         ),
+    #     },
+    #     {
+    #         "name": "中等规模优化",
+    #         "params": GAParameters(
+    #             population_size=50,
+    #             max_generations=60,
+    #             crossover_rate=0.8,
+    #             mutation_rate=0.2,
+    #             elite_ratio=0.1,
+    #         ),
+    #     },
+    #     {
+    #         "name": "大规模深度优化",
+    #         "params": GAParameters(
+    #             population_size=100,
+    #             max_generations=100,
+    #             crossover_rate=0.8,
+    #             mutation_rate=0.05,
+    #             elite_ratio=0.05,
+    #         ),
+    #     },
+    # ]
+
     parameter_sets = [
         {
-            "name": "小规模快速测试",
-            "params": GAParameters(
-                population_size=20,
-                max_generations=40,
-                crossover_rate=0.8,
-                mutation_rate=0.25,
-                elite_ratio=0.2,
-            ),
-        },
-        {
-            "name": "中等规模优化",
+            "name": "原型1-7.2m-30kPa",
             "params": GAParameters(
                 population_size=50,
                 max_generations=60,
@@ -203,13 +226,23 @@ def run_optimization_with_different_parameters():
             ),
         },
         {
-            "name": "大规模深度优化",
+            "name": "原型2-9.6m-35kPa",
             "params": GAParameters(
-                population_size=100,
-                max_generations=100,
+                population_size=50,
+                max_generations=60,
                 crossover_rate=0.8,
-                mutation_rate=0.05,
-                elite_ratio=0.05,
+                mutation_rate=0.2,
+                elite_ratio=0.1,
+            ),
+        },
+        {
+            "name": "原型3-12m-38kPa",
+            "params": GAParameters(
+                population_size=50,
+                max_generations=60,
+                crossover_rate=0.8,
+                mutation_rate=0.2,
+                elite_ratio=0.1,
             ),
         },
     ]
@@ -227,7 +260,10 @@ def run_optimization_with_different_parameters():
         output_dir = os.path.join(base_output_dir, f"{timestamp}_{i+1}_{param_set['name']}")
 
         # 创建优化器
-        optimizer = SteelFrameGA(config_path="config.yaml", ga_params=param_set["params"], logger=logger)
+        config_num = i + 1
+        optimizer = SteelFrameGA(
+            config_path=f"configs/config_{config_num}.yaml", ga_params=param_set["params"], logger=logger
+        )
 
         # 记录开始时间
         start_time = time.time()
