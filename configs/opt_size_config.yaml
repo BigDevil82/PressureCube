@@ -3,7 +3,7 @@
 # 结构参数
 structural_params:
   length: 7.2 # 舱体长度 (y方向，米)
-  width: 3.6 # 舱体宽度 (x方向，米)
+  width: 3.7 # 舱体宽度 (x方向，米)
   height: 3.3 # 舱体高度 (z方向，米)
   main_beam_spacing: 1.05 # 环向主梁间距 (米)
   secondary_beam_spacing: 1.05 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
@@ -16,8 +16,7 @@ structural_params:
   win_height: 1.5
   plate_thickness: 0.005
   pressure: 30 # 内压，kPa
-  windows:
-    [] # 窗户参数列表
+  windows: [] # 窗户参数列表
     # - y_position: 1.275 # 窗户中心在y轴的位置 (米)
     #   on_face: "left" # 窗户所在面 ('front', 'back', 'left')
     # - y_position: 1.275 # 窗户中心在y轴的位置 (米)
