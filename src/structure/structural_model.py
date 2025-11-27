@@ -553,7 +553,7 @@ class StructuralModel:
         for x in all_x:
             for y in all_y:
                 node_id = self.add_node(x, y, z)
-                if (x == all_x[0] or x == all_x[-1]) and (y == all_y[0] or y == all_y[-1]):
+                if (x == all_x[0] or x == all_x[-1]) and (y == all_y[0] or y == all_y[-1]) and z == 0:
                     self.points[node_id].is_support = True
                 # print(f"add node: {node_id}, x: {x}, y: {y}, z: {z}")
 

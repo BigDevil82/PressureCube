@@ -571,7 +571,8 @@ def main():
 
     config = load_config(args.config)
     # copy config file to save path
-    shutil.copy(args.config, args.model_save_path)
+    if args.mode == "train":
+        shutil.copy(args.config, args.model_save_path)
 
     if args.mode == "train":
         train(args, config)

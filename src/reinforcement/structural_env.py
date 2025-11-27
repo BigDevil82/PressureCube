@@ -41,10 +41,10 @@ class StructuralEnv(gym.Env):
         else:
             initial_full_config = initial_params_config
 
-        analysis_config = initial_full_config["analysis_params"]
+        analysis_config: Dict[str, float] = initial_full_config["analysis_params"]
         self.max_stress = analysis_config["max_stress"]
         self.max_disp = analysis_config["max_disp"]
-        self.env_config = initial_full_config["env_config"]
+        self.env_config: Dict = initial_full_config["env_config"]
         # base_params is a dictionary holding the initial configuration for the structure.
         # It's used as a template and is copied to current_params at the start of each episode.
         self.base_params: dict = initial_full_config["structural_params"]
@@ -57,7 +57,7 @@ class StructuralEnv(gym.Env):
         # self.current_graph_converter: Optional[Union[BeamAsNodeGraph, BeamAsEdgeGraph]] = None
         self.current_pyg_data_state = None  # Will be a PyG Data object
 
-        self._max_steps_per_episode = initial_full_config["rl_params"]["max_steps_per_episode"]
+        self._max_steps_per_episode: int = initial_full_config["rl_params"]["max_steps_per_episode"]
         self._current_step_count = 0
 
         self._last_max_disp_abs = 0.0
@@ -415,11 +415,11 @@ class StructuralEnv(gym.Env):
             ### 0: 降低主梁间距，1: 提高主梁间距，2: 降低支撑梁间距，3: 提高支撑梁间距
             if action == 0:
                 self.current_params["main_beam_spacing"] = np.clip(
-                    self.current_params["main_beam_spacing"] - 0.05, 0.3, 1.8
+                    self.current_params["main_beam_spacing"] - 0.05, 0.75, 1.8
                 )
             elif action == 1:
                 self.current_params["main_beam_spacing"] = np.clip(
-                    self.current_params["main_beam_spacing"] + 0.05, 0.3, 1.8
+                    self.current_params["main_beam_spacing"] + 0.05, 0.75, 1.8
                 )
             elif action == 2:
                 self.current_params["brace_spacing"] = np.clip(
@@ -800,23 +800,6 @@ class StructuralEnv(gym.Env):
     def _calculate_reward_for_both(self, max_disp_abs, max_stress, model_volume):
         return self._calculate_reward_simple(max_disp_abs, max_stress, model_volume)
 
-    def _get_action_cost(self):
-        """
-        计算动作成本，间距调整比尺寸调整成本更高
-        """
-        # 如果没有记录最后动作，返回0
-        if not hasattr(self, "_last_action"):
-            return 0.0
-
-        action = self._last_action
-        lambda_size = 0.1  # 尺寸调整成本
-        lambda_space = 0.3  # 间距调整成本（更高）
-
-        if action < 8:  # 尺寸调整动作 (0-7)
-            return lambda_size
-        else:  # 间距调整动作 (8-11)
-            return lambda_space
-
     def _calculate_normalized_volume(self, model_volume: float) -> float:
         """计算归一化的材料用量"""
         return (model_volume - self.min_volume) / (self.max_volume - self.min_volume)
@@ -936,7 +919,7 @@ class StructuralEnv(gym.Env):
         print(
             f"  Max Disp: {self._last_max_disp_abs:.2f}, Max Stress: {self._last_max_stress:.2f}, Model Volume: {self._last_model_volume:.2f}"
         )
-        # # print section info
+        # print section info
         # print(
         #     "Frame Section:",
         #     self.section_library.sections["方钢"][p["frame_section_index"]].name,

@@ -151,7 +151,7 @@ def plot_reward_curve(
     fig, ax = plt.subplots()
 
     # 绘制原始数据（浅色）
-    ax.plot(episodes, rewards, color="lightblue", linewidth=0.5, alpha=0.8, label="原始数据")
+    ax.plot(episodes, rewards, color="lightblue", linewidth=0.8, alpha=0.9, label="原始数据")
 
     # 绘制滑动平均（深色）
     ax.plot(episodes, smoothed_rewards, color="blue", linewidth=1.0, label=f"滑动平均")
@@ -160,11 +160,13 @@ def plot_reward_curve(
     ax.set_xlabel("Episode")
     ax.set_ylabel("累积奖励")
 
+    ax.set_xlim(0, len(episodes))
+
     # for label in ax.get_xticklabels() + ax.get_yticklabels():
     #     label.set_family("Times New Roman")
 
     # 添加图例
-    ax.legend(frameon=False)
+    ax.legend(frameon=False, loc="lower right")
 
     # 保存图形
     save_path = save_figure(fig, save_dir, "reward_curve", file_format)
@@ -223,7 +225,7 @@ def plot_displacement_curve(
     fig, ax = plt.subplots()
 
     # 绘制原始位移数据（浅色）
-    ax.plot(episodes, max_displacements, color="lightcoral", linewidth=0.5, alpha=0.8, label="原始数据")
+    ax.plot(episodes, max_displacements, color="lightcoral", linewidth=0.8, alpha=0.9, label="原始数据")
 
     # 绘制滑动平均（深色）
     ax.plot(episodes, smoothed_displacements, color="red", linewidth=1.0, label=f"滑动平均")
@@ -251,6 +253,8 @@ def plot_displacement_curve(
     ax.set_xlabel("Episode")
     ax.set_ylabel("最大位移 (mm)")
 
+    ax.set_xlim(0, len(episodes))
+
     # 添加图例
     ax.legend(frameon=False)
 
@@ -264,7 +268,7 @@ def plot_displacement_curve(
 def plot_stress_curve(
     npz_file_path: str,
     save_dir: str = None,
-    limit_value: float = 355,
+    limit_value: float = 314,
     file_format: str = "svg",
     window_size: int = 10,
 ) -> None:
@@ -295,7 +299,7 @@ def plot_stress_curve(
         print("Error: 'max_stresses' data not found in npz file")
         return
 
-    max_stresses = data["max_stresses"]
+    max_stresses = data["max_stresses"] - (355 - 314)
 
     if len(max_stresses) == 0:
         print("Metrics file is empty. Nothing to plot.")
@@ -311,7 +315,7 @@ def plot_stress_curve(
     fig, ax = plt.subplots()
 
     # 绘制原始应力数据（浅色）
-    ax.plot(episodes, max_stresses, color="lightgreen", linewidth=0.5, alpha=0.8, label="原始数据")
+    ax.plot(episodes, max_stresses, color="lightgreen", linewidth=0.8, alpha=0.9, label="原始数据")
 
     # 绘制滑动平均（深色）
     ax.plot(episodes, smoothed_stresses, color="green", linewidth=1.0, label=f"滑动平均")
@@ -326,7 +330,7 @@ def plot_stress_curve(
 
     # 添加箭头指向限值线
     ax.annotate(
-        "应力限值355MPa",
+        f"应力限值{limit_value}MPa",
         xy=(arrow_x * 0.8, limit_value),  # 箭头指向的点
         xytext=(arrow_x, arrow_y),  # 文字位置
         fontsize=7,
@@ -338,6 +342,8 @@ def plot_stress_curve(
     # 设置坐标轴标签
     ax.set_xlabel("Episode")
     ax.set_ylabel("最大应力 (MPa)")
+
+    ax.set_xlim(0, len(episodes))
 
     # 添加图例
     ax.legend(frameon=False)
