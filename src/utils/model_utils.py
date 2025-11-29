@@ -4,9 +4,13 @@ from typing import Tuple
 
 import matplotlib.pyplot as plt
 import yaml
+from mpl_toolkits.mplot3d import Axes3D
 
+from src.structure.enums import BeamType
+
+# from src.structure.structural_model import Point, StructuralModel, StructuralParameters, Window
+from src.structure.parametric_model import Beam, StructuralModel, StructuralParameters, Window
 from src.structure.section_library import SectionLibrary
-from src.structure.structural_model import BeamType, Point, StructuralModel, StructuralParameters, Window
 
 
 def load_config(config_path):
@@ -81,10 +85,10 @@ class StructureVisualizer:
     def __init__(self, model: StructuralModel):
         self.model = model
         self.colors = {
-            BeamType.FRAME: "black",
+            BeamType.FRAME: "brown",
             BeamType.MAIN: "blue",
-            BeamType.SECONDARY: "green",
-            BeamType.BRACE: "red",
+            BeamType.SECONDARY: "orange",
+            BeamType.BRACE: "green",
         }
         self.view_params = {
             ViewType.LEFT: {"elev": 0, "azim": 90, "title": "Left Face View"},
@@ -96,36 +100,20 @@ class StructureVisualizer:
             ViewType.FULL_3D: {"elev": 20, "azim": 45, "title": "Pressure Vessel Structure (3D)"},
         }
 
-    def _is_beam_in_face(self, beam: Tuple[Point, Point], face_type: ViewType) -> bool:
+    def _is_beam_in_face(self, beam: Beam, face_type: ViewType) -> bool:
         """判断梁是否在指定面上"""
-        start_node, end_node = beam
-        if face_type == ViewType.LEFT:
-            return abs(start_node.y) < 0.01 and abs(end_node.y) < 0.01
-        elif face_type == ViewType.RIGHT:
-            return (
-                abs(start_node.y - self.model.params.length) < 0.01
-                and abs(end_node.y - self.model.params.length) < 0.01
-            )
-        elif face_type == ViewType.FRONT:
-            return abs(start_node.x) < 0.01 and abs(end_node.x) < 0.01
-        elif face_type == ViewType.BACK:
-            return (
-                abs(start_node.x - self.model.params.width) < 0.01
-                and abs(end_node.x - self.model.params.width) < 0.01
-            )
-        elif face_type == ViewType.TOP:
-            return (
-                abs(start_node.z - self.model.params.height) < 0.01
-                and abs(end_node.z - self.model.params.height) < 0.01
-            )
-        elif face_type == ViewType.BOTTOM:
-            return abs(start_node.z) < 0.01 and abs(end_node.z) < 0.01
-        return True  # 3D视图显示所有梁
+        if face_type == ViewType.FULL_3D:
+            return True
+
+        if face_type.value in beam.on_face:
+            return True
+        else:
+            return False
 
     def _create_plot(self, face_type: ViewType) -> Tuple[plt.Figure, plt.Axes]:
         """创建绘图对象"""
         fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection="3d")
+        ax: Axes3D = fig.add_subplot(111, projection="3d")
 
         # 设置坐标轴标签
         ax.set_xlabel("X (m)")
@@ -133,9 +121,15 @@ class StructureVisualizer:
         ax.set_zlabel("Z (m)")
 
         # 设置坐标轴范围
-        ax.set_xlim([0, self.model.params.width])
-        ax.set_ylim([0, self.model.params.length])
-        ax.set_zlim([0, self.model.params.height])
+        # 获取模型的最大尺寸
+        L = self.model.params.width
+        W = self.model.params.length
+        H = self.model.params.height
+
+        ax.set_xlim([0, L])
+        ax.set_ylim([0, W])
+        ax.set_zlim([0, H])
+        ax.set_box_aspect((L, W, H))
 
         # 设置视角
         view_params = self.view_params[face_type]
@@ -152,12 +146,12 @@ class StructureVisualizer:
             start_node = self.model.points[beam.start_node]
             end_node = self.model.points[beam.end_node]
 
-            if self._is_beam_in_face((start_node, end_node), face_type):
+            if self._is_beam_in_face(beam, face_type):
                 x = [start_node.x, end_node.x]
                 y = [start_node.y, end_node.y]
                 z = [start_node.z, end_node.z]
-
-                ax.plot(x, y, z, color=self.colors[beam.beam_type], linewidth=1.5, zorder=10)
+                alpha = 0.2 if beam.is_virtual else 1.0
+                ax.plot(x, y, z, color=self.colors[beam.beam_type], linewidth=1.5, zorder=10, alpha=alpha)
 
     def _plot_plates(self, ax: plt.Axes, face_type: ViewType):
         """绘制钢板"""
@@ -230,8 +224,8 @@ class StructureVisualizer:
         self._plot_beams(ax, face_type)  # 再绘制梁
         self._plot_nodes(ax, face_type)  # 最后绘制节点（在顶层）
         self._add_legend(ax)
-        plt.axis("equal")
         ax.grid(grid)
+        plt.tight_layout(pad=1.2)
         plt.show()
         return fig, ax
 
@@ -245,8 +239,6 @@ class StructureVisualizer:
             ViewType.BACK,
             ViewType.TOP,
             ViewType.BOTTOM,
+            ViewType.FULL_3D,
         ]:
             self.show_face(face_type, grid)
-
-        # 显示3D视图
-        self.show_face(ViewType.FULL_3D, grid)

@@ -34,3 +34,13 @@ MIN_BEAM_SPACING = 0.5  # 最小梁间距 (m)
 MAX_BEAM_SPACING = 2.0  # 最大梁间距 (m)
 MIN_BRACE_SPACING = 1.0  # 最小支撑间距 (m)
 MAX_BRACE_SPACING = 3.0  # 最大支撑间距 (m)
+
+
+# Conversion factors
+MM_TO_M = 0.001
+CM_TO_M = 0.01
+CM2_TO_M2 = CM_TO_M**2
+CM3_TO_M3 = CM_TO_M**3
+CM4_TO_M4 = CM_TO_M**4
+MM4_TO_M4 = MM_TO_M**4
+KG_M_TO_N_M3 = 9.80665  # Assuming g = 9.80665 m/s^2 for density calculation from linear weight

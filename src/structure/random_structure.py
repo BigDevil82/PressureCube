@@ -27,7 +27,7 @@ class RandomStructure:
         self._main_beam_spacing_options = np.arange(0.7, 1.51, 0.05)
 
         # 固定参数
-        self.fixed_width = 3.6
+        self.fixed_width = 3.7
         self.fixed_height = 3.3
         self.fixed_win_height = 1.5
         self.fixed_win_bottom = 0.9

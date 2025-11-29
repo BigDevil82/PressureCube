@@ -40,3 +40,8 @@ NU_STEEL = 0.3  # Poisson's ratio
 G_STEEL_MPA = E_STEEL_MPA / (2 * (1 + NU_STEEL))  # Shear Modulus in N/mm^2 (MPa)
 RHO_STEEL_KG_M3 = 7850.0  # Density in kg/m^3
 RHO_STEEL_TONNE_MM3 = RHO_STEEL_KG_M3 * KG_M3_TO_TONNE_MM3  # Density in tonne/mm^3
+
+
+# gravity
+G_MM_S2 = 9806.65  # Gravitational acceleration in mm/s^2
+G_M_S2 = 9.80665
