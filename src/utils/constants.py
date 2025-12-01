@@ -21,8 +21,8 @@ SECTION_TYPES = {
 
 # 荷载条件
 INTERNAL_PRESSURE = 30e3  # 内压 (Pa)
-DEAD_LOAD = 5000  # 自重 (N/m^2)
-LIVE_LOAD = 1800  # 活载 (N/m^2)
+LOAD_DEAD_BOTTOM_KPA = 5.0  # 底部恒载 5kN/m2
+LOAD_LIVE_BOTTOM_KPA = 2.0  # 底部活载 2kN/m2
 
 # 尺寸限制
 MAX_LENGTH = 14.0  # 最大长度 (m)
@@ -44,3 +44,4 @@ CM3_TO_M3 = CM_TO_M**3
 CM4_TO_M4 = CM_TO_M**4
 MM4_TO_M4 = MM_TO_M**4
 KG_M_TO_N_M3 = 9.80665  # Assuming g = 9.80665 m/s^2 for density calculation from linear weight
+KPA_TO_MPA = 1e-3  # 单位转换系数

@@ -33,12 +33,12 @@ class StructuralParameters:
     num_secondary_height: int  # 高度方向(Z)次梁分段数
     add_support_beam: bool = True  # 是否添加支撑梁
 
-    windows: List[Window] = field(default_factory=list)  # 窗户参数列表
     frame_section_index: int = 0  # 方钢索引
     main_beam_section_index: int = 0  # H型钢索引 (用于主梁)
     secondary_beam_section_index: int = 0  # H型钢索引 (用于次梁)
     brace_section_index: int = 0  # 槽钢索引
 
+    windows: List[Window] = field(default_factory=list)  # 窗户参数列表
     win_bottom: float = 1.0  # 窗户底部离地高度
     win_height: float = 1.5  # 窗户高度
     plate_thickness: float = 0.01  # 钢板厚度
@@ -72,6 +72,13 @@ class Beam:
     section: SectionProperties
     is_virtual: bool  # 为了后续网格划分方便，参数化建模时把不存在的梁也生成，但是FEA建模时不生成
     on_face: str  # 记录属于哪个面，方便调试
+
+    def direction(self, nodes: Dict[int, Point]) -> np.ndarray:
+        """计算梁的方向向量"""
+        start = nodes[self.start_node].coordinates()
+        end = nodes[self.end_node].coordinates()
+        direction = end - start
+        return direction / np.linalg.norm(direction)
 
 
 @dataclass
@@ -173,7 +180,7 @@ class StructuralModel:
         self.node_manager = NodeManager()
         self.beam_manager = BeamManager(self.node_manager)
 
-        self.plate_counter = 0
+        self.plate_counter = 10000  # 板ID从10000开始，避免opensees建模时与梁ID冲突
         self.plates: Dict[int, Plate] = {}
         self.points = self.node_manager.points
         self.beams = self.beam_manager.beams
@@ -207,9 +214,9 @@ class StructuralModel:
             v_beam_logic="SECONDARY",
         )
 
-        # Front (X=0): U=Y(L), V=Z(H). (长侧面)
+        # Front (X=W): U=Y(L), V=Z(H). (长侧面)
         self._build_face(
-            origin=(0, 0, 0),
+            origin=(W, 0, 0),
             u_vec=(0, 1, 0),
             v_vec=(0, 0, 1),
             u_len=L,
@@ -219,9 +226,9 @@ class StructuralModel:
             v_beam_logic="MAIN",
         )
 
-        # Back (X=W): Same as Front.
+        # Back (X=0): Same as Front.
         self._build_face(
-            origin=(W, 0, 0),
+            origin=(0, 0, 0),
             u_vec=(0, 1, 0),
             v_vec=(0, 0, 1),
             u_len=L,
@@ -469,9 +476,9 @@ if __name__ == "__main__":
     model = StructuralModel(params, SectionLibrary())
     model.generate()
 
-    mesh_generator = MeshGenerator(model, 0.5)
-    meshed_model = mesh_generator.generate()
+    # mesh_generator = MeshGenerator(model, 0.5)
+    # model = mesh_generator.generate()
 
-    visualizer = StructureVisualizer(meshed_model)
+    visualizer = StructureVisualizer(model)
     # visulizer.show_face(ViewType.FULL_3D)
     visualizer.show_all_views(grid=False)

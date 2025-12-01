@@ -1,7 +1,7 @@
 import os
 from typing import Dict, List, Set
 
-from src.structure.structural_model import Beam, Plate
+from src.structure.structural_model import Beam, Plate, StructuralModel
 from src.utils.model_utils import create_structural_model, load_config
 
 
@@ -52,6 +52,7 @@ def main():
     }
     with open(beam_sections_path, "w", encoding="utf-8") as f:
         sorted_beam_ids = sorted(model.beams.keys())
+        index = 1
         for beam_id in sorted_beam_ids:
             beam = model.beams[beam_id]
             section_num = beam.beam_type.value + 1
@@ -63,7 +64,8 @@ def main():
                     degree = 270
             else:
                 degree = 0
-            f.write(f"{degree}\t{section_num}\n")
+            f.write(f"{index}\t{degree}\t{section_num}\n")
+            index += 1
 
     print(f"梁截面信息已导出到: {beam_sections_path}")
 

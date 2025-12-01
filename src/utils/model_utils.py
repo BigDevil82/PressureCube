@@ -7,10 +7,8 @@ import yaml
 from mpl_toolkits.mplot3d import Axes3D
 
 from src.structure.enums import BeamType
-
-# from src.structure.structural_model import Point, StructuralModel, StructuralParameters, Window
-from src.structure.parametric_model import Beam, StructuralModel, StructuralParameters, Window
 from src.structure.section_library import SectionLibrary
+from src.structure.structural_model import Beam, Point, StructuralModel, StructuralParameters, Window
 
 
 def load_config(config_path):
@@ -48,8 +46,9 @@ def create_structural_model(config):
         width=params_dict["width"],
         height=params_dict["height"],
         main_beam_spacing=params_dict["main_beam_spacing"],
-        secondary_beam_spacing=params_dict["main_beam_spacing"],  # 次梁间距与主梁间距相同
-        brace_spacing=params_dict["brace_spacing"],
+        num_secondary_width=params_dict["num_secondardy_witdth"],
+        num_secondary_height=params_dict["num_secondardy_height"],
+        add_support_beam=params_dict["add_support_beam"],
         frame_section_index=params_dict["frame_section_index"],
         main_beam_section_index=params_dict["main_beam_section_index"],
         secondary_beam_section_index=params_dict["secondary_beam_section_index"],
@@ -62,7 +61,7 @@ def create_structural_model(config):
     model = StructuralModel(params, section_library)
 
     # 使用网格化建模方法
-    model.generate_grid_mesh()
+    model.generate()
 
     return model
 

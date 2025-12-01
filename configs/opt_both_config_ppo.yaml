@@ -6,8 +6,9 @@ structural_params:
   width: 3.7 # 舱体宽度 (x方向，米)
   height: 3.3 # 舱体高度 (z方向，米)
   main_beam_spacing: 1.2 # 环向主梁间距 (米)
-  secondary_beam_spacing: 1.5 # 环向次梁间距 (米) 与主梁间距一致 TODO 后面考虑删去这个参数
-  brace_spacing: 0.8 # 支撑梁间距 (米)
+  num_secondardy_witdth: 3 # 宽度方向的次梁分段数
+  num_secondardy_height: 3 # 高度方向的次梁分段数
+  add_support_beam: true # 是否添加支撑梁
   frame_section_index: 0
   main_beam_section_index: 0
   secondary_beam_section_index: 0
