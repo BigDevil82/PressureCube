@@ -5,502 +5,193 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
+from src.structure.section_library import SectionLibrary
+
+# 假设 structural_model.py 已经按照之前的讨论重构完成
+from src.structure.structural_model import Beam, BeamType, StructuralModel
+
 # Ensuring imports are relative to the 'src' directory structure.
 # This assumes that 'src' is part of PYTHONPATH or the execution context.
 from ..structure.structural_model import Beam as ModelBeam
 from ..structure.structural_model import Point as ModelPoint
 from ..structure.structural_model import StructuralModel
-from ..utils.util import is_close  # For comparing floating point numbers
-
-
-class BeamAsEdgeGraph:
-    """
-    Represents the building structure as a graph.
-    In this representation (Type 1):
-    - Graph Nodes: Correspond to the Point objects (joints) in the StructuralModel.
-    - Graph Edges: Correspond to the Beam objects (structural members) in the StructuralModel.
-    """
-
-    def __init__(self, structural_model: StructuralModel):
-        """
-        Initializes the graph representation from a StructuralModel.
-
-        Args:
-            structural_model: The input StructuralModel instance.
-        """
-        self.model: StructuralModel = structural_model
-
-        # Graph nodes are the Point objects from the model's node dictionary.
-        # Key: node_id (int), Value: ModelPoint object
-        self.nodes: Dict[int, ModelPoint] = self.model.points
-
-        # Graph edges are the Beam objects from the model's beam dictionary.
-        # Key: beam_id (int), Value: ModelBeam object
-        self.edges: Dict[int, ModelBeam] = self.model.beams
-
-        # Adjacency list representation of the graph.
-        # Key: node_id (int)
-        # Value: List of tuples, where each tuple is (neighbor_node_id, beam_id_connecting_them)
-        self.adj: Dict[int, List[Tuple[int, int]]] = {node_id: [] for node_id in self.nodes.keys()}
-
-        self._build_adjacency_list()
-
-    def _build_adjacency_list(self):
-        """
-        Populates the adjacency list based on the beams in the structural model.
-        Each beam connects two nodes, forming an edge in the graph.
-        """
-        for beam_id, beam_obj in self.edges.items():
-            start_node_id = beam_obj.start_node
-            end_node_id = beam_obj.end_node
-
-            # Ensure both start and end nodes of the beam exist in the graph's node set.
-            if start_node_id in self.nodes and end_node_id in self.nodes:
-                # Add edge from start_node to end_node
-                self.adj[start_node_id].append((end_node_id, beam_id))
-                # Add edge from end_node to start_node (for undirected graph representation)
-                self.adj[end_node_id].append((start_node_id, beam_id))
-            else:
-                # Log a warning if a beam refers to non-existent nodes.
-                # This might indicate an inconsistency in the StructuralModel.
-                print(
-                    f"Warning: Beam ID {beam_id} refers to non-existent node(s). "
-                    f"Start node: {start_node_id}, End node: {end_node_id}. "
-                    "This edge will be skipped in the adjacency list."
-                )
-
-    def get_node_attributes(self, node_id: int) -> Optional[ModelPoint]:
-        """
-        Retrieves the attributes of a specific node in the graph.
-
-        Args:
-            node_id: The ID of the node.
-
-        Returns:
-            The ModelPoint object representing the node, or None if the node_id is not found.
-        """
-        return self.nodes.get(node_id)
-
-    def get_edge_attributes(self, beam_id: int) -> Optional[ModelBeam]:
-        """
-        Retrieves the attributes of a specific edge (beam) in the graph.
-
-        Args:
-            beam_id: The ID of the beam (edge).
-
-        Returns:
-            The ModelBeam object representing the edge, or None if the beam_id is not found.
-        """
-        return self.edges.get(beam_id)
-
-    def get_neighbors(self, node_id: int) -> List[Tuple[int, int]]:
-        """
-        Retrieves the neighbors of a specific node in the graph.
-
-        Args:
-            node_id: The ID of the node.
-
-        Returns:
-            A list of tuples, where each tuple is (neighbor_node_id, beam_id_connecting_to_neighbor).
-            Returns an empty list if the node_id is not found or has no neighbors.
-        """
-        return self.adj.get(node_id, [])
-
-    def get_all_nodes(self) -> List[ModelPoint]:
-        """Returns a list of all node objects in the graph."""
-        return list(self.nodes.values())
-
-    def get_all_edges(self) -> List[ModelBeam]:
-        """Returns a list of all edge (beam) objects in the graph."""
-        return list(self.edges.values())
-
-    def number_of_nodes(self) -> int:
-        """Returns the total number of nodes in the graph."""
-        return len(self.nodes)
-
-    def number_of_edges(self) -> int:
-        """
-        Returns the total number of unique edges (beams) in the graph.
-        """
-        return len(self.edges)
-
-    def __str__(self) -> str:
-        return f"StructuralGraph with {self.number_of_nodes()} nodes and " f"{self.number_of_edges()} edges."
-
-    def to_pyg_data(self, env_info: Dict) -> Data:
-        """
-        Converts the StructuralGraph to a PyTorch Geometric Data object.
-
-        Node features:
-            - x, y, z coordinates (3 features)
-            - is_support (1.0 if z approx 0, else 0.0) (1 feature)
-
-        Edge features (for each directed edge u -> v representing one side of a beam):
-            - Start node coordinates (of u) (3 features)
-            - End node coordinates (of v) (3 features)
-            - Beam section index (integer) (1 feature)
-            - Direction category (0: horizontal, 1: vertical, 2: diagonal) (1 feature)
-        """
-        if not self.nodes:
-            return Data()  # Return empty Data object if no nodes
-
-        # Node ID mapping from model's potentially sparse IDs to dense 0..N-1 PyG indices
-        # Ensure a consistent order for node features and edge_index
-        sorted_model_node_ids = sorted(list(self.nodes.keys()))
-        model_node_id_to_pyg_idx = {model_id: i for i, model_id in enumerate(sorted_model_node_ids)}
-
-        # 1. Node Features (x)
-        node_features_list = []
-        for model_node_id in sorted_model_node_ids:
-            node = self.nodes[model_node_id]
-            coords = [node.x, node.y, node.z]
-            is_support_feature = [1.0 if node.is_support else 0.0]
-            node_features_list.append(coords + is_support_feature)
-
-        pyg_x = torch.tensor(node_features_list, dtype=torch.float)
-
-        # 2. Edge Index (edge_index) and Edge Attributes (edge_attr)
-        edge_list = []
-        edge_attr_list = []
-
-        # Create a mapping for section names to integer indices
-        section_names = sorted(list(self.model.sections.keys()))  # Consistent ordering
-        section_name_to_idx = {name: i for i, name in enumerate(section_names)}
-
-        for beam_id, beam in self.model.beams.items():
-            start_model_node_id = beam.start_node
-            end_model_node_id = beam.end_node
-
-            if (
-                start_model_node_id not in model_node_id_to_pyg_idx
-                or end_model_node_id not in model_node_id_to_pyg_idx
-            ):
-                print(f"Warning: Beam {beam_id} connects to unknown node(s). Skipping.")
-                continue
-
-            u_pyg = model_node_id_to_pyg_idx[start_model_node_id]
-            v_pyg = model_node_id_to_pyg_idx[end_model_node_id]
-
-            node_u_obj = self.model.points[start_model_node_id]
-            node_v_obj = self.model.points[end_model_node_id]
-
-            coords_u = [node_u_obj.x, node_u_obj.y, node_u_obj.z]
-            coords_v = [node_v_obj.x, node_v_obj.y, node_v_obj.z]
-
-            # Section index
-            section_idx = section_name_to_idx.get(beam.section, -1)  # Default to -1 if section name not found
-            # Beam Type Index
-            beam_type_idx = beam.beam_type.value
-
-            # Beam Section Index in SectionLibrary
-            beam_section_idx = self.model.sections[beam.section].idx
-
-            length = beam.length(self.model.points)
-
-            if section_idx == -1:
-                print(f"Warning: Beam {beam_id} has unknown section '{beam.section}'. Using index -1.")
-
-            # Direction category
-            beam_vec = np.array(coords_v) - np.array(coords_u)
-            direction_category = np.argmax(np.abs(beam_vec))
-
-            # Edge attributes for this beam
-            # Features: start_coords (3), end_coords (3), section_idx (1), direction_cat (1)
-            # For edge u -> v
-            edge_feat_uv = coords_u + coords_v + [beam_type_idx, beam_section_idx, length, direction_category]
-            # For edge v -> u (features are symmetric in this definition)
-            edge_feat_vu = coords_v + coords_u + [beam_type_idx, beam_section_idx, length, direction_category]
-
-            # Add edges for PyG (typically expects directed edges, so add both directions for an undirected beam)
-            edge_list.append([u_pyg, v_pyg])
-            edge_attr_list.append(edge_feat_uv)
-
-            edge_list.append([v_pyg, u_pyg])
-            edge_attr_list.append(edge_feat_vu)  # Using specific features for v->u edge
-
-        pyg_edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
-        pyg_edge_attr = torch.tensor(edge_attr_list, dtype=torch.float)
-
-        # 3. Create PyG Data object
-        data = Data(x=pyg_x, edge_index=pyg_edge_index, edge_attr=pyg_edge_attr)
-        data.num_nodes = pyg_x.size(0)
-        data.node_feature_dim = pyg_x.size(1)
-        data.edge_feature_dim = pyg_edge_attr.size(1)
-
-        return data
 
 
 class BeamAsNodeGraph:
     """
-    Represents the building structure as a graph where beams are nodes.
-    In this representation (Type 2):
-    - Graph Nodes: Correspond to the Beam objects (structural members) in the StructuralModel.
-    - Graph Edges: Represent a connection (shared Point) between two Beam objects.
+    Beam-as-Node 图表示法生成器。
+
+    图定义:
+    - 节点 (Nodes): 对应结构中的物理梁 (Beam)。
+    - 边 (Edges): 如果两根梁共享同一个物理连接点 (Point)，则它们之间存在边。
     """
 
-    def __init__(self, structural_model: StructuralModel):
-        """
-        Initializes the graph representation from a StructuralModel.
+    def __init__(self, model: StructuralModel):
+        self.model = model
+        self.nodes: Dict[int, Beam] = self.model.beams
 
-        Args:
-            structural_model: The input StructuralModel instance.
-        """
-        self.model: StructuralModel = structural_model
+        # 预计算归一化因子 (基于模型边界框)
+        self.norm_scale = self._calculate_normalization_factors()
 
-        # Graph nodes are the Beam objects from the model's beam dictionary.
-        # Key: beam_id (int), Value: ModelBeam object
-        self.nodes: Dict[int, ModelBeam] = self.model.beams
-
-        # Adjacency list representation of the graph.
-        # Key: beam_id (acting as node_id)
-        # Value: List of beam_ids that are connected to this beam.
+        # 邻接表缓存
         self.adj: Dict[int, List[int]] = defaultdict(list)
-        self._build_adjacency_list()
-        self.pyg_idx_to_beam_id = None
+        self._build_adjacency()
 
-    def _build_adjacency_list(self):
+    def _calculate_normalization_factors(self) -> Dict[str, float]:
+        """计算用于特征归一化的缩放因子"""
+        # 几何归一化
+        L, W, H = self.model.params.length, self.model.params.width, self.model.params.height
+        max_dim = max(L, W, H)
+
+        # 截面属性归一化 (从SectionLibrary获取最大值)
+        # 注意：这里需要确保 section_lib 已经加载
+        lib = self.model.section_lib
+        # 简单遍历库中所有截面找最大值，或者硬编码一个较大的经验值
+        # 这里为了稳健性，使用硬编码的经验上限，防止除零
+        max_area = 0.01  # m^2 (100 cm^2)
+        max_I = 0.0005  # m^4 (50000 cm^4)
+
+        # 尝试从库中动态获取（如果库已填充）
+        try:
+            # 这是一个简化的获取逻辑，实际需遍历库
+            pass
+        except:
+            pass
+
+        return {
+            "coord": max_dim,
+            "area": max_area,
+            "I": max_I,
+            "load": 10000.0,  # 10 kN 作为荷载归一化基准
+            "stress": 355.0,  # MPa, 屈服强度
+            "disp": W / 250.0,  # 容许挠度作为基准
+        }
+
+    def _build_adjacency(self):
+        """构建图的邻接关系：节点共享即相连"""
+        # 1. 建立 Node -> [BeamID, ...] 的映射
+        node_to_beams = defaultdict(list)
+        for beam_id, beam in self.nodes.items():
+            if beam.is_virtual:
+                continue  # 跳过虚拟梁（如果有）
+
+            node_to_beams[beam.start_node].append(beam_id)
+            node_to_beams[beam.end_node].append(beam_id)
+
+        # 2. 构建 Beam -> [Beam, ...] 的邻接表
+        for _, connected_beams in node_to_beams.items():
+            if len(connected_beams) > 1:
+                # 全连接：同一个节点上的所有梁互为邻居
+                for i in range(len(connected_beams)):
+                    for j in range(i + 1, len(connected_beams)):
+                        b1, b2 = connected_beams[i], connected_beams[j]
+                        self.adj[b1].append(b2)
+                        self.adj[b2].append(b1)
+
+    def to_pyg_data(self) -> Data:
         """
-        Populates the adjacency list.
-        An edge exists between two beam-nodes if they share a common structural node (Point).
+        转换为 PyTorch Geometric 的 Data 对象。
+        此函数应在每次 RL step 之后调用，以获取最新的状态（应力、位移）。
         """
-        if not self.model.points:
-            # No structural nodes, so no connections possible.
-            return
+        # 过滤掉虚拟梁，并确保 ID 排序一致以保证特征矩阵对应的物理意义不变
+        valid_beam_ids = sorted([b.id for b in self.nodes.values() if not b.is_virtual])
+        beam_id_to_idx = {bid: i for i, bid in enumerate(valid_beam_ids)}
 
-        # 1. Create a map from structural node ID to a list of beam IDs incident to it.
-        node_to_incident_beams: Dict[int, List[int]] = defaultdict(list)
-        for beam_id, beam_obj in self.model.beams.items():
-            if beam_obj.start_node in self.model.points:
-                node_to_incident_beams[beam_obj.start_node].append(beam_id)
-            if beam_obj.end_node in self.model.points:
-                node_to_incident_beams[beam_obj.end_node].append(beam_id)
-
-        # 2. Build the adjacency list for the beam graph.
-        # For each structural node, all beams incident to it are connected to each other.
-        for structural_node_id, incident_beams in node_to_incident_beams.items():
-            if len(incident_beams) > 1:
-                for i in range(len(incident_beams)):
-                    for j in range(i + 1, len(incident_beams)):
-                        beam1_id = incident_beams[i]
-                        beam2_id = incident_beams[j]
-                        # Add edges in both directions for an undirected graph
-                        if beam2_id not in self.adj[beam1_id]:
-                            self.adj[beam1_id].append(beam2_id)
-                        if beam1_id not in self.adj[beam2_id]:
-                            self.adj[beam2_id].append(beam1_id)
-
-    def get_node_attributes(self, beam_id: int) -> Optional[ModelBeam]:
-        """
-        Retrieves the attributes of a specific node (beam) in the graph.
-
-        Args:
-            beam_id: The ID of the beam (which is the node_id in this graph).
-
-        Returns:
-            The ModelBeam object, or None if the beam_id is not found.
-        """
-        return self.nodes.get(beam_id)
-
-    def get_neighbors(self, beam_id: int) -> List[int]:
-        """
-        Retrieves the neighbors of a specific beam-node in the graph.
-
-        Args:
-            beam_id: The ID of the beam-node.
-
-        Returns:
-            A list of beam_ids connected to the given beam_id.
-            Returns an empty list if the beam_id is not found or has no connections.
-        """
-        return self.adj.get(beam_id, [])
-
-    def get_all_nodes(self) -> List[ModelBeam]:
-        """Returns a list of all node (beam) objects in the graph."""
-        return list(self.nodes.values())
-
-    def number_of_nodes(self) -> int:
-        """Returns the total number of nodes (beams) in the graph."""
-        return len(self.nodes)
-
-    def number_of_edges(self) -> int:
-        """
-        Returns the total number of unique edges (connections between beams) in the graph.
-        Since the graph is undirected, each edge (b1, b2) is counted once.
-        """
-        count = 0
-        visited_edges = set()
-        for beam_id, neighbors in self.adj.items():
-            for neighbor_id in neighbors:
-                # To avoid double counting and self-loops if any were accidentally added
-                if tuple(sorted((beam_id, neighbor_id))) not in visited_edges:
-                    count += 1
-                    visited_edges.add(tuple(sorted((beam_id, neighbor_id))))
-        return count
-
-    def __str__(self) -> str:
-        return (
-            f"BeamAsNodeGraph with {self.number_of_nodes()} nodes (beams) and "
-            f"{self.number_of_edges()} edges (connections)."
-        )
-
-    def get_beam_id_from_pyg_idx(self, pyg_idx: int) -> int:
-        """
-        Retrieves the beam ID from a PyG index.
-        """
-        return self.pyg_idx_to_beam_id[pyg_idx]
-
-    def to_pyg_data(self, env_info: Dict) -> Data:
-        """
-        Converts the BeamAsNodeGraph to a PyTorch Geometric Data object.
-
-        Args:
-            env_info: A dictionary containing the environment information.
-
-        Node features (for each beam):
-            - Beam Type index (integer) (1 feature)
-            - Beam Section index (integer) (1 feature)
-            - Beam length (float) (1 feature)
-            - Normalized direction vector (dx, dy, dz) (3 features)
-            - Centroid coordinates (cx, cy, cz) (3 features)
-
-        Edge features (for each connection between two beams):
-            - Coordinates of the shared structural joint (x, y, z) (3 features)
-        """
-        if not self.nodes:  # self.nodes in BeamAsNodeGraph are the beams
+        num_nodes = len(valid_beam_ids)
+        if num_nodes == 0:
             return Data()
 
-        # 按梁类型分层排序：框架梁 -> 主梁 -> 次梁 -> 支撑梁
-        sorted_beam_ids = sorted(self.nodes.keys(), key=lambda bid: self.nodes[bid].beam_type.value)
+        # --- 1. 构建节点特征矩阵 X ---
+        # 维度: [num_beams, feature_dim]
+        node_features = []
 
-        # # 记录各类型梁的索引范围
-        # type_ranges = {}
-        # current_idx = 0
-        # for beam_type in [0, 1, 2, 3]:  # BeamType枚举值对应: 0-框架梁,1-主梁,2-次梁,3-支撑梁
-        #     type_ids = [bid for bid in sorted_beam_ids if self.nodes[bid].beam_type.value == beam_type]
-        #     if type_ids:
-        #         type_ranges[beam_type] = (current_idx, current_idx + len(type_ids) - 1)
-        #         current_idx += len(type_ids)
+        for bid in valid_beam_ids:
+            beam = self.nodes[bid]
 
-        beam_id_to_pyg_idx = {beam_id: i for i, beam_id in enumerate(sorted_beam_ids)}
-        self.pyg_idx_to_beam_id = {i: beam_id for beam_id, i in beam_id_to_pyg_idx.items()}
+            # A. 几何特征 (6 dims)
+            # 质心坐标 (3) + 方向向量 (3)
+            p_start = self.model.points[beam.start_node]
+            p_end = self.model.points[beam.end_node]
 
-        # 1. Node Features (x) - for each beam
-        node_features_list = []
+            center = (p_start.coordinates() + p_end.coordinates()) / 2.0
+            direction = p_end.coordinates() - p_start.coordinates()
+            length = np.linalg.norm(direction)
+            direction_norm = direction / (length + 1e-6)
 
-        for beam_id in sorted_beam_ids:
-            beam = self.nodes[beam_id]
-            start_node_obj = self.model.points[beam.start_node]
-            end_node_obj = self.model.points[beam.end_node]
+            feat_geom = list(center / self.norm_scale["coord"]) + list(direction_norm)
 
-            # Beam Type Index
-            beam_type_idx = beam.beam_type.value
+            # B. 拓扑/类型特征 (4 dims - One Hot)
+            # Frame, Main, Secondary, Brace
+            feat_type = [0, 0, 0, 0]
+            if beam.beam_type.value < 4:
+                feat_type[beam.beam_type.value] = 1
 
-            # Beam Section Index in SectionLibrary
-            beam_section_idx = self.model.sections[beam.section].idx
+            # C. 物理/设计变量特征 (3 dims)
+            # Area, Ix, Iy (这是 RL Agent 改变截面索引后直接影响的物理量)
+            sec = beam.section
+            feat_phys = [
+                sec.area / self.norm_scale["area"],
+                sec.Ix / self.norm_scale["I"],
+                sec.Iy / self.norm_scale["I"],
+            ]
 
-            # Beam Length
-            length = start_node_obj.distance_to(end_node_obj)
-
-            # Direction Vector (normalized)
-            direction_vec = end_node_obj.coordinates() - start_node_obj.coordinates()
-            norm = np.linalg.norm(direction_vec)
-            if norm > 1e-9:  # Avoid division by zero for zero-length beams (should not happen)
-                direction_vec_normalized = direction_vec / norm
+            # D. 响应特征 (4 dims) - RL 的关键观测值
+            # 假设 model 中已经有了分析结果，或者通过外部注入
+            # 这里需要你在 StructuralModel 或 Beam 类中维护一个 response 字段
+            # response 包含: max_stress_ratio, max_disp_ratio
+            # 如果还没有分析，默认为 0
+            if hasattr(beam, "response") and beam.response:
+                stress_r = beam.response.max_stress / self.norm_scale["stress"]
+                disp_r = beam.response.max_disp_abs / self.norm_scale["disp"]
+                # 违约指示 (Penalty signal)
+                stress_viol = max(0, stress_r - 1.0)
+                disp_viol = max(0, disp_r - 1.0)
+                feat_resp = [stress_r, disp_r, stress_viol, disp_viol]
             else:
-                direction_vec_normalized = np.array([0.0, 0.0, 0.0])
+                feat_resp = [0.0, 0.0, 0.0, 0.0]
 
-            # Centroid Coordinates
-            centroid = (start_node_obj.coordinates() + end_node_obj.coordinates()) / 2.0
+            # 合并所有特征
+            # Total dim = 6 + 4 + 3 + 4 = 17
+            node_features.append(feat_geom + feat_type + feat_phys + feat_resp)
 
-            # response
-            if beam.response is not None:
-                max_disp_abs = beam.response.max_disp_abs
-                max_stress = beam.response.max_stress
-            else:
-                max_disp_abs = 0
-                max_stress = 0
+        x = torch.tensor(node_features, dtype=torch.float)
 
-            # response violation
-            disp_violation = max(0, (max_disp_abs - 14.4) / 14.4)
-            stress_violation = max(0, (max_stress - 355) / 355)
-            response_violation = disp_violation + stress_violation
+        # --- 2. 构建边索引 Edge Index ---
+        # 维度: [2, num_edges]
+        edge_indices = []
+        edge_attrs = []  # 可选：边特征（例如连接节点的类型：刚接/铰接，或坐标）
 
-            # section property
-            section_property = self.model.sections[beam.section]
-            Ix = section_property.Ix / self.model.section_library.max_Ix
-            Iy = section_property.Iy / self.model.section_library.max_Iy
-            area = section_property.area / self.model.section_library.max_area
+        for bid_u in valid_beam_ids:
+            if bid_u not in self.adj:
+                continue
 
-            features = (
-                [beam_type_idx, beam_section_idx, length]
-                + list(direction_vec_normalized)
-                + list(centroid)
-                + [Ix, Iy, area]
-                + [max_disp_abs, max_stress, disp_violation, stress_violation, response_violation]
-                + beam.start_node_load.tolist()
-                + beam.end_node_load.tolist()
-                + [env_info["pressure"] / 38]
-            )
-            node_features_list.append(features)
+            u_idx = beam_id_to_idx[bid_u]
 
-        pyg_x = torch.tensor(node_features_list, dtype=torch.float)
+            for bid_v in self.adj[bid_u]:
+                if bid_v not in beam_id_to_idx:
+                    continue  # 过滤掉可能的虚拟梁邻居
+                v_idx = beam_id_to_idx[bid_v]
 
-        # 2. Edge Index (edge_index) and Edge Attributes (edge_attr)
-        edge_list = []
-        edge_attr_list = []
+                # 添加有向边 (PyG 默认为有向，无向图需添加双向)
+                edge_indices.append([u_idx, v_idx])
 
-        # Re-iterate through shared structural nodes to find connections for edge attributes
-        node_to_incident_beams: Dict[int, List[int]] = defaultdict(list)
-        for beam_id_iter, beam_obj_iter in self.model.beams.items():
-            if beam_obj_iter.start_node in self.model.points:
-                node_to_incident_beams[beam_obj_iter.start_node].append(beam_id_iter)
-            if beam_obj_iter.end_node in self.model.points:
-                node_to_incident_beams[beam_obj_iter.end_node].append(beam_id_iter)
+                # 边特征：共享节点的坐标 (归一化)
+                # 找到共享节点
+                beam_u = self.nodes[bid_u]
+                beam_v = self.nodes[bid_v]
+                shared_node_id = None
+                if beam_u.start_node in (beam_v.start_node, beam_v.end_node):
+                    shared_node_id = beam_u.start_node
+                else:
+                    shared_node_id = beam_u.end_node
 
-        # 生成边时记录连接类型
-        edge_types = []
-        for structural_node_id, incident_beams in node_to_incident_beams.items():
-            if len(incident_beams) > 1:
-                shared_point_coords = list(self.model.points[structural_node_id].coordinates())
-                for i in range(len(incident_beams)):
-                    for j in range(i + 1, len(incident_beams)):
-                        beam1_id = incident_beams[i]
-                        beam2_id = incident_beams[j]
+                p_shared = self.model.points[shared_node_id].coordinates()
+                edge_attrs.append(list(p_shared / self.norm_scale["coord"]))
 
-                        # 记录连接类型
-                        type1 = self.nodes[beam1_id].beam_type.value
-                        type2 = self.nodes[beam2_id].beam_type.value
-                        edge_types.extend([(type1, type2), (type2, type1)])
+        edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+        edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
 
-                        # Get PyG indices for these beams
-                        u_pyg = beam_id_to_pyg_idx[beam1_id]
-                        v_pyg = beam_id_to_pyg_idx[beam2_id]
-
-                        # Add edges in both directions for PyG
-                        # Edge from beam1 to beam2
-                        edge_list.append([u_pyg, v_pyg])
-                        edge_attr_list.append(shared_point_coords)
-
-                        # Edge from beam2 to beam1
-                        edge_list.append([v_pyg, u_pyg])
-                        edge_attr_list.append(shared_point_coords)  # Edge attribute is symmetric
-
-        if not edge_list:
-            pyg_edge_index = torch.empty((2, 0), dtype=torch.long)
-            pyg_edge_attr = torch.empty((0, 3), dtype=torch.float)  # 3 edge features (shared point coords)
-        else:
-            pyg_edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
-            pyg_edge_attr = torch.tensor(edge_attr_list, dtype=torch.float)
-
-        global_features = [env_info["frame_length"], env_info["pressure"] / 38]
-
-        data = Data(x=pyg_x, edge_index=pyg_edge_index, edge_attr=pyg_edge_attr)
-        data.num_nodes = pyg_x.size(0)
-        # data.node_type_ranges = type_ranges  # 各类型梁的索引范围
-        data.edge_types = torch.tensor(edge_types, dtype=torch.long)  # 添加连接类型
-        data.global_features = torch.tensor([global_features], dtype=torch.float)
-
-        return data
+        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
 
 if __name__ == "__main__":
@@ -511,27 +202,11 @@ if __name__ == "__main__":
     config = load_config(config_path)
     model = create_structural_model(config)
 
-    # # Test StructuralGraph (joints as nodes, beams as edges)
-    # print("\n--- Testing StructuralGraph (joints as nodes) ---")
-    # graph_type1 = BeamAsEdgeGraph(model)
-    # print(f"Created: {graph_type1}")
-    # pyg_data_type1 = graph_type1.to_pyg_data()
-    # print("PyG Data (Type 1):")
-    # print(pyg_data_type1)
-    # if pyg_data_type1:
-    #     print(f"  Node features shape: {pyg_data_type1.x.shape if pyg_data_type1.x is not None else 'N/A'}")
-    #     print(
-    #         f"  Edge index shape: {pyg_data_type1.edge_index.shape if pyg_data_type1.edge_index is not None else 'N/A'}"
-    #     )
-    #     print(
-    #         f"  Edge features shape: {pyg_data_type1.edge_attr.shape if pyg_data_type1.edge_attr is not None else 'N/A'}"
-    #     )
-
     # Test BeamAsNodeGraph (beams as nodes, connections as edges)
     print("\n--- Testing BeamAsNodeGraph (beams as nodes) ---")
     graph_type2 = BeamAsNodeGraph(model)
     print(f"Created: {graph_type2}")
-    pyg_data_type2 = graph_type2.to_pyg_data({"pressure": 30, "frame_length": 10})
+    pyg_data_type2 = graph_type2.to_pyg_data()
     print("PyG Data (Type 2):")
     print(pyg_data_type2)
     if pyg_data_type2:
