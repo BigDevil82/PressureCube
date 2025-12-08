@@ -63,6 +63,68 @@ class ResultProcessor:
             failure_mode=mode,
         )
 
+    def _check_single_beam_stress(self, bid, forces):
+
+        beam = self.model.beams[bid]
+        if beam.is_virtual:
+            return
+
+        # 获取截面属性 (SI单位 -> MM单位)
+        sec = beam.section
+        A = sec.area * M2_TO_MM2
+        # 简化计算模量 W = I / (H/2)
+        # 注意：OpenSees Iz 是强轴(绕z), Iy 是弱轴(绕y) - 需根据 SectionLibrary 具体定义校对
+        # 通常 H型钢库中: Ix是强轴, Iy是弱轴。
+        # 在 ops_analysis 中我们映射了: OPS_Iz = Lib_Ix (强), OPS_Iy = Lib_Iy (弱)
+
+        # 计算截面模量 W (mm3)
+        # 假设 section 类有 H 和 B 属性 (如果是 Box/H/Channel)
+        # 如果是通用 SectionProperties，可能需要估算或增加字段
+        # 这里做保守估计：假设它是对称截面
+        if hasattr(sec, "H") and sec.H > 0:
+            Wz = (sec.Ix * M4_TO_MM4) / (sec.H * M_TO_MM / 2)  # 强轴模量
+        else:
+            Wz = (sec.Ix * M4_TO_MM4) / math.sqrt(sec.area * M2_TO_MM2)  # 粗略兜底
+
+        if hasattr(sec, "B") and sec.B > 0:
+            Wy = (sec.Iy * M4_TO_MM4) / (sec.B * M_TO_MM / 2)  # 弱轴模量
+        else:
+            Wy = (sec.Iy * M4_TO_MM4) / math.sqrt(sec.area * M2_TO_MM2)
+
+        # --- 提取内力 (OpenSees 局部坐标) ---
+        # 0:Fx(Axial), 1:Fy(ShearY), 2:Fz(ShearZ), 3:T, 4:My(Weak), 5:Mz(Strong)
+        # 我们检查 I端(0-5) 和 J端(6-11)
+
+        max_ratio = 0.0
+        max_stress = 0.0
+        crit_id = -1
+        mode = "OK"
+
+        for i in [0, 6]:  # 两个端点
+            N = forces[i + 0]  # 轴力 (+拉 -压)
+            Vy = forces[i + 1]  # 剪力Y
+            Vz = forces[i + 2]  # 剪力Z
+            My = forces[i + 4]  # 弯矩Y (绕弱轴)
+            Mz = forces[i + 5]  # 弯矩Z (绕强轴)
+
+            # 1. 正应力校核: sigma = N/A + Mx/Wx + My/Wy
+            sigma = abs(N / A) + abs(Mz / Wz) + abs(My / Wy)
+            ratio_sigma = sigma / DESIGN_STRENGTH_F
+
+            # 2. 剪应力校核 (简化: tau = V / A_web)
+            # 假设剪力主要由腹板承担，粗略用 A/2 或 A_web
+            tau = math.sqrt(Vy**2 + Vz**2) / (A * 0.5)  # 保守估计
+            ratio_tau = tau / DESIGN_SHEAR_FV
+
+            curr_max = max(ratio_sigma, ratio_tau)
+            curr_max_stress = max(sigma, tau)
+            if curr_max > max_ratio:
+                max_ratio = curr_max
+                max_stress = curr_max_stress
+                crit_id = bid
+                mode = "Bending" if ratio_sigma > ratio_tau else "Shear"
+        return max_ratio, max_stress, crit_id, mode
+
     def _check_beams(self, res: AnalysisResults) -> Tuple[float, int, str]:
         """校核所有梁的强度 (正应力 + 剪应力)"""
         max_ratio = 0.0
@@ -73,59 +135,15 @@ class ResultProcessor:
         for bid, forces in res.beam_forces.items():
             if bid not in self.model.beams:
                 continue
-            beam = self.model.beams[bid]
-            if beam.is_virtual:
+            res = self._check_single_beam_stress(bid, forces)
+            if res is None:
                 continue
-
-            # 获取截面属性 (SI单位 -> MM单位)
-            sec = beam.section
-            A = sec.area * M2_TO_MM2
-            # 简化计算模量 W = I / (H/2)
-            # 注意：OpenSees Iz 是强轴(绕z), Iy 是弱轴(绕y) - 需根据 SectionLibrary 具体定义校对
-            # 通常 H型钢库中: Ix是强轴, Iy是弱轴。
-            # 在 ops_analysis 中我们映射了: OPS_Iz = Lib_Ix (强), OPS_Iy = Lib_Iy (弱)
-
-            # 计算截面模量 W (mm3)
-            # 假设 section 类有 H 和 B 属性 (如果是 Box/H/Channel)
-            # 如果是通用 SectionProperties，可能需要估算或增加字段
-            # 这里做保守估计：假设它是对称截面
-            if hasattr(sec, "H") and sec.H > 0:
-                Wz = (sec.Ix * M4_TO_MM4) / (sec.H * M_TO_MM / 2)  # 强轴模量
-            else:
-                Wz = (sec.Ix * M4_TO_MM4) / math.sqrt(sec.area * M2_TO_MM2)  # 粗略兜底
-
-            if hasattr(sec, "B") and sec.B > 0:
-                Wy = (sec.Iy * M4_TO_MM4) / (sec.B * M_TO_MM / 2)  # 弱轴模量
-            else:
-                Wy = (sec.Iy * M4_TO_MM4) / math.sqrt(sec.area * M2_TO_MM2)
-
-            # --- 提取内力 (OpenSees 局部坐标) ---
-            # 0:Fx(Axial), 1:Fy(ShearY), 2:Fz(ShearZ), 3:T, 4:My(Weak), 5:Mz(Strong)
-            # 我们检查 I端(0-5) 和 J端(6-11)
-
-            for i in [0, 6]:  # 两个端点
-                N = forces[i + 0]  # 轴力 (+拉 -压)
-                Vy = forces[i + 1]  # 剪力Y
-                Vz = forces[i + 2]  # 剪力Z
-                My = forces[i + 4]  # 弯矩Y (绕弱轴)
-                Mz = forces[i + 5]  # 弯矩Z (绕强轴)
-
-                # 1. 正应力校核: sigma = N/A + Mx/Wx + My/Wy
-                sigma = abs(N / A) + abs(Mz / Wz) + abs(My / Wy)
-                ratio_sigma = sigma / DESIGN_STRENGTH_F
-
-                # 2. 剪应力校核 (简化: tau = V / A_web)
-                # 假设剪力主要由腹板承担，粗略用 A/2 或 A_web
-                tau = math.sqrt(Vy**2 + Vz**2) / (A * 0.5)  # 保守估计
-                ratio_tau = tau / DESIGN_SHEAR_FV
-
-                curr_max = max(ratio_sigma, ratio_tau)
-                curr_max_stress = max(sigma, tau)
-                if curr_max > max_ratio:
-                    max_ratio = curr_max
-                    max_stress = curr_max_stress
-                    crit_id = bid
-                    mode = "Bending" if ratio_sigma > ratio_tau else "Shear"
+            b_ratio, b_stress, b_id, b_mode = res
+            if b_ratio > max_ratio:
+                max_ratio = b_ratio
+                max_stress = b_stress
+                crit_id = b_id
+                mode = b_mode
 
         return max_ratio, max_stress, crit_id, mode
 

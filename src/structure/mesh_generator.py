@@ -180,13 +180,13 @@ class MeshGenerator:
             # 添加细分后的梁单元
             # 继承原始梁的属性
             self.meshed_model.beam_manager.add_or_update_beam(
-                prev_id, curr_id, beam.beam_type, beam.section, beam.is_virtual, beam.on_face
+                prev_id, curr_id, beam.beam_type, beam.section, beam.is_virtual, beam.on_face, beam.id
             )
             prev_id = curr_id
 
         # 连接最后一段
         self.meshed_model.beam_manager.add_or_update_beam(
-            prev_id, new_end_id, beam.beam_type, beam.section, beam.is_virtual, beam.on_face
+            prev_id, new_end_id, beam.beam_type, beam.section, beam.is_virtual, beam.on_face, beam.id
         )
         node_sequence.append(new_end_id)
 

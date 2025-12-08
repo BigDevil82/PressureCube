@@ -64,6 +64,15 @@ class Point:
 
 
 @dataclass
+class BeamResponse:
+    """存储单根梁的聚合分析结果"""
+
+    max_stress_ratio: float = 0.0  # 应力比 (Actual / Limit)
+    max_disp_ratio: float = 0.0  # 挠度比 (Actual / Limit)
+    is_violated: bool = False  # 是否超限
+
+
+@dataclass
 class Beam:
     id: int
     start_node: int
@@ -72,6 +81,8 @@ class Beam:
     section: SectionProperties
     is_virtual: bool  # 为了后续网格划分方便，参数化建模时把不存在的梁也生成，但是FEA建模时不生成
     on_face: str  # 记录属于哪个面，方便调试
+    parent_id: int = None  # 用于记录该梁是由哪个原始梁细分而来的
+    response: BeamResponse = None  # 存储分析结果
 
     def direction(self, nodes: Dict[int, Point]) -> np.ndarray:
         """计算梁的方向向量"""
@@ -131,7 +142,14 @@ class BeamManager:
         self.priority = {BeamType.FRAME: 0, BeamType.MAIN: 1, BeamType.SECONDARY: 2, BeamType.BRACE: 3}
 
     def add_or_update_beam(
-        self, n1: int, n2: int, b_type: BeamType, section_prop: SectionProperties, is_virtual: bool, face: str
+        self,
+        n1: int,
+        n2: int,
+        b_type: BeamType,
+        section_prop: SectionProperties,
+        is_virtual: bool,
+        face: str,
+        parent_id=None,
     ):
         if n1 == n2:
             return  # 忽略零长梁
@@ -151,7 +169,7 @@ class BeamManager:
 
         # 创建新梁
         beam_id = self.counter
-        self.beams[beam_id] = Beam(beam_id, n1, n2, b_type, section_prop, is_virtual, face)
+        self.beams[beam_id] = Beam(beam_id, n1, n2, b_type, section_prop, is_virtual, face, parent_id)
         self._beam_map[key] = beam_id
         self.counter += 1
         return beam_id
@@ -455,6 +473,32 @@ class StructuralModel:
 
         # 3. 从库中获取
         return self.section_lib.get_section(sec_type, idx)
+
+    def calculate_mass(self):
+        """计算结构总质量，单位 kg"""
+        total_mass = 0.0
+
+        # 计算梁质量
+        for beam in self.beams.values():
+            if beam.is_virtual:
+                continue  # 虚拟梁不计质量
+            start_pt = self.points[beam.start_node]
+            end_pt = self.points[beam.end_node]
+            length = start_pt.distance_to(end_pt)
+            density = beam.section.density
+            area = beam.section.area
+            mass = density * area * length
+            total_mass += mass
+
+        # 计算板质量
+        for plate in self.plates.values():
+            density = 7850.0  # 钢板密度 (kg/m^3)，假设为常数
+            thickness = self.params.plate_thickness
+            area = plate.area
+            mass = density * area * thickness
+            total_mass += mass
+
+        return total_mass
 
 
 # --- 使用示例 ---

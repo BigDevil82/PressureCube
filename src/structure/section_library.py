@@ -56,6 +56,11 @@ class SectionLibrary:
         self._sections: Dict[SectionType, List[SectionProperties]] = {t: [] for t in SectionType}
         self._load_from_json(file_path)
 
+    @property
+    def section_counts(self) -> Dict[SectionType, int]:
+        """返回每种截面的数量"""
+        return {s_type: len(secs) for s_type, secs in self._sections.items()}
+
     def get_section(self, s_type: SectionType, index: int) -> SectionProperties:
         """安全获取截面，越界则返回默认或抛出异常"""
         return self._sections[s_type][index]
