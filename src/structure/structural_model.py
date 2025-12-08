@@ -512,8 +512,8 @@ if __name__ == "__main__":
         width=3.7,  # 3米宽
         height=3.3,  # 3米高
         main_beam_spacing=1.05,  # 主梁每1.5米一道
-        num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
-        num_secondary_height=3,  # 高度方向分3段
+        num_secondary_width=1,  # 宽度方向分3段 (2条中间次梁)
+        num_secondary_height=1,  # 高度方向分3段
         add_support_beam=True,  # 添加支撑梁
     )
 

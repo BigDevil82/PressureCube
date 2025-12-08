@@ -29,7 +29,7 @@ class MeshGenerator:
         self._beam_new_nodes: Dict[int, List[int]] = {}
 
     def generate(self):
-        print("开始网格划分流程...")
+        # print("开始网格划分流程...")
 
         # 1. 初始划分计算
         self._init_beam_divisions()
@@ -41,10 +41,10 @@ class MeshGenerator:
         # 3. 生成几何体
         self._generate_geometry()
 
-        print(
-            f"网格划分完成. 节点数: {len(self.meshed_model.node_manager.points)}, "
-            f"板单元数: {len(self.meshed_model.plates)}"
-        )
+        # print(
+        #     f"网格划分完成. 节点数: {len(self.meshed_model.node_manager.points)}, "
+        #     f"板单元数: {len(self.meshed_model.plates)}"
+        # )
         return self.meshed_model
 
     def _init_beam_divisions(self):
@@ -120,7 +120,7 @@ class MeshGenerator:
                     self._update_edge_div(edge_beams[3], max_v)
 
             if not changed:
-                print(f"约束传播在第 {it+1} 次迭代收敛。")
+                # print(f"约束传播在第 {it+1} 次迭代收敛。")
                 break
         else:
             print("警告：约束传播未完全收敛，网格可能不完全对齐。")

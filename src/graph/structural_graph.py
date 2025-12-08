@@ -64,7 +64,7 @@ class BeamAsNodeGraph:
             "I": max_I,
             "load": 10000.0,  # 10 kN 作为荷载归一化基准
             "stress": 355.0,  # MPa, 屈服强度
-            "disp": W / 250.0,  # 容许挠度作为基准
+            "disp": W * 1000 / 250.0,  # 容许挠度作为基准
         }
 
     def _build_adjacency(self):
@@ -140,9 +140,9 @@ class BeamAsNodeGraph:
             # 这里需要你在 StructuralModel 或 Beam 类中维护一个 response 字段
             # response 包含: max_stress_ratio, max_disp_ratio
             # 如果还没有分析，默认为 0
-            if hasattr(beam, "response") and beam.response:
-                stress_r = beam.response.max_stress / self.norm_scale["stress"]
-                disp_r = beam.response.max_disp_abs / self.norm_scale["disp"]
+            if beam.response:
+                stress_r = beam.response.max_stress_ratio
+                disp_r = beam.response.max_disp_ratio
                 # 违约指示 (Penalty signal)
                 stress_viol = max(0, stress_r - 1.0)
                 disp_viol = max(0, disp_r - 1.0)

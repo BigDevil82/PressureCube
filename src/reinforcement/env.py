@@ -7,14 +7,14 @@ from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver, Resu
 from src.analysis.post_processor import ResultProcessor
 from src.graph.structural_graph import BeamAsNodeGraph  # 假设这是上一轮重构后的 Beam-as-Node Graph
 from src.structure.mesh_generator import MeshGenerator
-from src.structure.section_library import SectionLibrary
+from src.structure.section_library import SectionLibrary, SectionType
 
 # 引入之前的模块
 from src.structure.structural_model import BeamResponse  # 引入上面定义的类
 from src.structure.structural_model import BeamType, StructuralModel, StructuralParameters
 
 
-class StructuralOptimizationEnv(gym.Env):
+class StructuralEnv(gym.Env):
     """
     三维钢框架结构优化环境
 
@@ -112,7 +112,7 @@ class StructuralOptimizationEnv(gym.Env):
             return min_v + (val + 1.0) / 2.0 * (max_v - min_v)
 
         # 1. 几何参数
-        self.current_params.main_beam_spacing = map_val(act[0], 0.8, 3.0)  # 0.8m ~ 3.0m
+        self.current_params.main_beam_spacing = map_val(act[0], 0.75, 2.0)  # 0.75m ~ 2.0m
         self.current_params.num_secondary_width = int(map_val(act[1], 1.0, 6.0))
         self.current_params.num_secondary_height = int(map_val(act[2], 1.0, 6.0))
         self.current_params.add_support_beam = act[3] > 0
@@ -123,10 +123,10 @@ class StructuralOptimizationEnv(gym.Env):
             count = self.section_lib.section_counts[type_str]
             return int(map_val(val, 0, count - 0.99))
 
-        self.current_params.frame_section_index = map_idx(act[4], "方钢")
-        self.current_params.main_beam_section_index = map_idx(act[5], "H型钢-主梁")
-        self.current_params.secondary_beam_section_index = map_idx(act[6], "H型钢-次梁")
-        self.current_params.brace_section_index = map_idx(act[7], "C型钢")
+        self.current_params.frame_section_index = map_idx(act[4], SectionType.BOX)
+        self.current_params.main_beam_section_index = map_idx(act[5], SectionType.H_MAIN)
+        self.current_params.secondary_beam_section_index = map_idx(act[6], SectionType.H_SEC)
+        self.current_params.brace_section_index = map_idx(act[7], SectionType.CHANNEL)
 
     def _run_simulation(self):
         """核心流程：建模 -> 网格 -> 分析 -> 结果映射 -> 图生成"""
@@ -197,21 +197,6 @@ class StructuralOptimizationEnv(gym.Env):
         # 1. 实例化后处理器用于计算 Ratio (不进行全盘 Check，只利用其计算逻辑)
         processor = ResultProcessor(self.current_fem_model)
 
-        # 我们需要 Beam ID -> FEM Element IDs 的映射
-        # MeshGenerator 中的 _beam_new_nodes 记录了节点序列，
-        # 我们需要推导出生成的 Beam ID。
-        # 最可靠的方法是 MeshGenerator 应该直接存储 Beam Mapping。
-        # 假设我们修改了 MeshGenerator 增加了 self.beam_mapping = {old_id: [new_id1, new_id2...]}
-        # 如果没有，我们可以通过 beam_manager 遍历来近似，但这里为了代码完整性，
-        # 我们假设 MeshGenerator 已经有了这个功能 (见下文修改建议)。
-
-        # 临时替代方案：遍历所有细分梁，反向查找其 parent (如果 Beam 类里存了 parent_id 最好)
-        # 或者利用 MeshGenerator 的 _beam_divisions 和顺序推断 (不可靠)。
-
-        # 推荐修改：在 StructuralModel.Beam 中增加 parent_id 字段 (默认为None)
-        # 当 MeshGenerator 生成新梁时，设置 new_beam.parent_id = old_beam.id
-
-        # 假设 meshed_model 中的 beam 都有 parent_id
         # 初始化聚合器
         agg_stress = {}  # old_id -> max_ratio
         agg_disp = {}  # old_id -> max_ratio
@@ -238,7 +223,7 @@ class StructuralOptimizationEnv(gym.Env):
                 disp_val = max(np.linalg.norm(d1[:3]), np.linalg.norm(d2[:3]))
 
                 # 归一化位移 (L/400) - 这里 L 取主梁间距作为参考
-                limit = self.current_params.main_beam_spacing * 1000 / 400.0
+                limit = self.current_params.width * 1000 / 250.0
                 agg_disp[parent_id] = max(agg_disp.get(parent_id, 0), disp_val / limit)
 
         # 将聚合结果写回 Design Model
