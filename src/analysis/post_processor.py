@@ -18,8 +18,10 @@ DESIGN_SHEAR_FV = 175.0  # MPa (N/mm2)
 class DesignCheckResult:
     max_stress: float  # 最大应力值 (N/mm2)
     max_stress_ratio: float  # 最大应力比 (calculated / limit)
+    max_stress_pos: Tuple[int, str]  # (元素ID, "Beam" or "Plate")
     max_deflection: float  # 最大挠度值 (mm)
     max_deflection_ratio: float  # 最大挠度比 (calculated / limit)
+    max_deflection_pos: int  # 节点ID
     critical_beam_id: int  # 最危险梁ID
     critical_plate_id: int  # 最危险板ID
     failure_mode: str  # "Bending", "Shear", "PlateMises", "Deflection"
@@ -41,7 +43,7 @@ class ResultProcessor:
         plate_max_ratio, plate_max_stress, crit_plate = self._check_plates(results)
 
         # 3. 挠度校核
-        disp_max_ratio, max_deflection = self._check_deflection(results)
+        disp_max_ratio, max_deflection, max_deflection_pos = self._check_deflection(results)
 
         # 汇总最不利情况
         max_stress_ratio = max(beam_max_ratio, plate_max_ratio)
@@ -49,15 +51,19 @@ class ResultProcessor:
 
         mode = beam_mode
         crit_elem = crit_beam
+        max_stress_pos = ("Beam", crit_beam)
         if plate_max_ratio > beam_max_ratio:
             mode = "PlateMises"
             crit_elem = crit_plate
+            max_stress_pos = ("Plate", crit_plate)
 
         return DesignCheckResult(
-            max_stress_ratio=max_stress_ratio,
             max_stress=max_stress,
-            max_deflection_ratio=disp_max_ratio,
+            max_stress_ratio=max_stress_ratio,
+            max_stress_pos=max_stress_pos,
             max_deflection=max_deflection,
+            max_deflection_ratio=disp_max_ratio,
+            max_deflection_pos=max_deflection_pos,
             critical_beam_id=crit_elem if mode != "PlateMises" else -1,
             critical_plate_id=crit_elem if mode == "PlateMises" else -1,
             failure_mode=mode,
@@ -201,22 +207,24 @@ class ResultProcessor:
 
         return max_ratio, max_stress, crit_id
 
-    def _check_deflection(self, res: AnalysisResults) -> float:
+    def _check_deflection(self, res: AnalysisResults) -> Tuple[float, float, int]:
         """校核最大挠度比 (Disp / L)"""
         # 这里做一个简化：计算所有节点的最大位移，除以结构最短跨度或特征长度
         # 严格来说应该按构件计算 (Mid-span deflection relative to ends)
 
         max_disp = 0.0
-        for d in res.displacements.values():
+        max_disp_node = -1
+        for node_id, d in res.displacements.items():
             disp_norm = np.linalg.norm(d[:3])  # XYZ displacement
             if disp_norm > max_disp:
                 max_disp = disp_norm
+                max_disp_node = node_id
 
         L_ref_mm = self.model.params.width * M_TO_MM
 
         # 规范限值: L/400
         limit = L_ref_mm / 250.0
-        return max_disp / limit, max_disp
+        return max_disp / limit, max_disp, max_disp_node
 
 
 def run_full_design_check(model: StructuralModel, internal_pressure_pa: float = 30000):
