@@ -96,7 +96,7 @@ class PPOAgent:
                 loss = (
                     -torch.min(surr1, surr2)
                     + 0.5 * self.loss_fn(state_values, discounted_rewards)
-                    - 0.01 * dist_entropy
+                    - 0.03 * dist_entropy
                 )
 
                 # 反向传播
