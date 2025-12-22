@@ -70,8 +70,8 @@ class StructuralEnv(gym.Env):
         )
 
         # 执行完整的建模-分析-构图流程
-        obs, _ = self._run_simulation()
-        return obs, {}
+        obs, info = self._run_simulation()
+        return obs, info
 
     def step(self, action):
         # 1. Action -> Parameters
@@ -236,28 +236,58 @@ class StructuralEnv(gym.Env):
             )
 
     def _calculate_reward(self, info):
-        """
-        奖励函数设计
-        R = Weight_Reward + Penalty
-        """
-        # 1. 质量奖励 (归一化)
-        # 假设基准质量 (全部最重截面) 约为 5000kg，最小约为 1000kg
         mass = info["mass"]
-        ref_mass = 5000.0
-        # 越轻越好，范围 [0, 1] 左右
-        r_mass = (ref_mass - mass) / ref_mass
-
-        # 2. 约束惩罚
-        # 使用指数惩罚，稍微超限惩罚较小，严重超限惩罚巨大
-        penalty = 0.0
-
         s_ratio = info["max_stress_ratio"]
         d_ratio = info["max_disp_ratio"]
 
+        # 1. 定义更合理的参考质量 (根据你的曲线，大约30吨是一个合理的上限)
+        # 这里的 ref_mass 应该是你希望优化的目标上限，或者归一化因子
+        MAX_MASS_EXPECTED = 40000.0
+
+        # 2. 约束违背判断
+        violation = 0.0
+        is_unsafe = False
+
+        # 使用线性+二次惩罚，但在数值上要给够压力
         if s_ratio > 1.0:
-            penalty += 10.0 * (s_ratio - 1.0) ** 2 + 2.0
+            violation += s_ratio - 1.0  # 线性部分
+            is_unsafe = True
 
         if d_ratio > 1.0:
-            penalty += 10.0 * (d_ratio - 1.0) ** 2 + 2.0
+            violation += d_ratio - 1.0
+            is_unsafe = True
 
-        return r_mass - penalty
+        # 3. 分段奖励函数
+        if is_unsafe:
+            # 阶段一：如果不安全，唯一的任务就是降低违约比
+            # 奖励范围：负值。 违约越大，惩罚越重。
+            # 系数设大一点 (例如 10)，确保梯度足够大
+            # 加上一个固定的 penalty offset (-5)，防止智能体在临界点反复横跳
+            reward = -10.0 * violation - 5.0
+        else:
+            # 阶段二：如果安全了，任务是最小化质量
+            # 奖励范围：(0, 1]
+            # 质量越小，奖励越高
+            reward = (MAX_MASS_EXPECTED - mass) / MAX_MASS_EXPECTED * 10.0  # 放大奖励以便于学习
+            # 加上一个正的 bonus，鼓励智能体保持在安全区
+            reward += 2.0
+
+        return reward
+
+    def log_state(self):
+        p = self.current_params
+        print(f"{'='*20} Current Design Parameters {'='*20}")
+        print(
+            f"{p.main_beam_spacing=:.3f} m, "
+            f"{p.num_secondary_width=}, {p.num_secondary_height=}, "
+            f"{p.add_support_beam=}, "
+            f"{p.frame_section_index=}, {p.main_beam_section_index=}, "
+            f"{p.secondary_beam_section_index=}, {p.brace_section_index=}"
+        )
+
+
+if __name__ == "__main__":
+    # 简单测试环境
+    env = StructuralEnv(config={})
+    obs, info = env.reset()
+    print("Info after reset:\n", info)
