@@ -1,9 +1,11 @@
 import os
 
+import numpy as np
 import torch
 
 from src.reinforcement.env import StructuralEnv
 from src.reinforcement.ppo_agent import PPOAgent
+from src.utils.visualize import TrainingVisualizer
 
 
 def train():
@@ -33,6 +35,7 @@ def train():
 
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
+    visualizer = TrainingVisualizer(log_dir)
 
     time_step = 0
 
@@ -40,6 +43,10 @@ def train():
     for i_episode in range(1, MAX_EPISODES + 1):
         state, _ = env.reset()
         current_ep_reward = 0
+        # 用于统计本回合的物理指标
+        ep_masses = []
+        ep_stress_ratios = []
+        ep_disp_ratios = []
 
         for t in range(1, MAX_TIMESTEPS + 1):
             time_step += 1
@@ -56,6 +63,13 @@ def train():
             next_state, reward, terminated, truncated, info = env.step(action_np)
             done = terminated or truncated
 
+            # --- 收集物理数据 ---
+            # info 字典是在 env.step() 中返回的
+            if "mass" in info:
+                ep_masses.append(info["mass"])
+                ep_stress_ratios.append(info["max_stress_ratio"])
+                ep_disp_ratios.append(info["max_disp_ratio"])
+
             # 3. 存储数据
             # 注意：存入 buffer 的 state 最好转回 CPU 以节省显存，或者保持原样取决于内存
             agent.put_data((state.cpu(), action.cpu(), action_log_prob.cpu(), reward, done))
@@ -63,13 +77,8 @@ def train():
             state = next_state
             current_ep_reward += reward
 
-            # 4. 更新网络
-            if time_step % UPDATE_TIMESTEP == 0:
-                print(f"--- Updating PPO Agent at step {time_step} ---")
-                agent.update()
-
             # 打印单步信息
-            if t % 5 == 0:
+            if t % 5 == 0 and "mass" in info:
                 print(
                     f"Step {t}: Reward={reward:.4f}, "
                     f"Mass={info['mass']:.0f}, "
@@ -77,8 +86,32 @@ def train():
                     f"DispR={info['max_disp_ratio']:.2f}"
                 )
 
+            # 4. 更新网络
+            if time_step % UPDATE_TIMESTEP == 0:
+                print(f"--- Updating PPO Agent at step {time_step} ---")
+                agent.update()
+
             if done:
                 break
+
+        if ep_masses:
+            # 这里我们取本回合的平均值作为记录（也可以取最后一步的值）
+            avg_mass = np.mean(ep_masses)
+            # 取本回合中出现过的最大风险值（保守估计）
+            max_stress = np.max(ep_stress_ratios)
+            max_disp = np.max(ep_disp_ratios)
+
+            # 记录并绘图
+            visualizer.log_episode(
+                episode=i_episode,
+                reward=current_ep_reward,
+                mass=avg_mass,
+                stress_ratio=max_stress,
+                disp_ratio=max_disp,
+            )
+
+            # 保存图像 (覆盖上一张，保持最新)
+            visualizer.save_plot("training_curves.png")
 
         print(f"Episode {i_episode} finished. Total Reward: {current_ep_reward:.2f}")
 
