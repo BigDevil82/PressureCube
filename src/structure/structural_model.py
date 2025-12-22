@@ -192,6 +192,12 @@ BEAM_TYPE_MAP = {
 
 
 class StructuralModel:
+    """
+    参数化结构模型类，用于生成节点、梁和板。
+    通过 StructuralParameters 定义参数，通过 SectionLibrary 获取截面属性。
+    长度单位：米 (m)。
+    """
+
     def __init__(self, params: StructuralParameters, section_lib: SectionLibrary):
         self.params = params
         self.section_lib = section_lib
@@ -499,6 +505,25 @@ class StructuralModel:
             total_mass += mass
 
         return total_mass
+
+    def get_beam_stats(self):
+        """
+        按照梁类型统计数量和总长度（m）
+        """
+        stats = {}
+        for b_type in BeamType:
+            stats[b_type] = {"count": 0, "total_length": 0.0}
+
+        for beam in self.beams.values():
+            b_type = beam.beam_type
+            start_pt = self.points[beam.start_node]
+            end_pt = self.points[beam.end_node]
+            length = start_pt.distance_to(end_pt)
+
+            stats[b_type]["count"] += 1
+            stats[b_type]["total_length"] += length
+
+        return stats
 
 
 # --- 使用示例 ---
