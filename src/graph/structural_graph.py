@@ -143,10 +143,17 @@ class BeamAsNodeGraph:
             if beam.response:
                 stress_r = beam.response.max_stress_ratio
                 disp_r = beam.response.max_disp_ratio
-                # 违约指示 (Penalty signal)
+
+                # [Fix] 对输入特征进行 Log 缩放或 Clip 截断，防止数值爆炸
+                # 建议使用 Clip，限制在 [0, 5] 范围内，因为大于 5 已经是极度危险，
+                # 对神经网络来说 5 和 20 都是“非常大”，没必要保留那么大的方差。
+                stress_r_clamped = min(stress_r, 5.0)
+                disp_r_clamped = min(disp_r, 5.0)
+
                 stress_viol = max(0, stress_r - 1.0)
                 disp_viol = max(0, disp_r - 1.0)
-                feat_resp = [stress_r, disp_r, stress_viol, disp_viol]
+
+                feat_resp = [stress_r_clamped, disp_r_clamped, stress_viol, disp_viol]
             else:
                 feat_resp = [0.0, 0.0, 0.0, 0.0]
 
