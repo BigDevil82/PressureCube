@@ -272,7 +272,7 @@ class StructuralModel:
             name="left",
             u_beam_logic="SECONDARY",
             v_beam_logic="FRAME_GRID",
-            virtual_beam=BeamType.BRACE,
+            # virtual_beam=BeamType.BRACE,
         )
 
         # Right (Y=L): Same as Left.
@@ -285,11 +285,150 @@ class StructuralModel:
             name="right",
             u_beam_logic="SECONDARY",
             v_beam_logic="FRAME_GRID",
-            virtual_beam=BeamType.BRACE,
+            # virtual_beam=BeamType.BRACE,
+        )
+        self._generate_extension()
+
+        ext_x_start = self.params.width * 0.5
+        ext_x_end = self.params.width
+
+        # 调用删除: 在 'left' 面上，删除 X 在 [start, end], Z 在 [0, H] 范围内的元素
+        self._remove_elements_in_face_area(
+            face_name="left",
+            u_range=(ext_x_start, ext_x_end),  # 对应 x
+            v_range=(0, self.params.height),  # 对应 z
+            axis_val=0,  # Y=0 面
+        )
+
+    def _generate_extension(self):
+        """
+        生成左侧凸出区域 (Extension Block)
+        逻辑：在 Y < 0 的区域生成一个盒子，通过 Y=0 面与主结构连接。
+        """
+        # 获取参数
+        L_ext = 1.1
+        W_ext = self.params.width * 0.5
+        H_ext = self.params.height  # 假设高度相同
+        Off_x = self.params.width * 0.5
+
+        # 1. 获取主结构在宽度方向(X轴)的完整网格线
+        # 主结构 Top/Bottom 面沿 U(X) 轴分布的是 "SECONDARY" 类型的梁逻辑 (即V方向梁)
+        full_width_lines = self._calculate_grid_lines(self.params.width, "SECONDARY")
+
+        # 2. 截取落在凸出部分范围内的网格线
+        # 凸出部分的 X 范围是 [Off_x, Off_x + W_ext]
+        aligned_u_lines = []
+
+        # 添加左边界 (强制 Frame)
+        # 即使主网格在这个位置没有梁，凸出部分作为实体也需要边界梁
+        # 使用 check_and_add 逻辑防止重复
+        def add_line(lines_list, pos, b_type):
+            # 检查是否已有近似的点
+            for p, _ in lines_list:
+                if math.isclose(p, pos, abs_tol=1e-4):
+                    return
+            lines_list.append((pos, b_type))
+
+        # 先把主结构中落在范围内的线加进来
+        for pos, b_type in full_width_lines:
+            if pos >= Off_x - 1e-4 and pos <= (Off_x + W_ext) + 1e-4:
+                # 转换为局部坐标 (相对于 Off_x)
+                local_pos = pos - Off_x
+                # 修正边界类型：如果恰好是凸出部分的边缘，强制为 FRAME
+                if math.isclose(local_pos, 0) or math.isclose(local_pos, W_ext):
+                    real_type = BeamType.FRAME
+                else:
+                    real_type = b_type
+                add_line(aligned_u_lines, local_pos, real_type)
+
+        # 确保 0 和 W_ext 存在 (防止凸出部分并没有完全对齐主结构的网格线)
+        add_line(aligned_u_lines, 0.0, BeamType.FRAME)
+        add_line(aligned_u_lines, W_ext, BeamType.FRAME)
+
+        # 排序
+        aligned_u_lines.sort(key=lambda x: x[0])
+
+        # 1. Extension Top (Z = H)
+        self._build_face(
+            origin=(Off_x, -L_ext, H_ext),
+            u_vec=(1, 0, 0),  # U 沿 X
+            v_vec=(0, 1, 0),  # V 沿 Y
+            u_len=W_ext,
+            v_len=L_ext,
+            name="top",
+            u_beam_logic="none",  # 保持与主结构一致
+            v_beam_logic="SECONDARY",
+            override_u_grid=aligned_u_lines,
+        )
+
+        # 2. Extension Bottom (Z = 0)
+        self._build_face(
+            origin=(Off_x, -L_ext, 0),
+            u_vec=(1, 0, 0),
+            v_vec=(0, 1, 0),
+            u_len=W_ext,
+            v_len=L_ext,
+            name="bottom",
+            u_beam_logic="none",
+            v_beam_logic="SECONDARY",
+            override_u_grid=aligned_u_lines,
+        )
+
+        # 3. Extension Front (X = Off_x + W_ext) - 对应主结构的 Front 侧
+        self._build_face(
+            origin=(Off_x + W_ext, -L_ext, 0),
+            u_vec=(0, 1, 0),  # U 沿 Y
+            v_vec=(0, 0, 1),  # V 沿 Z
+            u_len=L_ext,
+            v_len=H_ext,
+            name="front",
+            u_beam_logic="SECONDARY",
+            v_beam_logic="none",  # 立柱
+        )
+
+        # 4. Extension Back (X = Off_x) - 对应主结构的 Back 侧
+        self._build_face(
+            origin=(Off_x, -L_ext, 0),
+            u_vec=(0, 1, 0),
+            v_vec=(0, 0, 1),
+            u_len=L_ext,
+            v_len=H_ext,
+            name="back",
+            u_beam_logic="SECONDARY",
+            v_beam_logic="none",
+        )
+
+        # 5. Extension End Cap (Y = -L_ext) - 凸出部分的最外端盖
+        left_v_lines_pos = [aligned_u_lines[0][0], aligned_u_lines[1][0], aligned_u_lines[-1][0]]
+        left_v_lines = []
+        for line in left_v_lines_pos:
+            left_v_lines.append((line, BeamType.FRAME))
+
+        self._build_face(
+            origin=(Off_x, -L_ext, 0),
+            u_vec=(1, 0, 0),  # U 沿 X
+            v_vec=(0, 0, 1),  # V 沿 Z
+            u_len=W_ext,
+            v_len=H_ext,
+            name="left",
+            u_beam_logic="SECONDARY",
+            v_beam_logic="FRAME",  # 类似主结构的端盖
+            override_u_grid=left_v_lines,  # 仅使用边界线
         )
 
     def _build_face(
-        self, origin, u_vec, v_vec, u_len, v_len, name, u_beam_logic, v_beam_logic, virtual_beam=None
+        self,
+        origin,
+        u_vec,
+        v_vec,
+        u_len,
+        v_len,
+        name,
+        u_beam_logic,
+        v_beam_logic,
+        virtual_beam=None,
+        override_u_grid=None,  # 新增参数：强制指定U轴网格线
+        override_v_grid=None,  # 新增参数：强制指定V轴网格线
     ):
         """
         构建一个面的网格、梁和板。
@@ -305,11 +444,17 @@ class StructuralModel:
         # 如果 u_beam_logic 是 MAIN，意味着沿着 U 轴画的线是主梁。
         # 这些线是分布在 V 轴上的。所以我们需要计算 V 轴上的分割点，并标记这些点引出的 U 向线是 MAIN。
 
-        # 计算 V 轴上的坐标点 (决定了 U 向梁的位置)
-        v_lines = self._calculate_grid_lines(v_len, u_beam_logic)
+        # V轴上的点 (决定 U方向梁的位置)
+        if override_v_grid is not None:
+            v_lines = override_v_grid
+        else:
+            v_lines = self._calculate_grid_lines(v_len, u_beam_logic)
 
-        # 计算 U 轴上的坐标点 (决定了 V 向梁的位置)
-        u_lines = self._calculate_grid_lines(u_len, v_beam_logic)
+        # U轴上的点 (决定 V方向梁的位置)
+        if override_u_grid is not None:
+            u_lines = override_u_grid
+        else:
+            u_lines = self._calculate_grid_lines(u_len, v_beam_logic)
 
         # 2. 网格生成 (双重循环)
         # i 对应 U 轴索引, j 对应 V 轴索引
@@ -416,7 +561,7 @@ class StructuralModel:
             elif math.isclose(length, self.params.height):
                 n_segs = self.params.num_secondary_height
             else:
-                raise ValueError("Should not be here")
+                n_segs = 1  # 默认至少一段
 
             seg_len = length / n_segs
 
@@ -443,6 +588,11 @@ class StructuralModel:
             # 按位置排序，以防 Brace 插入顺序问题
             lines.sort(key=lambda x: x[0])
 
+        else:
+            # 默认仅起点和终点
+            lines.append((0.0, BeamType.FRAME))
+            lines.append((length, BeamType.FRAME))
+
         return lines
 
     def add_plate(self, node_list: List[int], on_face: str):
@@ -455,6 +605,100 @@ class StructuralModel:
         area = np.linalg.norm(np.cross(vec1, vec2))
         self.plates[self.plate_counter] = Plate(self.plate_counter, node_list, on_face, area)
         self.plate_counter += 1
+
+    def _remove_elements_in_face_area(
+        self,
+        face_name: str,
+        u_range: Tuple[float, float],
+        v_range: Tuple[float, float],
+        axis_val: float = 0.0,
+        tolerance: float = 0.01,
+    ):
+        """
+        基于 on_face 属性，删除指定面上、指定矩形范围内的梁和板。
+
+        Args:
+            face_name: 面的名称 (e.g., 'left', 'front', 'top')
+            u_range: 该面局部坐标系下第一维度的范围 (min, max)
+            v_range: 该面局部坐标系下第二维度的范围 (min, max)
+            axis_val: 该面的法向坐标值 (e.g., 对于 'left' 面，X=0)
+        """
+
+        # 1. 确定局部坐标轴映射
+        # 约定：
+        # left/right (法向Y) -> u=x, v=z
+        # front/back (法向X) -> u=y, v=z
+        # top/bottom (法向Z) -> u=x, v=y
+
+        if face_name in ["left", "right"]:
+            axis_u, axis_v, axis_n = 0, 2, 1  # x, z, y
+        elif face_name in ["front", "back"]:
+            axis_u, axis_v, axis_n = 1, 2, 0  # y, z, x
+        elif face_name in ["top", "bottom"]:
+            axis_u, axis_v, axis_n = 0, 1, 2  # x, y, z
+
+        u_min, u_max = sorted(u_range)
+        v_min, v_max = sorted(v_range)
+
+        # 辅助函数：判断点是否在范围内 (严格内部，保留边界)
+        def is_in_rect(p_coords):
+            u = p_coords[axis_u]
+            v = p_coords[axis_v]
+            n = p_coords[axis_n]
+            if not math.isclose(n, axis_val, abs_tol=tolerance):
+                return False
+            return (
+                (u > u_min + tolerance)
+                and (u < u_max - tolerance)
+                and (v > v_min + tolerance)
+                and (v < v_max - tolerance)
+            )
+
+        # ---------------------------
+        # 2. 处理梁 (Beams)
+        # ---------------------------
+        beams_to_remove = []
+        points_to_remove = set()
+        for bid, beam in self.beams.items():
+            # 利用 on_face 快速筛选
+            if beam.on_face != face_name:
+                continue
+
+            p1 = self.points[beam.start_node].coordinates()
+            p2 = self.points[beam.end_node].coordinates()
+            mid_point = (p1 + p2) / 2
+
+            if is_in_rect(mid_point):
+                beams_to_remove.append(bid)
+                points_to_remove.add(beam.start_node)
+                points_to_remove.add(beam.end_node)
+
+        for bid in beams_to_remove:
+            del self.beams[bid]
+
+        # ---------------------------
+        # 3. 处理板 (Plates)
+        # ---------------------------
+        plates_to_remove = []
+        for pid, plate in self.plates.items():
+            # 利用 on_face 快速筛选
+            if plate.on_face != face_name:
+                continue
+
+            # 计算板的质心 (简单平均)
+            # 注意：plate.nodes 是节点ID列表
+            node_coords = [self.points[nid].coordinates() for nid in plate.nodes]
+            centroid = np.mean(node_coords, axis=0)
+
+            if is_in_rect(centroid):
+                plates_to_remove.append(pid)
+
+        for pid in plates_to_remove:
+            del self.plates[pid]
+
+        for pid in points_to_remove:
+            if pid in self.points and is_in_rect(self.points[pid].coordinates()):
+                del self.points[pid]
 
     def _get_section_for_beam(self, b_type: BeamType) -> SectionProperties:
         """根据梁类型和参数配置，从库中获取对应的截面对象"""
@@ -537,8 +781,8 @@ if __name__ == "__main__":
         width=3.7,  # 3米宽
         height=3.3,  # 3米高
         main_beam_spacing=1.05,  # 主梁每1.5米一道
-        num_secondary_width=1,  # 宽度方向分3段 (2条中间次梁)
-        num_secondary_height=1,  # 高度方向分3段
+        num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
+        num_secondary_height=3,  # 高度方向分3段
         add_support_beam=True,  # 添加支撑梁
     )
 
@@ -549,5 +793,5 @@ if __name__ == "__main__":
     # model = mesh_generator.generate()
 
     visualizer = StructureVisualizer(model)
-    # visulizer.show_face(ViewType.FULL_3D)
-    visualizer.show_all_views(grid=False)
+    visualizer.show_face(ViewType.FULL_3D)
+    # visualizer.show_all_views(grid=False)
