@@ -399,7 +399,7 @@ class StructuralModel:
         )
 
         # 5. Extension End Cap (Y = -L_ext) - 凸出部分的最外端盖
-        left_v_lines_pos = [aligned_u_lines[0][0], aligned_u_lines[1][0], aligned_u_lines[-1][0]]
+        left_v_lines_pos = set([aligned_u_lines[0][0], aligned_u_lines[1][0], aligned_u_lines[-1][0]])
         left_v_lines = []
         for line in left_v_lines_pos:
             left_v_lines.append((line, BeamType.FRAME))
@@ -603,6 +603,8 @@ class StructuralModel:
         vec1 = p2.coordinates() - p1.coordinates()
         vec2 = p4.coordinates() - p1.coordinates()
         area = np.linalg.norm(np.cross(vec1, vec2))
+        if area < 1e-6:
+            return  # 忽略面积过小的板
         self.plates[self.plate_counter] = Plate(self.plate_counter, node_list, on_face, area)
         self.plate_counter += 1
 
