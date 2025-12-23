@@ -45,7 +45,7 @@ st.title("🏗️ 模块化舱体结构参数化生成")
 with st.sidebar:
     st.header("⚙️ 几何参数控制")
 
-    L = st.slider("舱体长度 (Length)", 5.0, 15.0, 12.0, 0.5)
+    L = st.slider("舱体长度 (Length)", 5.0, 15.0, 8.0, 0.5)
     W = st.slider("舱体宽度 (Width)", 2.0, 5.0, 3.7, 0.1)
     H = st.slider("舱体高度 (Height)", 2.0, 4.0, 3.3, 0.1)
 
@@ -53,9 +53,14 @@ with st.sidebar:
 
     st.header("📐 拓扑与截面")
     beam_spacing = st.slider("主梁间距", 0.5, 3.0, 1.05, 0.05)
-    num_sec_w = st.number_input("宽度方向次梁段数", min_value=1, max_value=5, value=1)
-    num_sec_h = st.number_input("高度方向次梁段数", min_value=1, max_value=5, value=1)
+    num_sec_w = st.number_input("宽度方向次梁段数", min_value=1, max_value=5, value=3)
+    num_sec_h = st.number_input("高度方向次梁段数", min_value=1, max_value=5, value=3)
     add_brace = st.checkbox("添加支撑梁 (Brace)", value=True)
+
+    st.divider()
+
+    st.header("👁️ 视图设置")
+    show_plates = st.checkbox("显示蒙皮 (Plates)", value=True)
 
     st.info("调整参数后，右侧模型将实时重构。")
 
@@ -82,13 +87,13 @@ model.generate()
 def get_beam_color(b_type):
     """根据梁类型返回不同颜色"""
     if b_type == BeamType.FRAME:
-        return "#FF4B4B", 6  # 红色, 粗
+        return "#FF4B4B", 12  # 红色, 粗
     elif b_type == BeamType.MAIN:
-        return "#1E90FF", 4  # 蓝色
+        return "#1E90FF", 8  # 蓝色
     elif b_type == BeamType.SECONDARY:
-        return "#87CEFA", 2  # 浅蓝
+        return "#FFA500", 4  # 橙色
     elif b_type == BeamType.BRACE:
-        return "#FFA500", 2  # 橙色
+        return "#27C344", 2  # 绿色
     return "#888888", 1
 
 
@@ -114,6 +119,57 @@ for beam in model.beams.values():
     d["y"].extend([start.y, end.y, None])
     d["z"].extend([start.z, end.z, None])
 
+if show_plates and model.plates:
+    # 1. 准备 Mesh3d 所需的顶点列表
+    # 为了保证索引对应正确，我们先建立一个 node_id 到 列表索引 的映射
+    all_node_ids = sorted(model.points.keys())
+    node_to_idx = {nid: i for i, nid in enumerate(all_node_ids)}
+
+    # 提取所有点的坐标
+    mesh_x = [model.points[nid].x for nid in all_node_ids]
+    mesh_y = [model.points[nid].y for nid in all_node_ids]
+    mesh_z = [model.points[nid].z for nid in all_node_ids]
+
+    # 2. 构建三角形索引 (i, j, k)
+    # Plotly 的 Mesh3d 需要三角形，我们将每个四边形板 (ABCD) 拆分为两个三角形 (ABC 和 ACD)
+    i_indices = []
+    j_indices = []
+    k_indices = []
+
+    for plate in model.plates.values():
+        # 获取该板 4 个节点在 mesh_x/y/z 列表中的索引
+        # 假设 plate.nodes 是按顺序 [n1, n2, n3, n4] 排列的
+        p_idx = [node_to_idx[n] for n in plate.nodes]
+
+        # 三角形 1: 0 -> 1 -> 2
+        i_indices.append(p_idx[0])
+        j_indices.append(p_idx[1])
+        k_indices.append(p_idx[2])
+
+        # 三角形 2: 0 -> 2 -> 3
+        i_indices.append(p_idx[0])
+        j_indices.append(p_idx[2])
+        k_indices.append(p_idx[3])
+
+    # 3. 创建 Mesh Trace
+    traces.append(
+        go.Mesh3d(
+            x=mesh_x,
+            y=mesh_y,
+            z=mesh_z,
+            i=i_indices,
+            j=j_indices,
+            k=k_indices,
+            opacity=0.5,  # 半透明，以便看到内部梁
+            color="#A9A9A9",  # 灰色蒙皮
+            alphahull=-1,  # 强制使用提供的索引构建形状
+            lighting=dict(ambient=0.5, diffuse=0.8),  # 增加一点光照质感
+            name="Plate",
+            showlegend=True,
+            hoverinfo="skip",  # 鼠标悬停时不显示复杂的坐标信息
+        )
+    )
+
 # 创建 Plotly Traces
 for b_type, data in beams_by_type.items():
     color, width = get_beam_color(b_type)
@@ -129,14 +185,14 @@ for b_type, data in beams_by_type.items():
     )
 
 # (可选) 绘制节点，如果需要看节点位置
-# node_x = [p.x for p in model.points.values()]
-# node_y = [p.y for p in model.points.values()]
-# node_z = [p.z for p in model.points.values()]
-# traces.append(go.Scatter3d(
-#     x=node_x, y=node_y, z=node_z,
-#     mode='markers', marker=dict(size=2, color='white'),
-#     showlegend=False
-# ))
+node_x = [p.x for p in model.points.values()]
+node_y = [p.y for p in model.points.values()]
+node_z = [p.z for p in model.points.values()]
+traces.append(
+    go.Scatter3d(
+        x=node_x, y=node_y, z=node_z, mode="markers", marker=dict(size=2, color="black"), showlegend=False
+    )
+)
 
 # --- 4. 布局设置 ---
 layout = go.Layout(
@@ -232,10 +288,11 @@ with col2:
     st.metric("总质量 (估算)", f"{model.calculate_mass():.2f} kg")
     st.metric("节点数量", len(model.points))
     st.metric("梁单元数量", len([b for b in model.beams.values() if not b.is_virtual]))
+    st.metric("钢板数量", len(model.plates))
 
     st.write("---")
     st.write("**图例说明:**")
     st.markdown(f"<span style='color:#FF4B4B'>■</span> Frame (边框)", unsafe_allow_html=True)
     st.markdown(f"<span style='color:#1E90FF'>■</span> Main (主梁)", unsafe_allow_html=True)
-    st.markdown(f"<span style='color:#87CEFA'>■</span> Secondary (次梁)", unsafe_allow_html=True)
-    st.markdown(f"<span style='color:#FFA500'>■</span> Brace (支撑)", unsafe_allow_html=True)
+    st.markdown(f"<span style='color:#FFA500'>■</span> Secondary (次梁)", unsafe_allow_html=True)
+    st.markdown(f"<span style='color:#27C344'>■</span> Brace (支撑)", unsafe_allow_html=True)
