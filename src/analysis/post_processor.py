@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver, ResultCombiner
+from src.analysis.opensees_analysis import AnalysisResults, run_full_design_check
 from src.analysis.unit import M2_TO_MM2, M4_TO_MM4, M_TO_MM
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import BeamType, StructuralModel, StructuralParameters
@@ -227,57 +227,6 @@ class ResultProcessor:
         return max_disp / limit, max_disp, max_disp_node
 
 
-def run_full_design_check(model: StructuralModel, internal_pressure_pa: float = 30000):
-    solver = OpenSeesSolver(model)
-
-    # 1. 运行三个独立工况
-    # DL: 自重 + 底部恒载 5kN/m2
-    res_dl = solver.run_static_case("DL")
-
-    # LL: 底部活载 2kN/m2
-    res_ll = solver.run_static_case("LL")
-
-    # PL: 气压荷载
-    res_pl = solver.run_static_case("PL", pressure_pa=internal_pressure_pa)
-
-    # 2. 结果组合
-    combiner = ResultCombiner()
-
-    # 1. 组合工况：1.3DL + 1.5LL + 1.25PL (承载能力极限状态)
-    res_strength = combiner.get_max_stress_combo(res_dl, res_ll, res_pl)
-
-    # 2. 组合工况：1.0DL + 1.0LL + 1.0PL (正常使用极限状态 - 挠度)
-    res_service = combiner.get_max_displacement_combo(res_dl, res_ll, res_pl)
-
-    # 3. 后处理校核
-    processor = ResultProcessor(model)
-
-    # A. 强度检查
-    # 注意：这里我们分别用强度组合的结果去查应力，用正常使用组合的结果查位移
-    # 但 ResultProcessor 内部逻辑目前混在一起了。
-    # 更严谨的做法是分别调用 processor 的内部子方法，或者传入对应的结果。
-
-    # 临时修正：我们用强度组合结果跑一次，主要看 stress
-    strength_check = processor.run_gb50017_check(res_strength)
-
-    # 用位移组合结果跑一次，主要看 deflection
-    service_check = processor.run_gb50017_check(res_service)
-
-    print("====== Design Check Report (GB50017) ======")
-    print(
-        f"Max Stress Ratio: {strength_check.max_stress_ratio:.3f} "
-        f"(Elem: {strength_check.critical_beam_id}/{strength_check.critical_plate_id}, "
-        f"Mode: {strength_check.failure_mode})"
-    )
-
-    print(f"Max Deflection Ratio: {service_check.max_deflection_ratio:.3f}")
-
-    is_safe = (strength_check.max_stress_ratio <= 1.0) and (service_check.max_deflection_ratio <= 1.0)
-    print(f"Design Status: {'PASSED' if is_safe else 'FAILED'}")
-
-    return is_safe
-
-
 if __name__ == "__main__":
     from src.structure.mesh_generator import MeshGenerator
 
@@ -286,10 +235,11 @@ if __name__ == "__main__":
         length=12.0,  # 10米长
         width=3.7,  # 3米宽
         height=3.3,  # 3米高
-        main_beam_spacing=1.05,  # 主梁每1.5米一道
-        num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
-        num_secondary_height=3,  # 高度方向分3段
-        add_support_beam=True,  # 添加支撑梁
+        main_beam_spacing=2,  # 主梁每1.5米一道
+        num_secondary_width=1,  # 宽度方向分3段 (2条中间次梁)
+        num_secondary_height=1,  # 高度方向分3段
+        add_support_beam=False,  # 添加支撑梁
+        secondary_beam_section_index=0,
     )
 
     model = StructuralModel(params, SectionLibrary())

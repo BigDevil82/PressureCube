@@ -452,6 +452,52 @@ class ResultCombiner:
         return res_dl.scale(1.3) + res_ll.scale(1.5) + res_pl.scale(1.25)
 
 
+def run_full_design_check(model: StructuralModel, internal_pressure_pa: float = 30000):
+    solver = OpenSeesSolver(model)
+
+    # 1. 运行三个独立工况
+    # DL: 自重 + 底部恒载 5kN/m2
+    res_dl = solver.run_static_case("DL")
+
+    # LL: 底部活载 2kN/m2
+    res_ll = solver.run_static_case("LL")
+
+    # PL: 气压荷载
+    res_pl = solver.run_static_case("PL", pressure_pa=internal_pressure_pa)
+
+    # 2. 结果组合
+    combiner = ResultCombiner()
+
+    # 1. 组合工况：1.3DL + 1.5LL + 1.25PL (承载能力极限状态)
+    res_strength = combiner.get_max_stress_combo(res_dl, res_ll, res_pl)
+
+    # 2. 组合工况：1.0DL + 1.0LL + 1.0PL (正常使用极限状态 - 挠度)
+    res_service = combiner.get_max_displacement_combo(res_dl, res_ll, res_pl)
+
+    # 3. 后处理校核
+    processor = ResultProcessor(model)
+
+    # 临时修正：我们用强度组合结果跑一次，主要看 stress
+    strength_check = processor.run_gb50017_check(res_strength)
+
+    # 用位移组合结果跑一次，主要看 deflection
+    service_check = processor.run_gb50017_check(res_service)
+
+    print("====== Design Check Report (GB50017) ======")
+    print(
+        f"Max Stress Ratio: {strength_check.max_stress_ratio:.3f} "
+        f"(Elem: {strength_check.critical_beam_id}/{strength_check.critical_plate_id}, "
+        f"Mode: {strength_check.failure_mode})"
+    )
+
+    print(f"Max Deflection Ratio: {service_check.max_deflection_ratio:.3f}")
+
+    is_safe = (strength_check.max_stress_ratio <= 1.0) and (service_check.max_deflection_ratio <= 1.0)
+    print(f"Design Status: {'PASSED' if is_safe else 'FAILED'}")
+
+    return is_safe
+
+
 # ================= 主流程调用 =================
 if __name__ == "__main__":
     from src.analysis.post_processor import ResultProcessor
@@ -460,17 +506,17 @@ if __name__ == "__main__":
 
     # 配置参数
     params = StructuralParameters(
-        length=7.2,
+        length=12,
         width=3.7,
         height=3.3,
-        main_beam_spacing=0.55,
+        main_beam_spacing=1.5,
         num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
         num_secondary_height=3,  # 高度方向分3段
         add_support_beam=True,  # 添加支撑梁
         frame_section_index=0,
-        main_beam_section_index=9,
-        secondary_beam_section_index=6,
-        brace_section_index=15,
+        main_beam_section_index=0,
+        secondary_beam_section_index=0,
+        brace_section_index=0,
         plate_thickness=0.005,
     )
 
