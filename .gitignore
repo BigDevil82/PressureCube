@@ -1,6 +1,7 @@
 results/
 .cursorrules
 paper_draft
+tests/
 
 # Python
 __pycache__/
