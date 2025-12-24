@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.structure.enums import BeamType
+from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary, SectionType
 from src.structure.structural_model import StructuralModel, StructuralParameters
 
@@ -61,6 +62,7 @@ with st.sidebar:
 
     st.header("👁️ 视图设置")
     show_plates = st.checkbox("显示蒙皮 (Plates)", value=True)
+    show_nodes = st.checkbox("显示节点 (Nodes)", value=False)
 
     st.info("调整参数后，右侧模型将实时重构。")
 
@@ -80,6 +82,8 @@ lib = SectionLibrary()
 
 model = StructuralModel(params, lib)
 model.generate()
+# generator = MeshGenerator(model)
+# model = generator.generate()
 
 # --- 3. Plotly 可视化逻辑 ---
 
@@ -118,6 +122,46 @@ for beam in model.beams.values():
     d["x"].extend([start.x, end.x, None])
     d["y"].extend([start.y, end.y, None])
     d["z"].extend([start.z, end.z, None])
+
+
+# # 虚拟梁用虚线绘制
+# virtual_beams = [b for b in model.beams.values() if b.is_virtual]
+# if virtual_beams:
+#     v_x = []
+#     v_y = []
+#     v_z = []
+#     for beam in virtual_beams:
+#         start = model.points[beam.start_node]
+#         end = model.points[beam.end_node]
+#         v_x.extend([start.x, end.x, None])
+#         v_y.extend([start.y, end.y, None])
+#         v_z.extend([start.z, end.z, None])
+
+#     traces.append(
+#         go.Scatter3d(
+#             x=v_x,
+#             y=v_y,
+#             z=v_z,
+#             mode="lines",
+#             line=dict(color="black", width=10, dash="dash"),
+#             name="Virtual Beam",
+#         )
+#     )
+
+
+# 添加梁
+for b_type, data in beams_by_type.items():
+    color, width = get_beam_color(b_type)
+    traces.append(
+        go.Scatter3d(
+            x=data["x"],
+            y=data["y"],
+            z=data["z"],
+            mode="lines",
+            line=dict(color=color, width=width),
+            name=str(b_type).split(".")[-1],
+        )
+    )
 
 if show_plates and model.plates:
     # 1. 准备 Mesh3d 所需的顶点列表
@@ -170,29 +214,16 @@ if show_plates and model.plates:
         )
     )
 
-# 创建 Plotly Traces
-for b_type, data in beams_by_type.items():
-    color, width = get_beam_color(b_type)
+if show_nodes:
+    # (可选) 绘制节点，如果需要看节点位置
+    node_x = [p.x for p in model.points.values()]
+    node_y = [p.y for p in model.points.values()]
+    node_z = [p.z for p in model.points.values()]
     traces.append(
         go.Scatter3d(
-            x=data["x"],
-            y=data["y"],
-            z=data["z"],
-            mode="lines",
-            line=dict(color=color, width=width),
-            name=str(b_type).split(".")[-1],
+            x=node_x, y=node_y, z=node_z, mode="markers", marker=dict(size=2, color="black"), showlegend=False
         )
     )
-
-# (可选) 绘制节点，如果需要看节点位置
-node_x = [p.x for p in model.points.values()]
-node_y = [p.y for p in model.points.values()]
-node_z = [p.z for p in model.points.values()]
-traces.append(
-    go.Scatter3d(
-        x=node_x, y=node_y, z=node_z, mode="markers", marker=dict(size=2, color="black"), showlegend=False
-    )
-)
 
 # --- 4. 布局设置 ---
 layout = go.Layout(
@@ -215,7 +246,6 @@ layout = go.Layout(
 fig = go.Figure(data=traces, layout=layout)
 
 # --- 5. (新增) 自动旋转动画配置 ---
-
 # 计算相机旋转的路径 (绕Z轴旋转一圈)
 # eye 坐标定义相机的位子，(0,0,0)是模型中心
 frames = []
@@ -285,7 +315,7 @@ with col1:
 
 with col2:
     st.subheader("📊 结构统计")
-    st.metric("总质量 (估算)", f"{model.calculate_mass():.2f} kg")
+    st.metric("总质量 (估算)", f"{model.calculate_mass_kg():.2f} kg")
     st.metric("节点数量", len(model.points))
     st.metric("梁单元数量", len([b for b in model.beams.values() if not b.is_virtual]))
     st.metric("钢板数量", len(model.plates))
