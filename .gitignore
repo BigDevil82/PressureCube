@@ -2,6 +2,7 @@ results/
 .cursorrules
 paper_draft
 tests/
+deprecated/
 
 # Python
 __pycache__/

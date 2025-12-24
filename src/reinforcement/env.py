@@ -5,13 +5,10 @@ from gymnasium import spaces
 
 from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver, ResultCombiner
 from src.analysis.post_processor import ResultProcessor
-from src.graph.structural_graph import BeamAsNodeGraph  # 假设这是上一轮重构后的 Beam-as-Node Graph
+from src.graph.structural_graph import BeamAsNodeGraph
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary, SectionType
-
-# 引入之前的模块
-from src.structure.structural_model import BeamResponse  # 引入上面定义的类
-from src.structure.structural_model import BeamType, StructuralModel, StructuralParameters
+from src.structure.structural_model import BeamResponse, BeamType, StructuralModel, StructuralParameters
 
 
 class StructuralEnv(gym.Env):

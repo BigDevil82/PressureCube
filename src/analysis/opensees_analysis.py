@@ -276,6 +276,10 @@ class OpenSeesSolver:
             vecxz = np.array([0.0, 1.0, 0.0])
         elif np.isclose(abs(x_local[2]), 1.0) and on_face in ["left", "right"]:
             vecxz = np.array([1.0, 0.0, 0.0])
+        else:
+            raise ValueError(
+                f"Cannot determine vecxz for beam on face {on_face}, with direction {x_local}, p1: {p1}, p2: {p2}"
+            )
 
         return vecxz
 
@@ -456,17 +460,17 @@ if __name__ == "__main__":
 
     # 配置参数
     params = StructuralParameters(
-        length=7.2,  # 10米长
-        width=3.7,  # 3米宽
-        height=3.3,  # 3米高
-        main_beam_spacing=0.55,  # 主梁每1.5米一道
-        num_secondary_width=4,  # 宽度方向分3段 (2条中间次梁)
-        num_secondary_height=4,  # 高度方向分3段
+        length=7.2,
+        width=3.7,
+        height=3.3,
+        main_beam_spacing=0.55,
+        num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
+        num_secondary_height=3,  # 高度方向分3段
         add_support_beam=True,  # 添加支撑梁
         frame_section_index=0,
-        main_beam_section_index=0,
+        main_beam_section_index=9,
         secondary_beam_section_index=6,
-        brace_section_index=0,
+        brace_section_index=15,
         plate_thickness=0.005,
     )
 
@@ -478,18 +482,21 @@ if __name__ == "__main__":
 
     solver = OpenSeesSolver(model)
 
-    # with Timer("OpenSees Analysis Cost: "):
-    #     res = solver.run_static_case("PL", pressure_pa=30000)
+    with Timer("OpenSees Analysis Cost: "):
+        res = solver.run_static_case("PL", pressure_pa=30000)
 
-    # with Timer("Result Processing Cost: "):
-    #     stat = ResultProcessor(model).run_gb50017_check(res)
+    with Timer("Result Processing Cost: "):
+        stat = ResultProcessor(model).run_gb50017_check(res)
 
-    # print(f"Max Stress Ratio: {stat.max_stress_ratio:.3f}")
-    # print(f"Max Stress: {stat.max_stress:.3f} MPa")
-    # print(f"Max Deflection Ratio: {stat.max_deflection_ratio:.3f}")
-    # print(f"Max Deflection: {stat.max_deflection:.3f} mm")
+    print(f"Max Stress Ratio: {stat.max_stress_ratio:.3f}")
+    print(f"Max Stress: {stat.max_stress:.3f} MPa")
+    print(f"Max Stress Pos: {stat.max_stress_pos}")
+    print(f"Max Deflection Ratio: {stat.max_deflection_ratio:.3f}")
+    print(f"Max Deflection: {stat.max_deflection:.3f} mm")
+    print(f"Max Deflection Pos: {stat.max_deflection_pos}")
+    print(model.points[stat.max_deflection_pos].coordinates())
 
-    with Timer("Modal Analysis Cost: "):
-        frequencies, periods = solver.run_modal_case(6)
-    for i, (f, T) in enumerate(zip(frequencies, periods), start=1):
-        print(f"Mode {i}: Frequency = {f:.3f} Hz, Period = {T:.4f} s")
+    # with Timer("Modal Analysis Cost: "):
+    #     frequencies, periods = solver.run_modal_case(6)
+    # for i, (f, T) in enumerate(zip(frequencies, periods), start=1):
+    #     print(f"Mode {i}: Frequency = {f:.3f} Hz, Period = {T:.4f} s")

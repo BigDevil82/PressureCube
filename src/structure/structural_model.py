@@ -69,6 +69,15 @@ class Point:
 
 
 @dataclass
+class BeamResponse:
+    """存储单根梁的聚合分析结果"""
+
+    max_stress_ratio: float = 0.0  # 应力比 (Actual / Limit)
+    max_disp_ratio: float = 0.0  # 挠度比 (Actual / Limit)
+    is_violated: bool = False  # 是否超限
+
+
+@dataclass
 class Beam:
     id: int
     start_node: int
@@ -78,6 +87,7 @@ class Beam:
     is_virtual: bool
     on_face: str
     parent_id: int = None
+    response: BeamResponse = None  # 存储分析结果
 
 
 @dataclass
