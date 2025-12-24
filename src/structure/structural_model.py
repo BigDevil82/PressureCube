@@ -21,6 +21,17 @@ class Window:
 
 
 @dataclass
+class ExtensionParameters:
+    """侧面凸出部分参数"""
+
+    active: bool = True
+    length: float = 1.1  # 凸出长度 (Y负方向)
+    width: float = 1.85  # 凸出宽度 (X方向)
+    height: float = 0.0  # 凸出高度
+    offset_x: float = 0.0  # 在主结构X方向的起始位置 (离X=0的距离)
+
+
+@dataclass
 class StructuralParameters:
     """结构参数类"""
 
@@ -38,11 +49,19 @@ class StructuralParameters:
     secondary_beam_section_index: int = 0  # H型钢索引 (用于次梁)
     brace_section_index: int = 0  # 槽钢索引
 
+    extension: ExtensionParameters = field(default_factory=ExtensionParameters)  # 侧面凸出部分参数
+
     windows: List[Window] = field(default_factory=list)  # 窗户参数列表
     win_bottom: float = 1.0  # 窗户底部离地高度
     win_height: float = 1.5  # 窗户高度
     plate_thickness: float = 0.01  # 钢板厚度
     pressure: float = 30  # 内压 (kPa)
+
+    # extension的后两个参数计算得出
+    def __post_init__(self):
+        if self.extension.active:
+            self.extension.height = self.height
+            self.extension.offset_x = self.width - self.extension.width
 
 
 @dataclass
@@ -211,10 +230,31 @@ class StructuralModel:
 
     def generate(self):
         L, W, H = self.params.length, self.params.width, self.params.height
+        ext = self.params.extension
 
-        # 1. 定义6个面的生成逻辑
-        # 每个面定义: 原点, U轴向量, V轴向量, U方向长度, V方向长度, 面名称, 策略
+        # -----------------------------------------------------
+        # 1. 准备 Extension 的边界信息 (用于网格对齐)
+        # -----------------------------------------------------
+        # 在 X 方向上的强制分割点 (对应 Top/Bottom 面)
+        # 这些点确保主结构在 Extension 的墙角处有节点
+        x_mandatory = []
+        hole_definition = None
 
+        if ext.active:
+            x_start = ext.offset_x
+            x_end = ext.offset_x + ext.width
+            x_mandatory = [x_start, x_end]
+
+            # 定义连接面(Left)上的开洞区域 (u=x, v=z)
+            # 格式: (u_min, u_max, v_min, v_max)
+            hole_definition = (x_start, x_end, 0, ext.height)
+
+        # -----------------------------------------------------
+        # 2. 生成主结构面
+        # -----------------------------------------------------
+
+        # Top (Z=H)
+        # 传入 mandatory_u_points，使得顶部梁在 extension 边界处断开
         self._build_face(
             origin=(0, 0, H),
             u_vec=(1, 0, 0),
@@ -224,9 +264,10 @@ class StructuralModel:
             name="top",
             u_beam_logic="MAIN",
             v_beam_logic="SECONDARY",
+            mandatory_u_points=x_mandatory,
         )
 
-        # Bottom (Z=0): Same as Top.
+        # Bottom (Z=0)
         self._build_face(
             origin=(0, 0, 0),
             u_vec=(1, 0, 0),
@@ -236,9 +277,10 @@ class StructuralModel:
             name="bottom",
             u_beam_logic="MAIN",
             v_beam_logic="SECONDARY",
+            mandatory_u_points=x_mandatory,
         )
 
-        # Front (X=W): U=Y(L), V=Z(H). (长侧面)
+        # Front (X=W)
         self._build_face(
             origin=(W, 0, 0),
             u_vec=(0, 1, 0),
@@ -250,7 +292,7 @@ class StructuralModel:
             v_beam_logic="MAIN",
         )
 
-        # Back (X=0): Same as Front.
+        # Back (X=0)
         self._build_face(
             origin=(0, 0, 0),
             u_vec=(0, 1, 0),
@@ -262,7 +304,8 @@ class StructuralModel:
             v_beam_logic="MAIN",
         )
 
-        # Left (Y=0): U=X(W), V=Z(H). (端盖)
+        # Left (Y=0) - 核心连接面
+        # 使用 hole_rect 参数直接挖洞，不再事后删除
         self._build_face(
             origin=(0, 0, 0),
             u_vec=(1, 0, 0),
@@ -272,10 +315,11 @@ class StructuralModel:
             name="left",
             u_beam_logic="SECONDARY",
             v_beam_logic="FRAME_GRID",
-            # virtual_beam=BeamType.BRACE,
+            hole_rect=hole_definition,  # 传入洞口定义
+            mandatory_u_points=x_mandatory,  # 确保洞口边缘有立柱
         )
 
-        # Right (Y=L): Same as Left.
+        # Right (Y=L)
         self._build_face(
             origin=(0, L, 0),
             u_vec=(1, 0, 0),
@@ -285,83 +329,59 @@ class StructuralModel:
             name="right",
             u_beam_logic="SECONDARY",
             v_beam_logic="FRAME_GRID",
-            # virtual_beam=BeamType.BRACE,
-        )
-        self._generate_extension()
-
-        ext_x_start = self.params.width * 0.5
-        ext_x_end = self.params.width
-
-        # 调用删除: 在 'left' 面上，删除 X 在 [start, end], Z 在 [0, H] 范围内的元素
-        self._remove_elements_in_face_area(
-            face_name="left",
-            u_range=(ext_x_start, ext_x_end),  # 对应 x
-            v_range=(0, self.params.height),  # 对应 z
-            axis_val=0,  # Y=0 面
         )
 
-    def _generate_extension(self):
-        """
-        生成左侧凸出区域 (Extension Block)
-        逻辑：在 Y < 0 的区域生成一个盒子，通过 Y=0 面与主结构连接。
-        """
-        # 获取参数
-        L_ext = 1.1
-        W_ext = self.params.width * 0.5
-        H_ext = self.params.height  # 假设高度相同
-        Off_x = self.params.width * 0.5
+        # -----------------------------------------------------
+        # 3. 生成 Extension (如果激活)
+        # -----------------------------------------------------
+        if ext.active:
+            self._generate_extension_block()
 
-        # 1. 获取主结构在宽度方向(X轴)的完整网格线
-        # 主结构 Top/Bottom 面沿 U(X) 轴分布的是 "SECONDARY" 类型的梁逻辑 (即V方向梁)
-        full_width_lines = self._calculate_grid_lines(self.params.width, "SECONDARY")
+        self._cleanup_orphans()
 
-        # 2. 截取落在凸出部分范围内的网格线
-        # 凸出部分的 X 范围是 [Off_x, Off_x + W_ext]
+    def _generate_extension_block(self):
+        """生成左侧凸出区域，并直接与主结构节点连接"""
+        ext = self.params.extension
+
+        # 局部参数
+        L_ext = ext.length
+        W_ext = ext.width
+        H_ext = ext.height
+        Off_x = ext.offset_x
+
+        # 获取主结构在 X 方向的网格线 (复用逻辑以保证对齐)
+        # 重点：只取 Extension 范围内的线
+        full_u_lines = self._calculate_grid_lines(
+            self.params.width, "SECONDARY", mandatory_points=[Off_x, Off_x + W_ext]
+        )
+
+        # 筛选出属于 Extension 范围内的 X 向网格
         aligned_u_lines = []
-
-        # 添加左边界 (强制 Frame)
-        # 即使主网格在这个位置没有梁，凸出部分作为实体也需要边界梁
-        # 使用 check_and_add 逻辑防止重复
-        def add_line(lines_list, pos, b_type):
-            # 检查是否已有近似的点
-            for p, _ in lines_list:
-                if math.isclose(p, pos, abs_tol=1e-4):
-                    return
-            lines_list.append((pos, b_type))
-
-        # 先把主结构中落在范围内的线加进来
-        for pos, b_type in full_width_lines:
-            if pos >= Off_x - 1e-4 and pos <= (Off_x + W_ext) + 1e-4:
-                # 转换为局部坐标 (相对于 Off_x)
+        for pos, b_type in full_u_lines:
+            # 容差判断是否在范围内
+            if pos >= Off_x - 1e-4 and pos <= (Off_x + W_ext) + 1e-1:
                 local_pos = pos - Off_x
-                # 修正边界类型：如果恰好是凸出部分的边缘，强制为 FRAME
+                # 边界强制为 FRAME
                 if math.isclose(local_pos, 0) or math.isclose(local_pos, W_ext):
                     real_type = BeamType.FRAME
                 else:
                     real_type = b_type
-                add_line(aligned_u_lines, local_pos, real_type)
+                aligned_u_lines.append((local_pos, real_type))
 
-        # 确保 0 和 W_ext 存在 (防止凸出部分并没有完全对齐主结构的网格线)
-        add_line(aligned_u_lines, 0.0, BeamType.FRAME)
-        add_line(aligned_u_lines, W_ext, BeamType.FRAME)
-
-        # 排序
-        aligned_u_lines.sort(key=lambda x: x[0])
-
-        # 1. Extension Top (Z = H)
+        # 1. Top (Z = H_ext)
         self._build_face(
             origin=(Off_x, -L_ext, H_ext),
-            u_vec=(1, 0, 0),  # U 沿 X
-            v_vec=(0, 1, 0),  # V 沿 Y
+            u_vec=(1, 0, 0),
+            v_vec=(0, 1, 0),
             u_len=W_ext,
             v_len=L_ext,
             name="top",
-            u_beam_logic="none",  # 保持与主结构一致
+            u_beam_logic="none",
             v_beam_logic="SECONDARY",
-            override_u_grid=aligned_u_lines,
+            override_u_grid=aligned_u_lines,  # 强制对齐主结构
         )
 
-        # 2. Extension Bottom (Z = 0)
+        # 2. Bottom (Z = 0)
         self._build_face(
             origin=(Off_x, -L_ext, 0),
             u_vec=(1, 0, 0),
@@ -374,11 +394,11 @@ class StructuralModel:
             override_u_grid=aligned_u_lines,
         )
 
-        # 3. Extension Front (X = Off_x + W_ext) - 对应主结构的 Front 侧
+        # 3. Front (Y 方向侧面)
         self._build_face(
             origin=(Off_x + W_ext, -L_ext, 0),
-            u_vec=(0, 1, 0),  # U 沿 Y
-            v_vec=(0, 0, 1),  # V 沿 Z
+            u_vec=(0, 1, 0),
+            v_vec=(0, 0, 1),
             u_len=L_ext,
             v_len=H_ext,
             name="front",
@@ -386,7 +406,7 @@ class StructuralModel:
             v_beam_logic="none",  # 立柱
         )
 
-        # 4. Extension Back (X = Off_x) - 对应主结构的 Back 侧
+        # 4. Back (Y 方向侧面)
         self._build_face(
             origin=(Off_x, -L_ext, 0),
             u_vec=(0, 1, 0),
@@ -398,22 +418,70 @@ class StructuralModel:
             v_beam_logic="none",
         )
 
-        # 5. Extension End Cap (Y = -L_ext) - 凸出部分的最外端盖
-        left_v_lines_pos = set([aligned_u_lines[0][0], aligned_u_lines[1][0], aligned_u_lines[-1][0]])
-        left_v_lines = []
-        for line in left_v_lines_pos:
-            left_v_lines.append((line, BeamType.FRAME))
+        # 5. End Cap (Extension的最外端面)
+        # 仅在边界有立柱
+        end_u_grid = [(0.0, BeamType.FRAME), (W_ext, BeamType.FRAME)]
+        # 如果中间还有其他Frame线也加上
+        for pos, btype in aligned_u_lines:
+            if not (math.isclose(pos, 0) or math.isclose(pos, W_ext)):
+                end_u_grid.append((pos, BeamType.FRAME))
+        end_u_grid.sort(key=lambda x: x[0])
 
         self._build_face(
             origin=(Off_x, -L_ext, 0),
-            u_vec=(1, 0, 0),  # U 沿 X
-            v_vec=(0, 0, 1),  # V 沿 Z
+            u_vec=(1, 0, 0),
+            v_vec=(0, 0, 1),
             u_len=W_ext,
             v_len=H_ext,
             name="left",
             u_beam_logic="SECONDARY",
-            v_beam_logic="FRAME",  # 类似主结构的端盖
-            override_u_grid=left_v_lines,  # 仅使用边界线
+            v_beam_logic="FRAME",
+            override_u_grid=end_u_grid,
+        )
+
+        # ---------------------------------------------------------
+        # 2. 设备区 (Equipment Area) - 新增代码
+        # ---------------------------------------------------------
+        # 位于 X [0, Off_x] 区间，填补左上角缺口
+        # 逻辑类型使用 "none" (或任意非标准字符串)，只生成四周的 Frame 梁
+
+        # Equip Top (Z = H)
+        self._build_face(
+            origin=(0, -L_ext, H_ext),  # 起点在最左后角
+            u_vec=(1, 0, 0),
+            v_vec=(0, 1, 0),  # X, Y 方向
+            u_len=Off_x,
+            v_len=L_ext,  # 长度填满 Off_x
+            name="top",
+            u_beam_logic="none",  # 仅外框
+            v_beam_logic="none",
+            beam_only=True,  # 仅生成边框梁
+        )
+
+        # Equip Bottom (Z = 0)
+        self._build_face(
+            origin=(0, -L_ext, 0),
+            u_vec=(1, 0, 0),
+            v_vec=(0, 1, 0),
+            u_len=Off_x,
+            v_len=L_ext,
+            name="bottom",
+            u_beam_logic="none",
+            v_beam_logic="none",
+            beam_only=True,  # 仅生成边框梁
+        )
+
+        # Equip Back (X = 0) - 最外侧的背面墙
+        self._build_face(
+            origin=(0, -L_ext, 0),
+            u_vec=(0, 1, 0),
+            v_vec=(0, 0, 1),  # Y, Z 方向
+            u_len=L_ext,
+            v_len=H_ext,
+            name="back",
+            u_beam_logic="none",
+            v_beam_logic="none",
+            beam_only=True,  # 仅生成边框梁
         )
 
     def _build_face(
@@ -427,173 +495,223 @@ class StructuralModel:
         u_beam_logic,
         v_beam_logic,
         virtual_beam=None,
-        override_u_grid=None,  # 新增参数：强制指定U轴网格线
-        override_v_grid=None,  # 新增参数：强制指定V轴网格线
+        override_u_grid: List[Tuple[float, BeamType]] = None,
+        override_v_grid: List[Tuple[float, BeamType]] = None,
+        hole_rect: Tuple[float, float, float, float] = None,  # (u_min, u_max, v_min, v_max)
+        mandatory_u_points: List[float] = None,
+        beam_only: bool = False,
     ):
         """
-        构建一个面的网格、梁和板。
-
-        Args:
-            u_beam_logic: 沿着U方向走的梁属于什么类型? (MAIN / SECONDARY / FRAME_GRID)
-            v_beam_logic: 沿着V方向走的梁属于什么类型?
-            virtual_beam: 虚拟梁（应对左右端盖不需要布置支撑梁但是划分网格时需要与上下面协同）
+        构建面，支持定义空洞 (Hole) 以便拼接子结构。
+        hole_rect: 定义在局部(u, v)坐标系下的矩形范围，范围内的元素将不生成。
         """
-
-        # 1. 生成网格线坐标和该线对应的“正交梁类型”
-        # 注意：这里有点绕。
-        # 如果 u_beam_logic 是 MAIN，意味着沿着 U 轴画的线是主梁。
-        # 这些线是分布在 V 轴上的。所以我们需要计算 V 轴上的分割点，并标记这些点引出的 U 向线是 MAIN。
-
-        # V轴上的点 (决定 U方向梁的位置)
         if override_v_grid is not None:
             v_lines = override_v_grid
         else:
             v_lines = self._calculate_grid_lines(v_len, u_beam_logic)
 
-        # U轴上的点 (决定 V方向梁的位置)
         if override_u_grid is not None:
             u_lines = override_u_grid
         else:
-            u_lines = self._calculate_grid_lines(u_len, v_beam_logic)
+            # 这里传入强制点，确保主结构网格在Extension边界处断开/生成节点
+            u_lines = self._calculate_grid_lines(u_len, v_beam_logic, mandatory_points=mandatory_u_points)
 
-        # 2. 网格生成 (双重循环)
-        # i 对应 U 轴索引, j 对应 V 轴索引
+        # 辅助函数: 检查线段或区域是否在洞内
+        def is_in_hole(u1, v1, u2, v2):
+            if not hole_rect:
+                return False
+            h_u_min, h_u_max, h_v_min, h_v_max = hole_rect
+            # 简单的全包含检测 (容差 1e-3)
+            tol = 1e-3
+            # 检查中心点是否在洞内
+            c_u, c_v = (u1 + u2) / 2, (v1 + v2) / 2
+            in_u = (c_u > h_u_min + tol) and (c_u < h_u_max - tol)
+            in_v = (c_v > h_v_min + tol) and (c_v < h_v_max - tol)
+            return in_u and in_v
+
+        # 2. 网格生成循环
         for i in range(len(u_lines)):
             for j in range(len(v_lines)):
-                # 当前节点
-                u_curr, type_v_beam_here = u_lines[i]  # U坐标, 以及在此处沿着V方向走的梁的类型
-                v_curr, type_u_beam_here = v_lines[j]  # V坐标, 以及在此处沿着U方向走的梁的类型
+                u_curr, type_v_beam_here = u_lines[i]
+                v_curr, type_u_beam_here = v_lines[j]
 
-                # 计算绝对坐标
                 pos = np.array(origin) + u_curr * np.array(u_vec) + v_curr * np.array(v_vec)
                 node_id = self.node_manager.get_or_create(*pos)
 
-                # 生成向右的梁 (U-Direction Beam) -> 连接 (i, j) 和 (i+1, j)
-                # 这根梁的类型由它所在的 V 坐标 (type_u_beam_here) 决定
+                # --- 生成 U方向梁 ---
                 if i < len(u_lines) - 1:
                     u_next = u_lines[i + 1][0]
-                    pos_next = np.array(origin) + u_next * np.array(u_vec) + v_curr * np.array(v_vec)
-                    next_id = self.node_manager.get_or_create(*pos_next)
+                    # 检查是否在洞内，在洞内则跳过
+                    if not is_in_hole(u_curr, v_curr, u_next, v_curr):
+                        pos_next = np.array(origin) + u_next * np.array(u_vec) + v_curr * np.array(v_vec)
+                        next_id = self.node_manager.get_or_create(*pos_next)
 
-                    # 确定梁类型：如果是在边缘，强制为 FRAME，否则由 grid line 属性决定
-                    b_type = type_u_beam_here
-                    if math.isclose(v_curr, 0) or math.isclose(v_curr, v_len):
-                        b_type = BeamType.FRAME
+                        b_type = type_u_beam_here
+                        if math.isclose(v_curr, 0) or math.isclose(v_curr, v_len):
+                            b_type = BeamType.FRAME
 
-                    is_virtual = b_type == virtual_beam
-                    sec_prop = self._get_section_for_beam(b_type)
-                    self.beam_manager.add_or_update_beam(node_id, next_id, b_type, sec_prop, is_virtual, name)
+                        is_virtual = b_type == virtual_beam
+                        sec_prop = self._get_section_for_beam(b_type)
+                        self.beam_manager.add_or_update_beam(
+                            node_id, next_id, b_type, sec_prop, is_virtual, name
+                        )
 
-                # 生成向上的梁 (V-Direction Beam) -> 连接 (i, j) 和 (i, j+1)
-                # 这根梁的类型由它所在的 U 坐标 (type_v_beam_here) 决定
+                # --- 生成 V方向梁 ---
                 if j < len(v_lines) - 1:
                     v_next = v_lines[j + 1][0]
-                    pos_next = np.array(origin) + u_curr * np.array(u_vec) + v_next * np.array(v_vec)
-                    next_id = self.node_manager.get_or_create(*pos_next)
+                    # 检查是否在洞内
+                    if not is_in_hole(u_curr, v_curr, u_curr, v_next):
+                        pos_next = np.array(origin) + u_curr * np.array(u_vec) + v_next * np.array(v_vec)
+                        next_id = self.node_manager.get_or_create(*pos_next)
 
-                    b_type = type_v_beam_here
-                    if math.isclose(u_curr, 0) or math.isclose(u_curr, u_len):
-                        b_type = BeamType.FRAME
+                        b_type = type_v_beam_here
+                        if math.isclose(u_curr, 0) or math.isclose(u_curr, u_len):
+                            b_type = BeamType.FRAME
 
-                    is_virtual = b_type == virtual_beam
-                    sec_prop = self._get_section_for_beam(b_type)
-                    self.beam_manager.add_or_update_beam(node_id, next_id, b_type, sec_prop, is_virtual, name)
+                        is_virtual = b_type == virtual_beam
+                        sec_prop = self._get_section_for_beam(b_type)
+                        ext_x_offset = self.params.extension.offset_x
 
-                # 生成板 (Plate) -> (i,j), (i+1,j), (i+1,j+1), (i,j+1)
+                        if (
+                            name in ["top", "bottom"]
+                            and math.isclose(pos[0], ext_x_offset)
+                            and pos[1] > -1e-4
+                        ):
+                            self.beam_manager.add_or_update_beam(
+                                node_id, next_id, b_type, sec_prop, True, name
+                            )
+                        else:
+                            self.beam_manager.add_or_update_beam(
+                                node_id, next_id, b_type, sec_prop, is_virtual, name
+                            )
+
+                if beam_only:
+                    continue
+
+                # --- 生成 板 ---
                 if i < len(u_lines) - 1 and j < len(v_lines) - 1:
-                    # 获取四个角点
-                    n1 = node_id
-
-                    # (i+1, j)
                     u_next = u_lines[i + 1][0]
-                    p2 = np.array(origin) + u_next * np.array(u_vec) + v_curr * np.array(v_vec)
-                    n2 = self.node_manager.get_or_create(*p2)
-
-                    # (i+1, j+1)
                     v_next = v_lines[j + 1][0]
-                    p3 = np.array(origin) + u_next * np.array(u_vec) + v_next * np.array(v_vec)
-                    n3 = self.node_manager.get_or_create(*p3)
 
-                    # (i, j+1)
-                    p4 = np.array(origin) + u_curr * np.array(u_vec) + v_next * np.array(v_vec)
-                    n4 = self.node_manager.get_or_create(*p4)
+                    # 检查板中心是否在洞内
+                    if not is_in_hole(u_curr, v_curr, u_next, v_next):
+                        p2 = np.array(origin) + u_next * np.array(u_vec) + v_curr * np.array(v_vec)
+                        p3 = np.array(origin) + u_next * np.array(u_vec) + v_next * np.array(v_vec)
+                        p4 = np.array(origin) + u_curr * np.array(u_vec) + v_next * np.array(v_vec)
 
-                    self.add_plate([n1, n2, n3, n4], name)
+                        n2 = self.node_manager.get_or_create(*p2)
+                        n3 = self.node_manager.get_or_create(*p3)
+                        n4 = self.node_manager.get_or_create(*p4)
 
-    def _calculate_grid_lines(self, length: float, logic_type: str) -> List[Tuple[float, BeamType]]:
+                        self.add_plate([node_id, n2, n3, n4], name)
+
+    def _calculate_grid_lines(
+        self, length: float, logic_type: str, mandatory_points: List[float] = None
+    ) -> List[Tuple[float, BeamType]]:
         """
         根据逻辑计算轴上的分割点。
-        返回: List[(坐标, 穿过该坐标的正交梁类型)]
+        新增功能: mandatory_points 用于强制在特定位置生成节点 (通常为 FRAME 类型)
         """
-        lines = []
+        # 使用字典来去重: {position: beam_type}
+        points_map: Dict[float, BeamType] = {}
 
-        # 始终添加起点和终点 (FRAME)
-        # 注意：这里的 FRAME 是默认属性，如果它位于中间，可能会被后续逻辑覆盖，
-        # 但在这个函数里，我们主要标记“如果梁在这个位置生成，它是什么类型”
-
+        # --- 1.原有生成逻辑 (生成的点存入 points_map) ---
         if logic_type == "MAIN":
-            # 按间距均匀布置: 0, s, 2s, ... L
-            # 除了0和L是Frame，中间都是Main
             current = 0.0
             while current <= length + 1e-5:
+                # 边界强制为 FRAME
                 if math.isclose(current, 0) or math.isclose(current, length):
                     b_type = BeamType.FRAME
                 else:
                     b_type = BeamType.MAIN
-
-                lines.append((current, b_type))
+                points_map[current] = b_type
                 current += self.params.main_beam_spacing
 
-            # 修正：如果最后一个点没对齐 L，强制把 L 加进去作为 Frame
-            # (通常参数化建模要求 L 是间距的整数倍，或者最后一跨作为非标)
-            # 这里的逻辑是：如果 while 循环最后 current 超过了 L，
-            # 说明 L 处没有生成线。需要强制修正最后一个点或者添加 L。
-            # 简单处理：如果最后一个点不是 L，添加 L
-            if not math.isclose(lines[-1][0], length):
-                lines.append((length, BeamType.FRAME))
+            # 修正尾部: 确保 length 处有点
+            if not any(math.isclose(k, length) for k in points_map):
+                points_map[length] = BeamType.FRAME
             else:
-                # 确保最后一个是 Frame
-                lines[-1] = (length, BeamType.FRAME)
+                # 确保终点是 Frame
+                for k in points_map:
+                    if math.isclose(k, length):
+                        points_map[k] = BeamType.FRAME
 
         elif logic_type in ["SECONDARY", "FRAME_GRID"]:
+            # 确定分段数
             if math.isclose(length, self.params.width):
                 n_segs = self.params.num_secondary_width
             elif math.isclose(length, self.params.height):
                 n_segs = self.params.num_secondary_height
             else:
-                n_segs = 1  # 默认至少一段
+                n_segs = 1
 
             seg_len = length / n_segs
-
-            # 基础分段点
             base_points = [i * seg_len for i in range(n_segs + 1)]
 
             for i, pos in enumerate(base_points):
                 is_edge = i == 0 or i == n_segs
-                # 如果逻辑是 FRAME_GRID (端盖竖向梁)，则中间也是 FRAME
-                # 否则是 SECONDARY
                 if logic_type == "FRAME_GRID":
                     b_type = BeamType.FRAME
                 else:
                     b_type = BeamType.FRAME if is_edge else BeamType.SECONDARY
 
-                lines.append((pos, b_type))
+                points_map[pos] = b_type
 
-                # 处理支撑梁 (Brace)
-                # 在当前点和下一点之间加中点
+                # 支撑梁逻辑
                 if self.params.add_support_beam and i < n_segs:
                     mid_pos = pos + seg_len / 2
-                    lines.append((mid_pos, BeamType.BRACE))
-
-            # 按位置排序，以防 Brace 插入顺序问题
-            lines.sort(key=lambda x: x[0])
+                    if mid_pos not in points_map:
+                        points_map[mid_pos] = BeamType.BRACE
 
         else:
-            # 默认仅起点和终点
-            lines.append((0.0, BeamType.FRAME))
-            lines.append((length, BeamType.FRAME))
+            points_map[0.0] = BeamType.FRAME
+            points_map[length] = BeamType.FRAME
 
-        return lines
+        # --- 2. 注入强制点 (Extension 边界) ---
+        if mandatory_points:
+            for pt in mandatory_points:
+                # 检查点是否已存在 (容差判断)
+                found_key = None
+                for k in points_map:
+                    if math.isclose(k, pt, abs_tol=1e-4):
+                        found_key = k
+                        break
+
+                if found_key is not None:
+                    # 如果点已存在，强制升级为 FRAME (因为这是连接处，需要强梁/柱)
+                    points_map[found_key] = BeamType.FRAME
+                else:
+                    # 如果点不存在，插入新点，类型为 FRAME
+                    points_map[pt] = BeamType.FRAME
+
+        # --- 3. 排序并输出 ---
+        sorted_pos = sorted(points_map.keys())
+        return [(pos, points_map[pos]) for pos in sorted_pos]
+
+    def _cleanup_orphans(self):
+        """清理没有任何梁或板连接的孤立节点"""
+        used_nodes = set()
+
+        # 收集梁用到的节点
+        for beam in self.beams.values():
+            used_nodes.add(beam.start_node)
+            used_nodes.add(beam.end_node)
+
+        # 收集板用到的节点
+        for plate in self.plates.values():
+            for n in plate.nodes:
+                used_nodes.add(n)
+
+        # 找出所有现存节点
+        all_node_ids = list(self.points.keys())
+        deleted_count = 0
+
+        for nid in all_node_ids:
+            if nid not in used_nodes:
+                del self.points[nid]
+                deleted_count += 1
+
+        # print(f"Cleaned up {deleted_count} isolated nodes.")
 
     def add_plate(self, node_list: List[int], on_face: str):
         # calculate area of the plate
