@@ -5,83 +5,63 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
-from src.structure.section_library import SectionLibrary
-
-# 假设 structural_model.py 已经按照之前的讨论重构完成
+from src.structure.section_library import SectionLibrary, SectionType
 from src.structure.structural_model import Beam, BeamType, StructuralModel
-
-# Ensuring imports are relative to the 'src' directory structure.
-# This assumes that 'src' is part of PYTHONPATH or the execution context.
-from ..structure.structural_model import Beam as ModelBeam
-from ..structure.structural_model import Point as ModelPoint
-from ..structure.structural_model import StructuralModel
 
 
 class BeamAsNodeGraph:
-    """
-    Beam-as-Node 图表示法生成器。
-
-    图定义:
-    - 节点 (Nodes): 对应结构中的物理梁 (Beam)。
-    - 边 (Edges): 如果两根梁共享同一个物理连接点 (Point)，则它们之间存在边。
-    """
-
-    def __init__(self, model: StructuralModel):
+    def __init__(self, model: StructuralModel, current_pressure: float = 30000.0):
         self.model = model
         self.nodes: Dict[int, Beam] = self.model.beams
+        self.current_pressure = current_pressure  # 接收当前环境的压力值
 
-        # 预计算归一化因子 (基于模型边界框)
-        self.norm_scale = self._calculate_normalization_factors()
+        # 1. 动态计算更精准的归一化因子
+        self.norm_scale = self._calculate_dynamic_normalization()
 
-        # 邻接表缓存
+        # 2. 缓存邻接关系
         self.adj: Dict[int, List[int]] = defaultdict(list)
         self._build_adjacency()
 
-    def _calculate_normalization_factors(self) -> Dict[str, float]:
-        """计算用于特征归一化的缩放因子"""
-        # 几何归一化
-        L, W, H = self.model.params.length, self.model.params.width, self.model.params.height
-        max_dim = max(L, W, H)
-
-        # 截面属性归一化 (从SectionLibrary获取最大值)
-        # 注意：这里需要确保 section_lib 已经加载
+    def _calculate_dynamic_normalization(self) -> Dict[str, float]:
+        """动态扫描截面库，获取真实的物理属性边界"""
         lib = self.model.section_lib
-        # 简单遍历库中所有截面找最大值，或者硬编码一个较大的经验值
-        # 这里为了稳健性，使用硬编码的经验上限，防止除零
-        max_area = 0.01  # m^2 (100 cm^2)
-        max_I = 0.0005  # m^4 (50000 cm^4)
 
-        # 尝试从库中动态获取（如果库已填充）
-        try:
-            # 这是一个简化的获取逻辑，实际需遍历库
-            pass
-        except:
-            pass
+        max_area = 1e-8
+        max_I = 1e-8
+
+        # 遍历库中所有类型的截面
+        for sec_list in lib._sections.values():
+            for sec in sec_list:
+                if sec.area > max_area:
+                    max_area = sec.area
+                # 取强轴惯性矩作为基准，保守一点
+                if sec.Ix > max_I:
+                    max_I = sec.Ix
+
+        # 几何归一化：取包围盒最大边长
+        L, W, H = self.model.params.length, self.model.params.width, self.model.params.height
+        max_dim = max(L, W, H, 1.0)  # 防止为0
 
         return {
             "coord": max_dim,
-            "area": max_area,
-            "I": max_I,
-            "load": 10000.0,  # 10 kN 作为荷载归一化基准
-            "stress": 355.0,  # MPa, 屈服强度
-            "disp": W * 1000 / 250.0,  # 容许挠度作为基准
+            "area": max_area,  # 动态最大面积
+            "I": max_I,  # 动态最大惯性矩
+            "load": 50000.0,  # 假设最大设计气压 50kPa
+            "stress_ratio": 5.0,  # 截断阈值
+            "disp_ratio": 5.0,  # 截断阈值
         }
 
     def _build_adjacency(self):
-        """构建图的邻接关系：节点共享即相连"""
-        # 1. 建立 Node -> [BeamID, ...] 的映射
+        """构建邻接表 (不变)"""
         node_to_beams = defaultdict(list)
         for beam_id, beam in self.nodes.items():
             if beam.is_virtual:
-                continue  # 跳过虚拟梁（如果有）
-
+                continue
             node_to_beams[beam.start_node].append(beam_id)
             node_to_beams[beam.end_node].append(beam_id)
 
-        # 2. 构建 Beam -> [Beam, ...] 的邻接表
         for _, connected_beams in node_to_beams.items():
             if len(connected_beams) > 1:
-                # 全连接：同一个节点上的所有梁互为邻居
                 for i in range(len(connected_beams)):
                     for j in range(i + 1, len(connected_beams)):
                         b1, b2 = connected_beams[i], connected_beams[j]
@@ -89,114 +69,127 @@ class BeamAsNodeGraph:
                         self.adj[b2].append(b1)
 
     def to_pyg_data(self) -> Data:
-        """
-        转换为 PyTorch Geometric 的 Data 对象。
-        此函数应在每次 RL step 之后调用，以获取最新的状态（应力、位移）。
-        """
-        # 过滤掉虚拟梁，并确保 ID 排序一致以保证特征矩阵对应的物理意义不变
+        """生成增强版特征的 PyG Data"""
         valid_beam_ids = sorted([b.id for b in self.nodes.values() if not b.is_virtual])
         beam_id_to_idx = {bid: i for i, bid in enumerate(valid_beam_ids)}
 
-        num_nodes = len(valid_beam_ids)
-        if num_nodes == 0:
+        if not valid_beam_ids:
             return Data()
 
-        # --- 1. 构建节点特征矩阵 X ---
-        # 维度: [num_beams, feature_dim]
         node_features = []
+
+        # 预先获取库的大小，用于归一化 Index
+        lib = self.model.section_lib
+        counts = lib.section_counts
+        # 映射 BeamType 到对应的 SectionType
+        type_map = {
+            BeamType.FRAME: SectionType.BOX,
+            BeamType.MAIN: SectionType.H_MAIN,
+            BeamType.SECONDARY: SectionType.H_SEC,
+            BeamType.BRACE: SectionType.CHANNEL,
+        }
 
         for bid in valid_beam_ids:
             beam = self.nodes[bid]
 
-            # A. 几何特征 (6 dims)
-            # 质心坐标 (3) + 方向向量 (3)
-            p_start = self.model.points[beam.start_node]
-            p_end = self.model.points[beam.end_node]
-
-            center = (p_start.coordinates() + p_end.coordinates()) / 2.0
-            direction = p_end.coordinates() - p_start.coordinates()
+            # --- A. 几何特征 (6 dims) ---
+            p1 = self.model.points[beam.start_node].coordinates()
+            p2 = self.model.points[beam.end_node].coordinates()
+            center = (p1 + p2) / 2.0
+            direction = p2 - p1
             length = np.linalg.norm(direction)
             direction_norm = direction / (length + 1e-6)
 
             feat_geom = list(center / self.norm_scale["coord"]) + list(direction_norm)
 
-            # B. 拓扑/类型特征 (4 dims - One Hot)
-            # Frame, Main, Secondary, Brace
-            feat_type = [0, 0, 0, 0]
+            # --- B. 类型特征 (4 dims - One Hot) ---
+            feat_type = [0.0] * 4
             if beam.beam_type.value < 4:
-                feat_type[beam.beam_type.value] = 1
+                feat_type[beam.beam_type.value] = 1.0
 
-            # C. 物理/设计变量特征 (3 dims)
-            # Area, Ix, Iy (这是 RL Agent 改变截面索引后直接影响的物理量)
+            # --- C. 物理与状态特征 (改进核心) ---
             sec = beam.section
-            feat_phys = [
+
+            # 1. 归一化的物理属性 (相对整个库的强弱)
+            # Area/Max, I/Max. 这告诉智能体"我现在的绝对强度是多少"
+            feat_phys_abs = [
                 sec.area / self.norm_scale["area"],
                 sec.Ix / self.norm_scale["I"],
                 sec.Iy / self.norm_scale["I"],
             ]
 
-            # D. 响应特征 (4 dims) - RL 的关键观测值
-            # 假设 model 中已经有了分析结果，或者通过外部注入
-            # 这里需要你在 StructuralModel 或 Beam 类中维护一个 response 字段
-            # response 包含: max_stress_ratio, max_disp_ratio
-            # 如果还没有分析，默认为 0
+            # 2. [New] 归一化的索引位置 (Relative Index Position)
+            # 这告诉智能体"我还有多少升级/降级的空间"
+            # 如果 idx_norm 接近 0，智能体就能学会不要输出 -1 动作
+            s_type = type_map.get(beam.beam_type, SectionType.BOX)
+            max_idx = counts.get(s_type, 1) - 1
+            idx_norm = sec.idx / max(max_idx, 1)  # 0.0 ~ 1.0
+
+            # 3. [New] 全局荷载上下文
+            # 广播到每个节点，让智能体知道当前的恶劣程度
+            load_norm = self.current_pressure / self.norm_scale["load"]
+
+            feat_state = [idx_norm, load_norm]
+
+            # --- D. 响应特征 (4 dims) ---
             if beam.response:
-                stress_r = beam.response.max_stress_ratio
-                disp_r = beam.response.max_disp_ratio
+                # 使用 Tanh 或 Log 压缩，或者硬截断，防止梯度爆炸
+                sr = beam.response.max_stress_ratio
+                dr = beam.response.max_disp_ratio
 
-                # [Fix] 对输入特征进行 Log 缩放或 Clip 截断，防止数值爆炸
-                # 建议使用 Clip，限制在 [0, 5] 范围内，因为大于 5 已经是极度危险，
-                # 对神经网络来说 5 和 20 都是“非常大”，没必要保留那么大的方差。
-                stress_r_clamped = min(stress_r, 5.0)
-                disp_r_clamped = min(disp_r, 5.0)
+                # 特征工程：显式提供 Violation 信号
+                sr_viol = max(0.0, sr - 1.0)
+                dr_viol = max(0.0, dr - 1.0)
 
-                stress_viol = max(0, stress_r - 1.0)
-                disp_viol = max(0, disp_r - 1.0)
-
-                feat_resp = [stress_r_clamped, disp_r_clamped, stress_viol, disp_viol]
+                # 截断到 [0, 5]
+                feat_resp = [
+                    min(sr, self.norm_scale["stress_ratio"]),
+                    min(dr, self.norm_scale["disp_ratio"]),
+                    min(sr_viol, 4.0),  # 违约量
+                    min(dr_viol, 4.0),
+                ]
             else:
                 feat_resp = [0.0, 0.0, 0.0, 0.0]
 
-            # 合并所有特征
-            # Total dim = 6 + 4 + 3 + 4 = 17
-            node_features.append(feat_geom + feat_type + feat_phys + feat_resp)
+            # 合并: 6 + 4 + 3 + 2 + 4 = 19 dims
+            # 请记得修改 train_main.py 中的 NODE_DIM = 19
+            node_features.append(feat_geom + feat_type + feat_phys_abs + feat_state + feat_resp)
 
         x = torch.tensor(node_features, dtype=torch.float)
 
-        # --- 2. 构建边索引 Edge Index ---
-        # 维度: [2, num_edges]
+        # --- E. 边特征 (保持原样或增加角度特征) ---
+        # 简单起见，目前保持共享节点坐标即可。
+        # 如果后续想优化拓扑，可以在这里计算两根梁的夹角余弦值作为边特征。
         edge_indices = []
-        edge_attrs = []  # 可选：边特征（例如连接节点的类型：刚接/铰接，或坐标）
+        edge_attrs = []
 
         for bid_u in valid_beam_ids:
             if bid_u not in self.adj:
                 continue
-
             u_idx = beam_id_to_idx[bid_u]
 
             for bid_v in self.adj[bid_u]:
                 if bid_v not in beam_id_to_idx:
-                    continue  # 过滤掉可能的虚拟梁邻居
+                    continue
                 v_idx = beam_id_to_idx[bid_v]
 
-                # 添加有向边 (PyG 默认为有向，无向图需添加双向)
                 edge_indices.append([u_idx, v_idx])
 
-                # 边特征：共享节点的坐标 (归一化)
-                # 找到共享节点
-                beam_u = self.nodes[bid_u]
-                beam_v = self.nodes[bid_v]
-                shared_node_id = None
-                if beam_u.start_node in (beam_v.start_node, beam_v.end_node):
-                    shared_node_id = beam_u.start_node
+                # 边特征：共享节点坐标
+                b_u, b_v = self.nodes[bid_u], self.nodes[bid_v]
+                if b_u.start_node in (b_v.start_node, b_v.end_node):
+                    shared_p = self.model.points[b_u.start_node].coordinates()
                 else:
-                    shared_node_id = beam_u.end_node
+                    shared_p = self.model.points[b_u.end_node].coordinates()
 
-                p_shared = self.model.points[shared_node_id].coordinates()
-                edge_attrs.append(list(p_shared / self.norm_scale["coord"]))
+                edge_attrs.append(list(shared_p / self.norm_scale["coord"]))
 
-        edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
-        edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
+        if len(edge_indices) > 0:
+            edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+            edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+            edge_attr = torch.empty((0, 3), dtype=torch.float)
 
         return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
