@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from src.analysis.opensees_analysis import AnalysisResults, run_full_design_check
+from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver, ResultCombiner
 from src.analysis.unit import M2_TO_MM2, M4_TO_MM4, M_TO_MM
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import BeamType, StructuralModel, StructuralParameters
@@ -222,9 +222,55 @@ class ResultProcessor:
 
         L_ref_mm = self.model.params.width * M_TO_MM
 
-        # 规范限值: L/400
+        # 规范限值: L/250
         limit = L_ref_mm / 250.0
         return max_disp / limit, max_disp, max_disp_node
+
+
+def run_full_design_check(model: StructuralModel, internal_pressure_pa: float = 30000):
+    solver = OpenSeesSolver(model)
+
+    # 1. 运行三个独立工况
+    # DL: 自重 + 底部恒载 5kN/m2
+    res_dl = solver.run_static_case("DL")
+
+    # LL: 底部活载 2kN/m2
+    res_ll = solver.run_static_case("LL")
+
+    # PL: 气压荷载
+    res_pl = solver.run_static_case("PL", pressure_pa=internal_pressure_pa)
+
+    # 2. 结果组合
+    combiner = ResultCombiner()
+
+    # 1. 组合工况：1.3DL + 1.5LL + 1.25PL (承载能力极限状态)
+    res_strength = combiner.get_max_stress_combo(res_dl, res_ll, res_pl)
+
+    # 2. 组合工况：1.0DL + 1.0LL + 1.0PL (正常使用极限状态 - 挠度)
+    res_service = combiner.get_max_displacement_combo(res_dl, res_ll, res_pl)
+
+    # 3. 后处理校核
+    processor = ResultProcessor(model)
+
+    # 临时修正：我们用强度组合结果跑一次，主要看 stress
+    strength_check = processor.run_gb50017_check(res_strength)
+
+    # 用位移组合结果跑一次，主要看 deflection
+    service_check = processor.run_gb50017_check(res_service)
+
+    print("====== Design Check Report (GB50017) ======")
+    print(
+        f"Max Stress Ratio: {strength_check.max_stress_ratio:.3f} "
+        f"(Elem: {strength_check.critical_beam_id}/{strength_check.critical_plate_id}, "
+        f"Mode: {strength_check.failure_mode})"
+    )
+
+    print(f"Max Deflection Ratio: {service_check.max_deflection_ratio:.3f}")
+
+    is_safe = (strength_check.max_stress_ratio <= 1.0) and (service_check.max_deflection_ratio <= 1.0)
+    print(f"Design Status: {'PASSED' if is_safe else 'FAILED'}")
+
+    return is_safe
 
 
 if __name__ == "__main__":
