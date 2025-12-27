@@ -11,9 +11,12 @@ from src.utils.visualize import TrainingVisualizer
 def train():
     # --- 1. 配置参数 ---
     env_config = {}  # 可以在此传入默认参数
+    SEED = 42
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
 
     # 超参数
-    MAX_EPISODES = 1000  # 总训练回合数
+    MAX_EPISODES = 500  # 总训练回合数
     MAX_TIMESTEPS = 20  # 每个回合最大步数 (设计优化通常不需要太长步数)
     UPDATE_TIMESTEP = 10  # 每隔多少步更新一次网络
     LR = 0.0003  # 学习率
@@ -22,9 +25,9 @@ def train():
     EPS_CLIP = 0.2  # PPO 裁剪参数
 
     # 维度定义 (基于之前的 StructuralGraph)
-    NODE_DIM = 17  # 6(geom) + 4(type) + 3(phys) + 4(resp)
+    NODE_DIM = 19  # 6(geom) + 4(type) + 3(phys) + 4(resp)
     EDGE_DIM = 3  # 3(coord)
-    ACTION_DIM = 8  # 8个设计变量
+    ACTION_DIM = 4  # 8个设计变量
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on {device}")
@@ -32,8 +35,9 @@ def train():
     # --- 2. 初始化 ---
     env = StructuralEnv(env_config)
     agent = PPOAgent(NODE_DIM, EDGE_DIM, ACTION_DIM, LR, GAMMA, K_EPOCHS, EPS_CLIP, device)
+    # agent.load("results/ppo/1224_exp/ppo_940.pth")  # 可选：加载预训练模型
 
-    log_dir = "logs"
+    log_dir = "results/ppo/1227_step20_multiDiscrete"
     os.makedirs(log_dir, exist_ok=True)
     visualizer = TrainingVisualizer(log_dir)
 
@@ -61,6 +65,7 @@ def train():
 
             # 2. 环境执行动作
             next_state, reward, terminated, truncated, info = env.step(action_np)
+            terminated = terminated or t == MAX_TIMESTEPS
             done = terminated or truncated
 
             # --- 收集物理数据 ---
@@ -97,17 +102,17 @@ def train():
         if ep_masses:
             # 这里我们取本回合的平均值作为记录（也可以取最后一步的值）
             avg_mass = np.mean(ep_masses)
-            # 取本回合中出现过的最大风险值（保守估计）
-            max_stress = np.max(ep_stress_ratios)
-            max_disp = np.max(ep_disp_ratios)
+            # 取本回合中最后一步的应力和挠度比
+            last_stress = ep_stress_ratios[-1]
+            last_disp = ep_disp_ratios[-1]
 
             # 记录并绘图
             visualizer.log_episode(
                 episode=i_episode,
                 reward=current_ep_reward,
                 mass=avg_mass,
-                stress_ratio=max_stress,
-                disp_ratio=max_disp,
+                stress_ratio=last_stress,
+                disp_ratio=last_disp,
             )
 
             # 保存图像 (覆盖上一张，保持最新)
@@ -116,7 +121,7 @@ def train():
         print(f"Episode {i_episode} finished. Total Reward: {current_ep_reward:.2f}")
 
         # 保存模型
-        if i_episode % 20 == 0:
+        if i_episode % 50 == 0:
             agent.save(f"{log_dir}/ppo_{i_episode}.pth")
 
 

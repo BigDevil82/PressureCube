@@ -2,12 +2,13 @@ comtypes==1.1.10
 gym==0.26.2
 joblib==1.1.0
 matplotlib==3.5.1
-numpy==1.21.0
+numpy==1.23.5
 openseespy==3.4.0.8
 opsvis==1.2.28
 pandas==1.4.2
 PyYAML==6.0.2
 scikit_learn==1.0.2
+scipy==1.10.1
 torch==2.0.1+cu118
 torch_geometric==2.1.0.post1
 tqdm==4.64.0
