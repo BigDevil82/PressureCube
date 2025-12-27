@@ -35,7 +35,13 @@ class StructuralEnv(gym.Env):
         # 2: num_sec_height (int)
         # 3: add_support (bool > 0)
         # 4-7: section indices (int)
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(8,), dtype=np.float32)
+
+        # 4 个变量 (Frame, Main, Sec, Brace)，每个变量有 5 种可能的动作
+        # 动作编码: 0: -5(大减), 1: -1(微减), 2: 0(保持), 3: +1(微增), 4: +5(大增)
+        self.action_space = spaces.MultiDiscrete([5, 5, 5, 5])
+
+        # 定义动作映射字典 (提升运行效率)
+        self.delta_map = {0: -5, 1: -1, 2: 0, 3: 1, 4: 5}
 
         # 3. 定义观察空间
         # 由于 PyG 图结构大小可变，标准 Gym Space 难以描述。
@@ -50,20 +56,28 @@ class StructuralEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
+        # 随机初始化位置，增强鲁棒性
+        self.current_section_indices = np.array(
+            [
+                np.random.randint(0, self.section_lib.section_counts[t])
+                for t in [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
+            ]
+        )
+
         # 随机初始化或使用默认参数
         # 这里演示使用默认参数
         self.current_params = StructuralParameters(
-            length=12.0,
+            length=7.2,
             width=3.7,
             height=3.3,
-            main_beam_spacing=1.5,
+            main_beam_spacing=1.05,
             num_secondary_width=3,
             num_secondary_height=3,
             add_support_beam=True,
-            frame_section_index=0,
-            main_beam_section_index=0,
-            secondary_beam_section_index=0,
-            brace_section_index=0,
+            frame_section_index=self.current_section_indices[0],
+            main_beam_section_index=self.current_section_indices[1],
+            secondary_beam_section_index=self.current_section_indices[2],
+            brace_section_index=self.current_section_indices[3],
         )
 
         # 执行完整的建模-分析-构图流程
@@ -71,34 +85,43 @@ class StructuralEnv(gym.Env):
         return obs, info
 
     def step(self, action):
-        # 1. Action -> Parameters
-        self._apply_action_to_params(action)
+        # 1. 解析增量动作
+        deltas = [self.delta_map[a] for a in action]
 
-        # 2. Run Simulation
-        try:
-            obs, info = self._run_simulation()
+        # 应用增量
+        self.current_section_indices += np.array(deltas)
 
-            # 3. Calculate Reward
-            reward = self._calculate_reward(info)
+        # 3. 边界限制
+        counts = [
+            self.section_lib.section_counts[SectionType.BOX],
+            self.section_lib.section_counts[SectionType.H_MAIN],
+            self.section_lib.section_counts[SectionType.H_SEC],
+            self.section_lib.section_counts[SectionType.CHANNEL],
+        ]
+        # 注意: 索引最大值是 count - 1
+        max_indices = np.array(counts) - 1
+        self.current_section_indices = np.clip(self.current_section_indices, 0, max_indices)
 
-            # 4. Check Termination
-            terminated = False
-            truncated = False
+        # 4. 更新 Params 用于建模
+        self.current_params.frame_section_index = self.current_section_indices[0]
+        self.current_params.main_beam_section_index = self.current_section_indices[1]
+        self.current_params.secondary_beam_section_index = self.current_section_indices[2]
+        self.current_params.brace_section_index = self.current_section_indices[3]
 
-            # 可以在这里添加提前终止逻辑 (如结构极其不稳定导致分析失败)
-            if info["analysis_failed"]:
-                reward = -100.0  # 惩罚失败
-                terminated = True
+        # 5. 仿真
+        obs, info = self._run_simulation()
 
-        except Exception as e:
-            print(f"Simulation Error: {e}")
-            obs = None
-            reward = -100.0
-            terminated = True
-            truncated = False
-            info = {}
+        # 6. 奖励与早停
+        max_ratio = max(info["max_stress_ratio"], info["max_disp_ratio"])
+        terminated = False
 
-        return obs, reward, terminated, truncated, info
+        if max_ratio <= 1.0:
+            reward = 100.0
+            terminated = True  # 目标达成，立即停止
+        else:
+            reward = -10.0 * (max_ratio - 1.0) - 1.0
+
+        return obs, reward, terminated, False, info
 
     def _apply_action_to_params(self, action):
         """将 [-1, 1] 的动作映射回物理参数"""
@@ -109,10 +132,10 @@ class StructuralEnv(gym.Env):
             return min_v + (val + 1.0) / 2.0 * (max_v - min_v)
 
         # 1. 几何参数
-        self.current_params.main_beam_spacing = map_val(act[0], 0.75, 2.0)  # 0.75m ~ 2.0m
-        self.current_params.num_secondary_width = int(map_val(act[1], 1.0, 6.0))
-        self.current_params.num_secondary_height = int(map_val(act[2], 1.0, 6.0))
-        self.current_params.add_support_beam = act[3] > 0
+        # self.current_params.main_beam_spacing = map_val(act[0], 0.75, 1.5)  # 0.75m ~ 1.5m
+        # self.current_params.num_secondary_width = int(map_val(act[1], 2.0, 6.0))
+        # self.current_params.num_secondary_height = int(map_val(act[2], 2.0, 6.0))
+        # self.current_params.add_support_beam = act[3] > 0
 
         # 2. 截面索引 (根据库的大小动态映射)
         # 假设库已经按照面积排序，index越大截面越大
@@ -120,10 +143,10 @@ class StructuralEnv(gym.Env):
             count = self.section_lib.section_counts[type_str]
             return int(map_val(val, 0, count - 0.99))
 
-        self.current_params.frame_section_index = map_idx(act[4], SectionType.BOX)
-        self.current_params.main_beam_section_index = map_idx(act[5], SectionType.H_MAIN)
-        self.current_params.secondary_beam_section_index = map_idx(act[6], SectionType.H_SEC)
-        self.current_params.brace_section_index = map_idx(act[7], SectionType.CHANNEL)
+        self.current_params.frame_section_index = map_idx(act[0], SectionType.BOX)
+        self.current_params.main_beam_section_index = map_idx(act[1], SectionType.H_MAIN)
+        self.current_params.secondary_beam_section_index = map_idx(act[2], SectionType.H_SEC)
+        self.current_params.brace_section_index = map_idx(act[3], SectionType.CHANNEL)
 
     def _run_simulation(self):
         """核心流程：建模 -> 网格 -> 分析 -> 结果映射 -> 图生成"""
@@ -161,11 +184,11 @@ class StructuralEnv(gym.Env):
 
         # E. 生成图 (Observation)
         # StructuralGraph 会读取 beam.response 来构建特征
-        graph_gen = BeamAsNodeGraph(self.current_design_model)
+        graph_gen = BeamAsNodeGraph(self.current_design_model, current_pressure=30000.0)
         obs_data = graph_gen.to_pyg_data()
 
         # F. 收集 Info (用于 Reward)
-        total_mass = self.current_design_model.calculate_mass()  # 粗模型计算质量即可
+        total_mass = self.current_design_model.calculate_mass_kg()  # 粗模型计算质量即可
 
         # 统计整体违约情况
         max_stress_r = 0
@@ -181,6 +204,8 @@ class StructuralEnv(gym.Env):
             "max_disp_ratio": max_disp_r,
             "analysis_failed": False,
         }
+        if max_disp_r > 50:
+            self.log_state()
 
         return obs_data, info
 
@@ -237,37 +262,28 @@ class StructuralEnv(gym.Env):
         s_ratio = info["max_stress_ratio"]
         d_ratio = info["max_disp_ratio"]
 
-        # 1. 定义更合理的参考质量 (根据你的曲线，大约30吨是一个合理的上限)
-        # 这里的 ref_mass 应该是你希望优化的目标上限，或者归一化因子
-        MAX_MASS_EXPECTED = 40000.0
+        # 获取最大违约比
+        max_ratio = max(s_ratio, d_ratio)
 
-        # 2. 约束违背判断
-        violation = 0.0
-        is_unsafe = False
+        # 阶段 1: 寻找可行解 (Feasibility Stage)
+        if max_ratio > 1.0:
+            # 核心逻辑：离 1.0 越远，惩罚呈指数级增长
+            # 这样当 ratio 从 2.0 降到 1.5 时，奖励提升会非常显著，引导智能体快速下降
+            reward = -np.exp(0.5 * (max_ratio - 1.0)) * 10.0
 
-        # 使用线性+二次惩罚，但在数值上要给够压力
-        if s_ratio > 1.0:
-            violation += s_ratio - 1.0  # 线性部分
-            is_unsafe = True
+            # 可选：增加一个步数惩罚，逼迫它尽快找到解
+            reward -= 1.0
 
-        if d_ratio > 1.0:
-            violation += d_ratio - 1.0
-            is_unsafe = True
-
-        # 3. 分段奖励函数
-        if is_unsafe:
-            # 阶段一：如果不安全，唯一的任务就是降低违约比
-            # 奖励范围：负值。 违约越大，惩罚越重。
-            # 系数设大一点 (例如 10)，确保梯度足够大
-            # 加上一个固定的 penalty offset (-5)，防止智能体在临界点反复横跳
-            reward = -10.0 * violation - 5.0
+        # 阶段 2: 优化质量 (Optimization Stage)
         else:
-            # 阶段二：如果安全了，任务是最小化质量
-            # 奖励范围：(0, 1]
-            # 质量越小，奖励越高
-            reward = (MAX_MASS_EXPECTED - mass) / MAX_MASS_EXPECTED * 10.0  # 放大奖励以便于学习
-            # 加上一个正的 bonus，鼓励智能体保持在安全区
-            reward += 2.0
+            # 只有在满足约束后，才开始关心质量
+            # 给一个巨大的正向 Bias，告诉智能体"进入安全区是天大的好事"
+            reward = 50.0
+
+            # 质量奖励 (归一化到 0~20 左右)
+            # 假设 30吨是参考基准，越轻越好
+            mass_reward = (30000 - mass) / 1000.0
+            reward += mass_reward
 
         return reward
 

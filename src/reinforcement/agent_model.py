@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Normal
+from torch.distributions import Categorical, Normal
 from torch_geometric.data import Data
 from torch_geometric.nn import GATv2Conv, global_max_pool, global_mean_pool
 
@@ -11,7 +11,7 @@ class StructuralGNN(nn.Module):
     GNN 特征提取器 + Actor-Critic Heads
     """
 
-    def __init__(self, node_dim, edge_dim, action_dim, hidden_dim=128):
+    def __init__(self, node_dim, edge_dim, action_dim, action_options=5, hidden_dim=128):
         super(StructuralGNN, self).__init__()
 
         # --- 1. Graph Encoder (Shared Backbone) ---
@@ -23,10 +23,12 @@ class StructuralGNN(nn.Module):
         self.conv3 = GATv2Conv(hidden_dim, hidden_dim, heads=4, edge_dim=edge_dim, concat=False)
 
         # --- 2. Actor Head (Policy) ---
-        # 输入是 Global Pooling 后的图特征 (mean + max pooling = 2 * hidden_dim)
-        self.actor_fc1 = nn.Linear(hidden_dim * 2, hidden_dim)
-        self.actor_mean = nn.Linear(hidden_dim, action_dim)
-        self.actor_log_std = nn.Parameter(torch.zeros(1, action_dim))  # 可学习的标准差
+        # 我们有 4 个决策维度，每个维度有 5 个选项，所以总输出节点是 4 * 5 = 20
+        self.action_dim = action_dim  # 4
+        self.action_options = action_options  # 5
+
+        # 只需要一个全连接层输出 Logits，不需要 tanh，也不需要 log_std
+        self.actor_head = nn.Linear(hidden_dim * 2, action_dim * action_options)
 
         # --- 3. Critic Head (Value) ---
         self.critic_fc1 = nn.Linear(hidden_dim * 2, hidden_dim)
@@ -57,15 +59,19 @@ class StructuralGNN(nn.Module):
         """Actor: 获取动作分布并采样 (用于交互)"""
         x_graph = self.forward(data)
 
-        x = F.tanh(self.actor_fc1(x_graph))
-        action_mean = F.tanh(self.actor_mean(x))  # 映射到 [-1, 1]
+        # 获取 logits 并 reshape 成 [batch_size, 4, 5]
+        logits = self.actor_head(x_graph)
+        logits = logits.view(-1, self.action_dim, self.action_options)
 
-        action_log_std = self.actor_log_std.expand_as(action_mean)
-        action_std = torch.exp(action_log_std)
+        # 创建分类分布
+        dist = Categorical(logits=logits)
 
-        dist = Normal(action_mean, action_std)
-        action = dist.sample()
-        action_log_prob = dist.log_prob(action).sum(dim=1)
+        # 采样动作
+        action = dist.sample()  # Shape: [batch_size, 4]
+
+        # 计算 log_prob (Sum over the 4 dimensions)
+        # P(a1, a2, a3, a4) = P(a1) * P(a2) * ... => log_prob 是求和
+        action_log_prob = dist.log_prob(action).sum(dim=-1)
 
         return action, action_log_prob
 
@@ -73,18 +79,19 @@ class StructuralGNN(nn.Module):
         """Actor + Critic: 评估动作 (用于更新)"""
         x_graph = self.forward(data)
 
-        # Actor
-        x_a = F.tanh(self.actor_fc1(x_graph))
-        action_mean = F.tanh(self.actor_mean(x_a))
-        action_log_std = self.actor_log_std.expand_as(action_mean)
-        action_std = torch.exp(action_log_std)
+        logits = self.actor_head(x_graph)
+        logits = logits.view(-1, self.action_dim, self.action_options)
 
-        dist = Normal(action_mean, action_std)
-        action_log_probs = dist.log_prob(action).sum(dim=1)
-        dist_entropy = dist.entropy().sum(dim=1)
+        dist = Categorical(logits=logits)
 
-        # Critic
-        x_c = F.tanh(self.critic_fc1(x_graph))
+        # 计算 Log Prob
+        action_log_probs = dist.log_prob(action).sum(dim=-1)
+
+        # 计算熵 (用于鼓励探索)
+        dist_entropy = dist.entropy().sum(dim=-1)
+
+        # Critic Value
+        x_c = F.elu(self.critic_fc1(x_graph))  # 建议 Critic 加个激活函数
         state_values = self.critic_value(x_c)
 
         return action_log_probs, state_values, dist_entropy

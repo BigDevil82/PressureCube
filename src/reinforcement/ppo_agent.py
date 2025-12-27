@@ -46,7 +46,14 @@ class PPOAgent:
 
         # 转换 Tensor
         # 注意：Data 对象在 DataLoader 中会自动处理 batch
-        actions = torch.stack(actions).detach().to(self.device).squeeze(1)
+        # 【关键修改】Action 不再是 float，而是 long (int64)
+        # 在 Continuous 中我们用 torch.stack(...).squeeze(1)
+        # 在 MultiDiscrete 中，action shape 是 [batch_size, 4]
+        actions = torch.stack(actions).to(self.device).detach()
+        if actions.dim() > 2:
+            actions = actions.squeeze(1)
+        # 确保是 long 类型用于 Categorical 索引
+        actions = actions.long()
         old_log_probs = torch.stack(log_probs).detach().to(self.device).squeeze(1)
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
@@ -111,4 +118,5 @@ class PPOAgent:
         torch.save(self.policy.state_dict(), path)
 
     def load(self, path):
+        print("Loading PPO Agent from:", path)
         self.policy.load_state_dict(torch.load(path))
