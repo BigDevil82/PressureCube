@@ -45,7 +45,7 @@ class StructuralParameters:
     extension: ExtensionParameters = field(default_factory=ExtensionParameters)
 
     # 其他物理参数
-    plate_thickness: float = 0.01
+    plate_thickness: float = 0.005
 
     def __post_init__(self):
         if self.extension.active:
