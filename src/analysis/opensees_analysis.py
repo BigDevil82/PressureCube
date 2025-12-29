@@ -80,9 +80,11 @@ class OpenSeesSolver:
     施加指定工况的荷载，并返回原始结果。
     """
 
-    def __init__(self, model: StructuralModel):
+    def __init__(self, model: StructuralModel, enable_odb: bool = False):
         self.model = model
         self.node_map_mm: Dict[int, List[float]] = {}  # 缓存毫米单位坐标
+        self.enable_odb = enable_odb  # 是否启用 opstool ODB 记录
+        self.odb = None  # ODB 对象
 
         # 预计算：识别底部板 (用于施加 5kN/m2 和 2kN/m2)
         self.bottom_plate_ids = self._identify_bottom_plates()
@@ -306,7 +308,7 @@ class OpenSeesSolver:
                 ops.load(nid, fx, fy, fz, 0, 0, 0)
 
     def _apply_pressure_load_by_face(self, pressure_mpa: float):
-        """根据面板所在的 'face' 属性施加法向气压"""
+        """根据面板所在的 'face' 属性施加法向内压"""
         face_dirs = {
             "top": [0, 0, 1],
             "bottom": [0, 0, -1],
@@ -327,12 +329,12 @@ class OpenSeesSolver:
                 ops.load(nid, fx, fy, fz, 0, 0, 0)
 
     def run_static_case(
-        self, case_type: Literal["DL", "LL", "PL"], pressure_pa: float = 0
+        self, case_type: Literal["DL", "LL", "PL"], pressure_pa: float = 0, odb_tag: int = 1
     ) -> AnalysisResults:
         """
         核心对外接口：运行指定工况
         """
-        logger.info(f"Running Analysis Case: {case_type}")
+        logger.info(f"Running Analysis Case: {case_type} (odb_tag={odb_tag})")
 
         # 1. 重建模型 (确保纯净)
         self._setup_model_geometry()
@@ -369,18 +371,28 @@ class OpenSeesSolver:
             self._apply_distributed_plate_load(self.bottom_plate_ids, LOAD_LIVE_BOTTOM_KPA * KPA_TO_MPA)
 
         elif case_type == "PL":
-            # 气压荷载
+            # 内压荷载
             self._apply_pressure_load_by_face(pressure_pa / 1e6)  # Pa -> MPa
 
         # 4. 分析求解
         ops.system("BandSPD")
         ops.numberer("RCM")
         ops.constraints("Plain")
-        ops.integrator("LoadControl", 1.0)
+        ops.integrator("LoadControl", 1)
         ops.algorithm("Linear")
         ops.analysis("Static")
 
-        ok = ops.analyze(1)
+        # 如果启用 ODB，则分步记录
+        if self.enable_odb:
+            import opstool as opst
+
+            self.odb = opst.post.CreateODB(odb_tag=odb_tag, project_gauss_to_nodes="average")
+            ok = ops.analyze(1)
+            self.odb.fetch_response_step()
+            self.odb.save_response()
+        else:
+            ok = ops.analyze(1)
+
         if ok != 0:
             logger.error(f"Analysis Failed for case {case_type}")
             return None
@@ -419,17 +431,21 @@ class OpenSeesSolver:
 
         return res
 
-    def run_modal_case(self, num_modes: int) -> Optional[List[float]]:
+    def run_modal_case(self, num_modes: int, odb_tag: int = 1) -> Optional[List[float]]:
         """Performs modal analysis."""
-        logger.info(f"Running Modal Analysis for {num_modes} modes")
+        logger.info(f"Running Modal Analysis for {num_modes} modes (odb_tag={odb_tag})")
         self._setup_model_geometry()
         nodal_masses = self._calculate_node_mass()
         for node_id, mass in nodal_masses.items():
             ops.mass(node_id, mass, mass, mass, 0, 0, 0)
-        print(f"total mass(ton): {sum(nodal_masses.values()):.3f}")
-        print("total volume(m3): {:.3f}".format(sum(nodal_masses.values()) / RHO_STEEL_TONNE_MM3 * 1e-9))
 
         eigenvalues_omega_sq = ops.eigen(num_modes)
+
+        # 如果启用 ODB，记录模态结果
+        if self.enable_odb:
+            import opstool as opst
+
+            opst.post.save_eigen_data(odb_tag, num_modes)
 
         frequencies_hz = [np.sqrt(val) / (2 * np.pi) for val in eigenvalues_omega_sq]
         periods_s = [1 / f for f in frequencies_hz if f > 0]
@@ -460,10 +476,10 @@ if __name__ == "__main__":
 
     # 配置参数
     params = StructuralParameters(
-        length=12,
+        length=7.2,
         width=3.7,
         height=3.3,
-        main_beam_spacing=1.5,
+        main_beam_spacing=1.05,
         num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
         num_secondary_height=3,  # 高度方向分3段
         add_support_beam=True,  # 添加支撑梁
@@ -477,7 +493,7 @@ if __name__ == "__main__":
     model = StructuralModel(params, SectionLibrary())
     model.generate()
 
-    mesh_generator = MeshGenerator(model, 0.2)
+    mesh_generator = MeshGenerator(model, 0.5)
     model = mesh_generator.generate()
 
     solver = OpenSeesSolver(model)
