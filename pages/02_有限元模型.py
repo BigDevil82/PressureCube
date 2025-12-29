@@ -1,19 +1,14 @@
 import gc
-import io
 import os
 import shutil
-import sys
 import time
 
-import numpy as np
 import opstool.vis.plotly as opsvis
 import streamlit as st
-from matplotlib import pyplot as plt
 
-from src.analysis.opensees_analysis import OpenSeesSolver, ResultCombiner
+from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import DesignCheckResult, ResultProcessor
 from src.structure.mesh_generator import MeshGenerator
-from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import StructuralModel, StructuralParameters
 
 st.set_page_config(layout="wide", page_title="有限元模型")
@@ -233,28 +228,36 @@ if run_analysis_trigger:
         with st.spinner("🔄 正在运行静力分析..."):
             if load_case == "恒载 (DL)":
                 odb_tag = base_odb_tag + 1
-                results = solver.run_static_case("DL", odb_tag=odb_tag)
+                combo_dl = {"DL": 1, "LL": 0, "PL": 0}
+                results = solver.run_load_combination(combo_dl, odb_tag=odb_tag)
                 case_name = "恒载"
                 st.session_state["active_odb_tag"] = odb_tag
             elif load_case == "活载 (LL)":
                 odb_tag = base_odb_tag + 2
-                results = solver.run_static_case("LL", odb_tag=odb_tag)
+                combo_ll = {"DL": 0, "LL": 1, "PL": 0}
+                results = solver.run_load_combination(combo_ll, odb_tag=odb_tag)
                 case_name = "活载"
                 st.session_state["active_odb_tag"] = odb_tag
             elif load_case == "内压 (PL)":
                 odb_tag = base_odb_tag + 3
-                results = solver.run_static_case("PL", pressure_pa, odb_tag=odb_tag)
+                combo_pl = {"DL": 0, "LL": 0, "PL": 1}
+                results = solver.run_load_combination(combo_pl, pressure_pa=pressure_pa, odb_tag=odb_tag)
                 case_name = f"内压 ({pressure_pa/1000:.0f} kPa)"
                 st.session_state["active_odb_tag"] = odb_tag
-            else:  # 组合工况
-                res_dl = solver.run_static_case("DL", odb_tag=base_odb_tag + 1)
-                res_ll = solver.run_static_case("LL", odb_tag=base_odb_tag + 2)
-                res_pl = solver.run_static_case("PL", pressure_pa, odb_tag=base_odb_tag + 3)
-                results = ResultCombiner.get_max_stress_combo(res_dl, res_ll, res_pl)
+            elif load_case == "应力校核(1.3DL + 1.5LL + 1.25PL)":  # 组合工况
+                odb_tag = base_odb_tag + 4
+                combo_strength = {"DL": 1.3, "LL": 1.5, "PL": 1.25}  # 承载能力极限状态
+                results = solver.run_load_combination(
+                    combo_strength, pressure_pa=pressure_pa, odb_tag=odb_tag
+                )
                 case_name = "组合工况 (1.3DL + 1.5LL + 1.25PL)"
-                # 组合工况的可视化通常取其中一个主要工况，或者需要特殊处理
-                # 这里暂时指向 PL 工况的 ODB
-                st.session_state["active_odb_tag"] = base_odb_tag + 3
+                st.session_state["active_odb_tag"] = base_odb_tag + 4
+            elif load_case == "位移校核(1.0DL + 1.0LL + 1.0PL)":  # 服务极限状态
+                odb_tag = base_odb_tag + 5
+                combo_service = {"DL": 1.0, "LL": 1.0, "PL": 1.0}  # 服务极限状态
+                results = solver.run_load_combination(combo_service, pressure_pa=pressure_pa, odb_tag=odb_tag)
+                case_name = "组合工况 (1.0DL + 1.0LL + 1.0PL)"
+                st.session_state["active_odb_tag"] = base_odb_tag + 5
 
         if results is not None:
             st.session_state["analysis_results"] = results
@@ -273,7 +276,7 @@ if run_analysis_trigger:
 
     else:  # 模态分析
         with st.spinner("🔄 正在运行模态分析..."):
-            odb_tag = base_odb_tag + 5
+            odb_tag = base_odb_tag + 6
             modal_results = solver.run_modal_case(num_modes, odb_tag=odb_tag)
             if modal_results:
                 st.session_state["modal_results"] = modal_results

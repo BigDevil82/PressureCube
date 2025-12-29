@@ -328,6 +328,134 @@ class OpenSeesSolver:
             for nid in plate.nodes:
                 ops.load(nid, fx, fy, fz, 0, 0, 0)
 
+    def _apply_dead_load(self):
+        """施加恒载 (DL)"""
+        # A. 结构自重 (梁)
+        for bid, beam in self.model.beams.items():
+            if beam.is_virtual:
+                continue
+            sec = beam.section
+            # w = A * rho * g (N/mm)
+            w = (sec.area * RHO_STEEL_KG_M3 * G_M_S2) * N_M_TO_N_MM
+            ops.eleLoad("-ele", bid, "-type", "-beamUniform", 0, 0, -w)  # Global Z down
+
+        # B. 结构自重 (板) - 分配到节点
+        for pid, plate in self.model.plates.items():
+            plate_thk_m = self.model.params.plate_thickness
+            mass_kg = plate.area * plate_thk_m * RHO_STEEL_KG_M3
+            force_n = mass_kg * G_M_S2
+            fz = -force_n / len(plate.nodes)
+            for nid in plate.nodes:
+                ops.load(nid, 0, 0, fz, 0, 0, 0)
+
+        # C. 底部恒载 (5 kN/m2)
+        self._apply_distributed_plate_load(self.bottom_plate_ids, LOAD_DEAD_BOTTOM_KPA * KPA_TO_MPA)
+
+    def _apply_live_load(self):
+        """施加活载 (LL)"""
+        self._apply_distributed_plate_load(self.bottom_plate_ids, LOAD_LIVE_BOTTOM_KPA * KPA_TO_MPA)
+
+    def _apply_pressure_load(self, pressure_pa: float):
+        """施加内压 (PL)"""
+        self._apply_pressure_load_by_face(pressure_pa / 1e6)  # Pa -> MPa
+
+    def run_load_combination(self, factors: Dict[str, float], pressure_pa: float = 0, odb_tag: int = 1):
+        """
+        修正后的荷载组合计算
+        """
+        combo_name = "+".join([f"{v}{k}" for k, v in factors.items()])
+        logger.info(f"Running Load Combination: {combo_name}")
+
+        self._setup_model_geometry()  # 确保模型几何已建立/重置
+
+        # =========================================================
+        # 修正核心：通过 TimeSeries 的 -factor 参数控制系数
+        # =========================================================
+
+        # 1. 恒载 (DL)
+        # 创建一个专属于 DL 的 TimeSeries，直接带入系数
+        dl_factor = factors.get("DL", 0.0)
+        ops.timeSeries("Linear", 101, "-factor", dl_factor)
+        ops.pattern("Plain", 201, 101)  # 使用 tag 101
+        self._apply_dead_load()
+
+        # 2. 活载 (LL)
+        # 创建一个专属于 LL 的 TimeSeries，带入 LL 的系数
+        ll_factor = factors.get("LL", 0.0)
+        ops.timeSeries("Linear", 102, "-factor", ll_factor)
+        ops.pattern("Plain", 202, 102)  # 使用 tag 102
+        self._apply_live_load()
+
+        # 3. 内压 (PL)
+        pl_factor = factors.get("PL", 0.0)
+        if pressure_pa > 0 and pl_factor != 0:
+            # 创建专属于 PL 的 TimeSeries
+            ops.timeSeries("Linear", 103, "-factor", pl_factor)
+            ops.pattern("Plain", 203, 103)  # 使用 tag 103
+            self._apply_pressure_load(pressure_pa)
+
+        # =========================================================
+        # 分析设置
+        # =========================================================
+        ops.system("BandSPD")  # 或 BandGeneral, UmfPack
+        ops.numberer("RCM")
+        ops.constraints("Plain")
+
+        # 这里的 LoadControl 只负责让时间往前走 1.0
+        # 此时：
+        # DL 的实际倍数 = Time(1.0) * Factor(1.3) = 1.3
+        # LL 的实际倍数 = Time(1.0) * Factor(1.5) = 1.5
+        ops.integrator("LoadControl", 1.0)
+
+        ops.algorithm("Linear")
+        ops.analysis("Static")
+
+        # ... ODB 处理 ...
+        if self.enable_odb:
+            import opstool as opst
+
+            self.odb = opst.post.CreateODB(odb_tag=odb_tag, project_gauss_to_nodes="average")
+            ok = ops.analyze(1)  # 分析一步，时间从 0 -> 1
+            if ok == 0:
+                self.odb.fetch_response_step()
+                self.odb.save_response()
+        else:
+            ok = ops.analyze(1)
+
+        if ok != 0:
+            logger.error(f"Analysis Failed for load combination {combo_name}")
+            return None
+
+        return self._extract_results()
+
+    def _extract_results(self) -> AnalysisResults:
+        """从 OpenSees 模型中提取结果"""
+        res = AnalysisResults()
+        # (1) 提取位移
+        for nid in self.node_map_mm:
+            res.displacements[nid] = np.array(ops.nodeDisp(nid))
+        # (2) 提取梁单元内力
+        for bid in self.model.beams:
+            try:
+                f = ops.eleResponse(bid, "localForce")
+                if f:
+                    res.beam_forces[bid] = np.array(f)
+            except:
+                pass
+        # (3) 提取板单元内力
+        for pid in self.model.plates:
+            try:
+                s = ops.eleResponse(pid, "stresses")
+                if s:
+                    res.plate_stresses[pid] = np.array(s)
+            except:
+                pass
+        # (4) 提取支座反力
+        ops.reactions()
+        for nid in self.support_node_ids:
+            res.reactions[nid] = np.array(ops.nodeReaction(nid))
+        return res
+
     def run_static_case(
         self, case_type: Literal["DL", "LL", "PL"], pressure_pa: float = 0, odb_tag: int = 1
     ) -> AnalysisResults:
@@ -398,38 +526,7 @@ class OpenSeesSolver:
             return None
 
         # 5. 提取结果
-        res = AnalysisResults()
-
-        # (1) 提取位移
-        for nid in self.node_map_mm:
-            res.displacements[nid] = np.array(ops.nodeDisp(nid))
-
-        # (2) 提取梁单元内力 (Local System)
-        for bid in self.model.beams:
-            try:
-                # 'localForce' 返回局部坐标系下的力: [Fx, Fy, Fz, Mx, My, Mz] * 2 (两端)
-                f = ops.eleResponse(bid, "localForce")
-                if f:
-                    res.beam_forces[bid] = np.array(f)
-            except:
-                pass
-
-        # (3) 提取板单元内力合力 (Resultants)
-        for pid in self.model.plates:
-            try:
-                # 'stresses' for Shell typically returns [Nxx, Nyy, Nxy, Mxx, Myy, Mxy, Vxz, Vyz]
-                s = ops.eleResponse(pid, "stresses")
-                if s:
-                    res.plate_stresses[pid] = np.array(s)
-            except:
-                pass
-
-        # (4) 提取支座反力
-        ops.reactions()
-        for nid in self.support_node_ids:
-            res.reactions[nid] = np.array(ops.nodeReaction(nid))
-
-        return res
+        return self._extract_results()
 
     def run_modal_case(self, num_modes: int, odb_tag: int = 1) -> Optional[List[float]]:
         """Performs modal analysis."""

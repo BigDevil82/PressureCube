@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver, ResultCombiner
+from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver
 from src.analysis.unit import M2_TO_MM2, M4_TO_MM4, M_TO_MM
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import BeamType, StructuralModel, StructuralParameters
@@ -230,24 +230,13 @@ class ResultProcessor:
 def run_full_design_check(model: StructuralModel, internal_pressure_pa: float = 30000):
     solver = OpenSeesSolver(model)
 
-    # 1. 运行三个独立工况
-    # DL: 自重 + 底部恒载 5kN/m2
-    res_dl = solver.run_static_case("DL")
+    # 1. 定义荷载组合
+    combo_strength = {"DL": 1.3, "LL": 1.5, "PL": 1.25}  # 承载能力极限状态
+    combo_service = {"DL": 1.0, "LL": 1.0, "PL": 1.0}  # 正常使用极限状态
 
-    # LL: 底部活载 2kN/m2
-    res_ll = solver.run_static_case("LL")
-
-    # PL: 气压荷载
-    res_pl = solver.run_static_case("PL", pressure_pa=internal_pressure_pa)
-
-    # 2. 结果组合
-    combiner = ResultCombiner()
-
-    # 1. 组合工况：1.3DL + 1.5LL + 1.25PL (承载能力极限状态)
-    res_strength = combiner.get_max_stress_combo(res_dl, res_ll, res_pl)
-
-    # 2. 组合工况：1.0DL + 1.0LL + 1.0PL (正常使用极限状态 - 挠度)
-    res_service = combiner.get_max_displacement_combo(res_dl, res_ll, res_pl)
+    # 2. 直接运行荷载组合分析
+    res_strength = solver.run_load_combination(combo_strength, pressure_pa=internal_pressure_pa)
+    res_service = solver.run_load_combination(combo_service, pressure_pa=internal_pressure_pa)
 
     # 3. 后处理校核
     processor = ResultProcessor(model)
@@ -278,20 +267,24 @@ if __name__ == "__main__":
 
     # 配置参数
     params = StructuralParameters(
-        length=12.0,  # 10米长
-        width=3.7,  # 3米宽
-        height=3.3,  # 3米高
-        main_beam_spacing=2,  # 主梁每1.5米一道
-        num_secondary_width=1,  # 宽度方向分3段 (2条中间次梁)
-        num_secondary_height=1,  # 高度方向分3段
-        add_support_beam=False,  # 添加支撑梁
+        length=8,
+        width=3.7,
+        height=3.3,
+        main_beam_spacing=1.05,
+        num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
+        num_secondary_height=3,  # 高度方向分3段
+        add_support_beam=True,  # 添加支撑梁
+        frame_section_index=0,
+        main_beam_section_index=0,
         secondary_beam_section_index=0,
+        brace_section_index=0,
+        plate_thickness=0.005,
     )
 
     model = StructuralModel(params, SectionLibrary())
     model.generate()
 
-    mesh_generator = MeshGenerator(model, 0.2)
+    mesh_generator = MeshGenerator(model, 0.3)
     model = mesh_generator.generate()
 
     run_full_design_check(model, internal_pressure_pa=30000)
