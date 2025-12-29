@@ -3,6 +3,7 @@ results/
 paper_draft
 tests/
 deprecated/
+.opstool.output/
 
 # Python
 __pycache__/
