@@ -378,7 +378,7 @@ if st.session_state["analysis_done"]:
                 st.info("💡 显示结构变形...")
                 fig = opsvis.plot_nodal_responses(
                     odb_tag=active_tag,
-                    slides=True,
+                    slides=False,
                     defo_scale="auto",
                     resp_type="disp",
                     resp_dof=["UX", "UY", "UZ"],
@@ -389,14 +389,20 @@ if st.session_state["analysis_done"]:
             elif vis_option == "壳应力云图":
                 st.info(f"💡 显示 {stress_comp} 应力云图...")
                 opsvis.set_plot_props(cmap="plasma", point_size=0, window_size=(800, 800))
-
+                stress_comp_map = {
+                    "σ11": "sigma11",
+                    "σ22": "sigma22",
+                    "σ12": "sigma12",
+                    "σ23": "sigma23",
+                    "σ13": "sigma13",
+                }
                 fig = opsvis.plot_unstruct_responses(
                     odb_tag=active_tag,
                     slides=False,
                     step="absMax",
                     ele_type="Shell",
                     resp_type="stressesAtNodes",
-                    resp_dof=stress_comp,
+                    resp_dof=stress_comp_map[stress_comp],
                     unit_symbol="MPa",
                 )
                 st.plotly_chart(fig)
