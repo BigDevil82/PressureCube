@@ -56,7 +56,6 @@ networkx==3.6.1
 numcodecs==0.16.5
 numpy==2.4.0
 openseespy==3.7.1.2
-openseespywin==3.7.1.2
 opstool==1.0.24
 packaging==25.0
 pandas==2.3.3
