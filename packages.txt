@@ -8,3 +8,4 @@ libxcursor1
 libxft2
 libxinerama1
 libxi6
+tk
