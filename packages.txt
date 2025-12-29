@@ -1,5 +1,10 @@
+libgfortran5
 libblas3
 liblapack3
-libgfortran5
-libglu1-mesa
 libgl1
+libglu1-mesa
+libxrender1
+libxcursor1
+libxft2
+libxinerama1
+libxi6
