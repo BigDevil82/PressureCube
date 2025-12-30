@@ -104,7 +104,16 @@ with st.sidebar:
 
     if analysis_type == "静力分析":
         load_case = st.selectbox(
-            "荷载工况", ["恒载 (DL)", "活载 (LL)", "内压 (PL)", "组合工况"], index=2, key="load_case"
+            "荷载工况",
+            [
+                "恒载 (DL)",
+                "活载 (LL)",
+                "内压 (PL)",
+                "应力校核(1.3DL + 1.5LL + 1.25PL)",
+                "位移校核(1.0DL + 1.0LL + 1.0PL)",
+            ],
+            index=2,
+            key="load_case",
         )
     else:
         num_modes = st.slider("模态数量", 1, 10, 6, 1, key="num_modes")
@@ -143,7 +152,7 @@ with col1:
     section_info = {}
     for beam in model.beams.values():
         if not beam.is_virtual and beam.beam_type not in section_info:
-            section_info[beam.beam_type] = beam.section
+            section_info[beam.beam_type.value] = beam.section
 
     section_cols = st.columns(4)
     beam_type_names = {
@@ -154,12 +163,11 @@ with col1:
     }
     disp_order = [BeamType.FRAME, BeamType.MAIN, BeamType.SECONDARY, BeamType.BRACE]
 
-    display_idx = 0
-    for beam_type in disp_order:
-        section = section_info.get(beam_type)
+    for i, beam_type in enumerate(disp_order):
+        section = section_info.get(beam_type.value)
         if section is None:
             continue
-        col_idx = display_idx % 4
+        col_idx = i % 4
         with section_cols[col_idx]:
             st.markdown(
                 f"""
@@ -172,7 +180,6 @@ with col1:
                 """,
                 unsafe_allow_html=True,
             )
-        display_idx += 1
 
     st.divider()
 
@@ -187,6 +194,14 @@ with col2:
 if run_analysis_trigger:
     with st.spinner("🔄 正在生成网格..."):
         # 网格细化
+        p = model.params
+        # print(f"模型参数: 长度={p.length}, 宽度={p.width}, 高度={p.height}")
+        # print(
+        #     f"Main beam Spacing={p.main_beam_spacing}, Num Sec Width={p.num_secondary_width}, Num Sec Height={p.num_secondary_height}, Add Support Beam={p.add_support_beam}"
+        # )
+        # print(
+        #     f"Frame Section Index={p.frame_section_index} Main Beam Section Index={p.main_beam_section_index}, Secondary Beam Section Index={p.secondary_beam_section_index} Brace Section Index={p.brace_section_index}"
+        # )
         mesh_generator = MeshGenerator(model, mesh_size)
         meshed_model = mesh_generator.generate()
         st.session_state["meshed_model"] = meshed_model
@@ -228,39 +243,53 @@ if run_analysis_trigger:
     st.session_state["odb_counter"] += 1
 
     if analysis_type == "静力分析":
-        with st.spinner("🔄 正在运行静力分析..."):
-            if load_case == "恒载 (DL)":
-                odb_tag = base_odb_tag + 1
-                combo_dl = {"DL": 1, "LL": 0, "PL": 0}
-                results = solver.run_load_combination(combo_dl, odb_tag=odb_tag)
-                case_name = "恒载"
-                st.session_state["active_odb_tag"] = odb_tag
-            elif load_case == "活载 (LL)":
-                odb_tag = base_odb_tag + 2
-                combo_ll = {"DL": 0, "LL": 1, "PL": 0}
-                results = solver.run_load_combination(combo_ll, odb_tag=odb_tag)
-                case_name = "活载"
-                st.session_state["active_odb_tag"] = odb_tag
-            elif load_case == "内压 (PL)":
-                odb_tag = base_odb_tag + 3
-                combo_pl = {"DL": 0, "LL": 0, "PL": 1}
-                results = solver.run_load_combination(combo_pl, pressure_pa=pressure_pa, odb_tag=odb_tag)
-                case_name = f"内压 ({pressure_pa/1000:.0f} kPa)"
-                st.session_state["active_odb_tag"] = odb_tag
-            elif load_case == "应力校核(1.3DL + 1.5LL + 1.25PL)":  # 组合工况
-                odb_tag = base_odb_tag + 4
-                combo_strength = {"DL": 1.3, "LL": 1.5, "PL": 1.25}  # 承载能力极限状态
-                results = solver.run_load_combination(
-                    combo_strength, pressure_pa=pressure_pa, odb_tag=odb_tag
-                )
-                case_name = "组合工况 (1.3DL + 1.5LL + 1.25PL)"
-                st.session_state["active_odb_tag"] = base_odb_tag + 4
-            elif load_case == "位移校核(1.0DL + 1.0LL + 1.0PL)":  # 服务极限状态
-                odb_tag = base_odb_tag + 5
-                combo_service = {"DL": 1.0, "LL": 1.0, "PL": 1.0}  # 服务极限状态
-                results = solver.run_load_combination(combo_service, pressure_pa=pressure_pa, odb_tag=odb_tag)
-                case_name = "组合工况 (1.0DL + 1.0LL + 1.0PL)"
-                st.session_state["active_odb_tag"] = base_odb_tag + 5
+        for _ in range(3):
+            try:
+                with st.spinner("🔄 正在运行静力分析..."):
+                    if load_case == "恒载 (DL)":
+                        odb_tag = base_odb_tag + 1
+                        combo_dl = {"DL": 1, "LL": 0, "PL": 0}
+                        results = solver.run_load_combination(combo_dl, odb_tag=odb_tag)
+                        case_name = "恒载"
+                        st.session_state["active_odb_tag"] = odb_tag
+                    elif load_case == "活载 (LL)":
+                        odb_tag = base_odb_tag + 2
+                        combo_ll = {"DL": 0, "LL": 1, "PL": 0}
+                        results = solver.run_load_combination(combo_ll, odb_tag=odb_tag)
+                        case_name = "活载"
+                        st.session_state["active_odb_tag"] = odb_tag
+                    elif load_case == "内压 (PL)":
+                        odb_tag = base_odb_tag + 3
+                        combo_pl = {"DL": 0, "LL": 0, "PL": 1}
+                        results = solver.run_load_combination(
+                            combo_pl, pressure_pa=pressure_pa, odb_tag=odb_tag
+                        )
+                        case_name = f"内压 ({pressure_pa/1000:.0f} kPa)"
+                        st.session_state["active_odb_tag"] = odb_tag
+                    elif load_case == "应力校核(1.3DL + 1.5LL + 1.25PL)":  # 组合工况
+                        odb_tag = base_odb_tag + 4
+                        combo_strength = {"DL": 1.3, "LL": 1.5, "PL": 1.25}  # 承载能力极限状态
+                        results = solver.run_load_combination(
+                            combo_strength, pressure_pa=pressure_pa, odb_tag=odb_tag
+                        )
+                        case_name = "组合工况 (1.3DL + 1.5LL + 1.25PL)"
+                        st.session_state["active_odb_tag"] = base_odb_tag + 4
+                    elif load_case == "位移校核(1.0DL + 1.0LL + 1.0PL)":  # 服务极限状态
+                        odb_tag = base_odb_tag + 5
+                        combo_service = {"DL": 1.0, "LL": 1.0, "PL": 1.0}  # 服务极限状态
+                        results = solver.run_load_combination(
+                            combo_service, pressure_pa=pressure_pa, odb_tag=odb_tag
+                        )
+                        case_name = "组合工况 (1.0DL + 1.0LL + 1.0PL)"
+                        st.session_state["active_odb_tag"] = base_odb_tag + 5
+                break  # 成功则跳出重试循环
+            except PermissionError:
+                time.sleep(0.5)  # 等待后重试
+                gc.collect()
+            except Exception as e:
+                st.error(f"❌ 分析过程中出现错误: {str(e)}")
+                results = None
+                break
 
         if results is not None:
             st.session_state["analysis_results"] = results
