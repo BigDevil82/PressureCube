@@ -51,27 +51,110 @@ st.markdown(
 
 st.title("🏗️ 模块化舱体结构参数化生成")
 
+# --- 初始化默认参数 ---
+# 检查 session_state 中是否有之前保存的参数
+default_params = {
+    "L": 7.2,
+    "W": 3.7,
+    "H": 3.3,
+    "beam_spacing": 1.05,
+    "num_sec_w": 3,
+    "num_sec_h": 3,
+    "add_brace": True,
+    "frame_idx": 2,
+    "main_idx": 3,
+    "sec_idx": 2,
+    "brace_idx": 1,
+}
+
+if "current_params" in st.session_state:
+    saved_params = st.session_state["current_params"]
+    default_params["L"] = saved_params.length
+    default_params["W"] = saved_params.width
+    default_params["H"] = saved_params.height
+    default_params["beam_spacing"] = saved_params.main_beam_spacing
+    default_params["num_sec_w"] = saved_params.num_secondary_width
+    default_params["num_sec_h"] = saved_params.num_secondary_height
+    default_params["add_brace"] = saved_params.add_support_beam
+    default_params["frame_idx"] = saved_params.frame_section_index
+    default_params["main_idx"] = saved_params.main_beam_section_index
+    default_params["sec_idx"] = saved_params.secondary_beam_section_index
+    default_params["brace_idx"] = saved_params.brace_section_index
+
 # --- 1. 左侧边栏：控制参数 ---
 with st.sidebar:
     st.header("⚙️ 几何参数控制")
 
-    L = st.slider("舱体长度 (Length)", 5.0, 15.0, 7.2, 0.2)
-    W = st.slider("舱体宽度 (Width)", 2.0, 5.0, 3.7, 0.1)
-    H = st.slider("舱体高度 (Height)", 2.0, 4.0, 3.3, 0.1)
+    L = st.slider("舱体长度 (Length)", 5.0, 15.0, default_params["L"], 0.2, key="L")
+    W = st.slider("舱体宽度 (Width)", 2.0, 5.0, default_params["W"], 0.1, key="W")
+    H = st.slider("舱体高度 (Height)", 2.0, 4.0, default_params["H"], 0.1, key="H")
 
     st.divider()
 
     st.header("📐 拓扑与截面")
-    beam_spacing = st.slider("主梁间距", 0.5, 3.0, 1.05, 0.05)
-    num_sec_w = st.number_input("宽度方向次梁段数", min_value=1, max_value=5, value=3)
-    num_sec_h = st.number_input("高度方向次梁段数", min_value=1, max_value=5, value=3)
-    add_brace = st.checkbox("添加支撑梁 (Brace)", value=True)
+    beam_spacing = st.slider("主梁间距", 0.5, 3.0, default_params["beam_spacing"], 0.05, key="beam_spacing")
+    num_sec_w = st.number_input(
+        "宽度方向次梁段数", min_value=1, max_value=5, value=default_params["num_sec_w"], key="num_sec_w"
+    )
+    num_sec_h = st.number_input(
+        "高度方向次梁段数", min_value=1, max_value=5, value=default_params["num_sec_h"], key="num_sec_h"
+    )
+    add_brace = st.checkbox("添加支撑梁 (Brace)", value=default_params["add_brace"], key="add_brace")
+
+    st.subheader("🔩 截面选择")
+
+    # 初始化截面库
+    lib = SectionLibrary()
+
+    # 边框梁 (Frame) - 方钢
+    box_sections = lib._sections[SectionType.BOX]
+    box_options = [f"{i}: {s.name}" for i, s in enumerate(box_sections)]
+    frame_idx = st.selectbox(
+        "边框梁 (Frame)",
+        range(len(box_sections)),
+        format_func=lambda i: box_options[i],
+        index=default_params["frame_idx"],
+        key="frame_idx",
+    )
+
+    # 主梁 (Main) - H型钢主梁
+    h_main_sections = lib._sections[SectionType.H_MAIN]
+    h_main_options = [f"{i}: {s.name}" for i, s in enumerate(h_main_sections)]
+    main_idx = st.selectbox(
+        "主梁 (Main)",
+        range(len(h_main_sections)),
+        format_func=lambda i: h_main_options[i],
+        index=default_params["main_idx"],
+        key="main_idx",
+    )
+
+    # 次梁 (Secondary) - H型钢次梁
+    h_sec_sections = lib._sections[SectionType.H_SEC]
+    h_sec_options = [f"{i}: {s.name}" for i, s in enumerate(h_sec_sections)]
+    sec_idx = st.selectbox(
+        "次梁 (Secondary)",
+        range(len(h_sec_sections)),
+        format_func=lambda i: h_sec_options[i],
+        index=default_params["sec_idx"],
+        key="sec_idx",
+    )
+
+    # 支撑梁 (Brace) - C型钢
+    channel_sections = lib._sections[SectionType.CHANNEL]
+    channel_options = [f"{i}: {s.name}" for i, s in enumerate(channel_sections)]
+    brace_idx = st.selectbox(
+        "支撑梁 (Brace)",
+        range(len(channel_sections)),
+        format_func=lambda i: channel_options[i],
+        index=default_params["brace_idx"],
+        key="brace_idx",
+    )
 
     st.divider()
 
     st.header("👁️ 视图设置")
-    show_plates = st.checkbox("显示蒙皮 (Plates)", value=True)
-    show_nodes = st.checkbox("显示节点 (Nodes)", value=False)
+    show_plates = st.checkbox("显示蒙皮 (Plates)", value=True, key="show_plates")
+    show_nodes = st.checkbox("显示节点 (Nodes)", value=False, key="show_nodes")
 
     st.info("调整参数后，右侧模型将实时重构。")
 
@@ -85,18 +168,26 @@ params = StructuralParameters(
     num_secondary_width=num_sec_w,
     num_secondary_height=num_sec_h,
     add_support_beam=add_brace,
+    frame_section_index=frame_idx,
+    main_beam_section_index=main_idx,
+    secondary_beam_section_index=sec_idx,
+    brace_section_index=brace_idx,
 )
 
-lib = SectionLibrary()
-
+# lib 已在侧边栏初始化，直接使用
 model = StructuralModel(params, lib)
 model.generate()
 
-# 将模型保存到session state供其他页面使用
-if "current_model" not in st.session_state or st.session_state.get("params_changed", True):
-    st.session_state["current_model"] = model
-    st.session_state["current_params"] = params
-    st.session_state["params_changed"] = False
+# 将模型和截面库保存到session state供其他页面使用
+st.session_state["current_model"] = model
+st.session_state["current_params"] = params
+st.session_state["section_library"] = lib
+# st.session_state["section_indices"] = {
+#     "frame": frame_idx,
+#     "main": main_idx,
+#     "secondary": sec_idx,
+#     "brace": brace_idx,
+# }
 
 
 # --- 3. Plotly 可视化逻辑 ---

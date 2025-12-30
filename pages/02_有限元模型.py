@@ -9,7 +9,7 @@ import streamlit as st
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import DesignCheckResult, ResultProcessor
 from src.structure.mesh_generator import MeshGenerator
-from src.structure.structural_model import StructuralModel, StructuralParameters
+from src.structure.structural_model import BeamType, StructuralModel, StructuralParameters
 
 st.set_page_config(layout="wide", page_title="有限元模型")
 
@@ -139,15 +139,12 @@ with col1:
 
     # 截面信息展示
     st.subheader("📏 梁截面信息")
-    from src.structure.enums import BeamType
 
-    # 获取各类梁的代表性截面
     section_info = {}
     for beam in model.beams.values():
         if not beam.is_virtual and beam.beam_type not in section_info:
             section_info[beam.beam_type] = beam.section
 
-    # 显示截面参数
     section_cols = st.columns(4)
     beam_type_names = {
         BeamType.FRAME: "边框梁",
@@ -155,12 +152,27 @@ with col1:
         BeamType.SECONDARY: "次梁",
         BeamType.BRACE: "支撑梁",
     }
+    disp_order = [BeamType.FRAME, BeamType.MAIN, BeamType.SECONDARY, BeamType.BRACE]
 
-    for idx, (beam_type, section) in enumerate(section_info.items()):
-        col_idx = idx % 4
+    display_idx = 0
+    for beam_type in disp_order:
+        section = section_info.get(beam_type)
+        if section is None:
+            continue
+        col_idx = display_idx % 4
         with section_cols[col_idx]:
-            st.caption(f"**{beam_type_names.get(beam_type, str(beam_type))}**")
-            st.caption(f"类型: {section.name}")
+            st.markdown(
+                f"""
+                <div style="font-size:18px; font-weight:600; margin-bottom:4px;">
+                    {beam_type_names.get(beam_type, str(beam_type))}
+                </div>
+                <div style="font-size:16px; color:#333;">
+                    类型: {section.name}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        display_idx += 1
 
     st.divider()
 
@@ -170,15 +182,6 @@ with col2:
     st.metric("板单元", len(model.plates))
     st.metric("总质量", f"{model.calculate_mass_kg():.1f} kg")
 
-# # 尝试导入 opstool
-# try:
-#     import opstool as opst
-#     import opstool.vis.plotly as opsvis
-
-#     use_opstool = True
-# except ImportError:
-#     st.warning("⚠️ 未安装 opstool 库，将使用文本输出。建议运行: `pip install opstool`")
-#     use_opstool = False
 
 # 运行分析逻辑
 if run_analysis_trigger:
