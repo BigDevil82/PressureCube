@@ -11,7 +11,8 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.ga.steel_frame_ga import GAParameters, SteelFrameGA
+from src.heuristic.ga.steel_frame_ga import SteelFrameGA
+from src.structure.structural_model import StructuralParameters
 from src.utils.logger import Logger
 
 chinese_font = "SimSun"  # 宋体
@@ -19,379 +20,113 @@ english_font = "Times New Roman"
 plt.rcParams["font.sans-serif"] = [chinese_font, english_font]
 plt.rcParams["font.serif"] = [english_font, chinese_font]
 
-logger = Logger("GA_optimization.log")
-
-
-def convert_to_serializable(obj):
-    """转换numpy类型为Python原生类型以便JSON序列化"""
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, (np.integer, np.int32, np.int64)):
-        return int(obj)
-    elif isinstance(obj, (np.floating, np.float32, np.float64)):
-        return float(obj)
-    elif isinstance(obj, (np.bool_, np.bool8)):
-        return bool(obj)
-    elif isinstance(obj, dict):
-        return {k: convert_to_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        return [convert_to_serializable(item) for item in obj]
-    else:
-        return obj
-
-
-def save_section_details(optimizer: SteelFrameGA):
-    """保存详细的截面信息"""
-    best_solution = optimizer.best_chromosome
-    section_library = optimizer.section_library
-
-    section_details = {
-        "框架梁(方钢)": {
-            "index": best_solution.frame_section_index,
-            "section": (
-                section_library.get_section("方钢", best_solution.frame_section_index).name
-                if section_library.get_section("方钢", best_solution.frame_section_index)
-                else None
-            ),
-        },
-        "主梁(H型钢-主梁)": {
-            "index": best_solution.main_beam_section_index,
-            "section": (
-                section_library.get_section("H型钢-主梁", best_solution.main_beam_section_index).name
-                if section_library.get_section("H型钢-主梁", best_solution.main_beam_section_index)
-                else None
-            ),
-        },
-        "次梁(H型钢-次梁)": {
-            "index": best_solution.secondary_beam_section_index,
-            "section": (
-                section_library.get_section("H型钢-次梁", best_solution.secondary_beam_section_index).name
-                if section_library.get_section("H型钢-次梁", best_solution.secondary_beam_section_index)
-                else None
-            ),
-        },
-        "支撑梁(C型钢)": {
-            "index": best_solution.brace_section_index,
-            "section": (
-                section_library.get_section("C型钢", best_solution.brace_section_index).name
-                if section_library.get_section("C型钢", best_solution.brace_section_index)
-                else None
-            ),
-        },
-        "间距参数": {"主梁间距": best_solution.main_beam_spacing, "支撑梁间距": best_solution.brace_spacing},
-    }
-
-    serializable_details = convert_to_serializable(section_details)
-
-    return serializable_details
-
-
-def save_optimization_results(optimizer: SteelFrameGA, output_dir: str):
-    """保存优化结果"""
-    os.makedirs(output_dir, exist_ok=True)
-
-    # 保存最优解
-    best_solution = optimizer.best_chromosome
-    result_data = {
-        "timestamp": datetime.now().isoformat(),
-        "ga_parameters": {
-            "population_size": optimizer.ga_params.population_size,
-            "max_generations": optimizer.ga_params.max_generations,
-            "crossover_rate": optimizer.ga_params.crossover_rate,
-            "mutation_rate": optimizer.ga_params.mutation_rate,
-            "elite_ratio": optimizer.ga_params.elite_ratio,
-            "seed": optimizer.ga_params.seed,
-        },
-        "structural_params": optimizer.base_config["structural_params"],
-        "constraints": {
-            "max_stress": optimizer.constraints.max_stress,
-            "max_displacement": optimizer.constraints.max_displacement,
-        },
-        "best_solution": {
-            "frame_section_index": best_solution.frame_section_index,
-            "main_beam_section_index": best_solution.main_beam_section_index,
-            "secondary_beam_section_index": best_solution.secondary_beam_section_index,
-            "brace_section_index": best_solution.brace_section_index,
-            "main_beam_spacing": best_solution.main_beam_spacing,
-            "brace_spacing": best_solution.brace_spacing,
-            "fitness": best_solution.fitness,
-            "material_volume": best_solution.material_volume,
-            "max_stress": best_solution.max_stress,
-            "max_displacement": best_solution.max_displacement,
-            "is_feasible": best_solution.is_feasible,
-        },
-        "section_count": optimizer.section_counts,
-        "section_details": save_section_details(optimizer),
-        "optimization_history": {
-            "best_fitness": optimizer.best_fitness_history,
-            "avg_fitness": optimizer.avg_fitness_history,
-            "material_volume": optimizer.material_history,
-        },
-    }
-
-    # 保存JSON结果
-    result_file = os.path.join(output_dir, "optimization_results.json")
-    serializable_data = convert_to_serializable(result_data)
-
-    with open(result_file, "w", encoding="utf-8") as f:
-        json.dump(serializable_data, f, indent=2, ensure_ascii=False)
-
-    logger.info(f"优化结果已保存到: {result_file}")
-
-    # 绘制收敛曲线
-    plot_convergence_curve(optimizer, output_dir)
-
-
-def plot_convergence_curve(optimizer: SteelFrameGA, output_dir: str):
-    """绘制收敛曲线"""
-    plt.figure(figsize=(12, 8))
-
-    generations = range(1, len(optimizer.best_fitness_history) + 1)
-
-    plt.subplot(2, 1, 1)
-    plt.plot(generations, optimizer.best_fitness_history, "b-", linewidth=2, label="最优适应度")
-    plt.plot(generations, optimizer.avg_fitness_history, "r--", linewidth=1, label="平均适应度")
-    plt.xlabel("代数")
-    plt.ylabel("适应度")
-    plt.title("遗传算法收敛曲线")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
-    plt.subplot(2, 1, 2)
-    # 计算材料用量历史（从适应度反推）
-    material_volume_history = optimizer.material_history
-
-    plt.plot(generations, material_volume_history, "g-", linewidth=2, label="最优材料用量")
-    plt.xlabel("代数")
-    plt.ylabel("材料用量 (m³)")
-    plt.title("材料用量优化过程")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-
-    plot_file = os.path.join(output_dir, "convergence_curve.png")
-    plt.savefig(plot_file, dpi=300, bbox_inches="tight")
-    plt.close()
-
-    logger.info(f"收敛曲线已保存到: {plot_file}")
-
-
-def run_optimization_with_different_parameters():
-    """使用不同参数运行多次优化"""
-
-    # 定义不同的参数组合
-    # parameter_sets = [
-    #     {
-    #         "name": "小规模快速测试",
-    #         "params": GAParameters(
-    #             population_size=20,
-    #             max_generations=40,
-    #             crossover_rate=0.8,
-    #             mutation_rate=0.25,
-    #             elite_ratio=0.2,
-    #         ),
-    #     },
-    #     {
-    #         "name": "中等规模优化",
-    #         "params": GAParameters(
-    #             population_size=50,
-    #             max_generations=60,
-    #             crossover_rate=0.8,
-    #             mutation_rate=0.2,
-    #             elite_ratio=0.1,
-    #         ),
-    #     },
-    #     {
-    #         "name": "大规模深度优化",
-    #         "params": GAParameters(
-    #             population_size=100,
-    #             max_generations=100,
-    #             crossover_rate=0.8,
-    #             mutation_rate=0.05,
-    #             elite_ratio=0.05,
-    #         ),
-    #     },
-    # ]
-
-    parameter_sets = [
-        {
-            "name": "原型1-7.2m-30kPa",
-            "params": GAParameters(
-                population_size=50,
-                max_generations=60,
-                crossover_rate=0.8,
-                mutation_rate=0.2,
-                elite_ratio=0.1,
-            ),
-        },
-        {
-            "name": "原型2-9.6m-35kPa",
-            "params": GAParameters(
-                population_size=50,
-                max_generations=60,
-                crossover_rate=0.8,
-                mutation_rate=0.2,
-                elite_ratio=0.1,
-            ),
-        },
-        {
-            "name": "原型3-12m-38kPa",
-            "params": GAParameters(
-                population_size=50,
-                max_generations=60,
-                crossover_rate=0.8,
-                mutation_rate=0.2,
-                elite_ratio=0.1,
-            ),
-        },
-    ]
-
-    # 创建结果目录
-    base_output_dir = "results/GA_optimization"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    for i, param_set in enumerate(parameter_sets):
-        logger.info(f"\n{'='*50}")
-        logger.info(f"开始运行: {param_set['name']}")
-        logger.info(f"{'='*50}")
-
-        # 创建输出目录
-        output_dir = os.path.join(base_output_dir, f"{timestamp}_{i+1}_{param_set['name']}")
-
-        # 创建优化器
-        config_num = i + 1
-        optimizer = SteelFrameGA(
-            config_path=f"configs/config_{config_num}.yaml", ga_params=param_set["params"], logger=logger
-        )
-
-        # 记录开始时间
-        start_time = time.time()
-
-        try:
-            # 运行优化
-            best_solution = optimizer.run_optimization()
-
-            # 记录结束时间
-            end_time = time.time()
-            optimization_time = end_time - start_time
-
-            logger.info(f"优化完成！耗时: {optimization_time:.2f} 秒")
-
-            # 保存结果
-            save_optimization_results(optimizer, output_dir)
-
-            # 输出结果摘要
-            logger.info(f"\n--- {param_set['name']} 结果摘要 ---")
-            logger.info(f"最优适应度: {best_solution.fitness:.6f}")
-            logger.info(f"可行性: {best_solution.is_feasible}")
-            if best_solution.is_feasible:
-                logger.info(f"材料用量: {best_solution.material_volume:.6f} m³")
-                logger.info(f"最大应力: {best_solution.max_stress:.2f} MPa")
-                logger.info(f"最大位移: {best_solution.max_displacement:.2f} mm")
-            logger.info(f"优化时间: {optimization_time:.2f} 秒")
-
-        except Exception as e:
-            logger.error(f"优化过程中出现错误: {e}")
-            import traceback
-
-            traceback.print_exc()
-
-
-def run_single_optimization():
-    """运行单次优化"""
-    logger.info("开始钢框架结构优化...")
-
-    # 设置遗传算法参数
-    ga_params = GAParameters(
-        population_size=20, max_generations=50, crossover_rate=0.8, mutation_rate=0.25, elite_ratio=0.2
-    )
-
-    # 创建优化器
-    optimizer = SteelFrameGA(config_path="config.yaml", ga_params=ga_params, logger=logger)
-
-    # 显示优化设置
-    logger.info(f"种群大小: {ga_params.population_size}")
-    logger.info(f"最大代数: {ga_params.max_generations}")
-    logger.info(f"交叉率: {ga_params.crossover_rate}")
-    logger.info(f"变异率: {ga_params.mutation_rate}")
-    logger.info(f"精英比例: {ga_params.elite_ratio}")
-    logger.info(f"应力约束: ≤{optimizer.constraints.max_stress} MPa")
-    logger.info(f"位移约束: ≤{optimizer.constraints.max_displacement} mm")
-
-    # 记录开始时间
-    start_time = time.time()
-
-    try:
-        # 运行优化
-        best_solution = optimizer.run_optimization()
-
-        # 记录结束时间
-        end_time = time.time()
-        optimization_time = end_time - start_time
-
-        logger.info(f"优化完成！总耗时: {optimization_time:.2f} 秒")
-
-        # 创建输出目录并保存结果
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = f"results/GA_optimization/{timestamp}_single_run"
-        save_optimization_results(optimizer, output_dir)
-
-        # 输出最终结果
-        print("\n" + "=" * 60)
-        print("钢框架结构优化结果")
-        print("=" * 60)
-        print(f"优化时间: {optimization_time:.2f} 秒")
-        print(f"最优适应度: {best_solution.fitness:.6f}")
-        print(f"解的可行性: {'可行' if best_solution.is_feasible else '不可行'}")
-
-        if best_solution.is_feasible:
-            print(f"材料用量: {best_solution.material_volume:.6f} m³")
-            print(
-                f"最大应力: {best_solution.max_stress:.2f} MPa (约束: ≤{optimizer.constraints.max_stress} MPa)"
-            )
-            print(
-                f"最大位移: {best_solution.max_displacement:.2f} mm (约束: ≤{optimizer.constraints.max_displacement} mm)"
-            )
-
-        print("\n设计参数:")
-        print(f"框架梁截面索引: {best_solution.frame_section_index}")
-        print(f"主梁截面索引: {best_solution.main_beam_section_index}")
-        print(f"次梁截面索引: {best_solution.secondary_beam_section_index}")
-        print(f"支撑梁截面索引: {best_solution.brace_section_index}")
-        print(f"主梁间距: {best_solution.main_beam_spacing:.2f} m")
-        print(f"支撑梁间距: {best_solution.brace_spacing:.2f} m")
-        print(f"\n结果已保存到: {output_dir}")
-        print("=" * 60)
-
-        return best_solution
-
-    except Exception as e:
-        logger.error(f"优化过程中出现错误: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return None
-
 
 def main():
-    """主函数"""
-    print("钢框架结构遗传算法优化程序")
-    print("=" * 50)
-    # run_single_optimization()
+    # 1. 定义基础几何参数 (优化过程中不变量)
+    base_params = StructuralParameters(
+        length=7.2,
+        width=3.7,
+        height=3.3,
+        # 下面这些将被 GA 覆盖，给个初值即可
+        main_beam_spacing=0.7,
+        num_secondary_width=4,
+        num_secondary_height=4,
+        add_support_beam=True,
+        plate_thickness=0.005,  # 假定板厚不参与优化，或在 GA 中添加此基因
+    )
 
-    print("1. 运行单次优化")
-    print("2. 运行多参数对比优化")
+    print("=== Starting Structural Optimization ===")
+    start_time = time.time()
 
-    choice = input("\n请选择运行模式 (1-2): ").strip()
+    # 2. 初始化优化器
+    optimizer = SteelFrameGA(base_params)
 
-    if choice == "1":
-        run_single_optimization()
-    elif choice == "2":
-        run_optimization_with_different_parameters()
-    else:
-        print("无效选择，请输入1-2")
+    # 3. 运行遗传算法
+    best_solution = optimizer.evolve()
 
+    total_time = time.time() - start_time
+    print(f"\nOptimization Finished in {total_time:.1f}s")
+
+    # 4. 打印最终结果
+    print("\n====== Best Solution Found ======")
+    genes = best_solution.genes
+    print(f"Feasible: {best_solution.is_feasible}")
+    print(f"Mass: {best_solution.mass:.2f} kg")
+    print(f"Max Stress Ratio: {best_solution.max_stress_ratio:.3f}")
+    print(f"Max Deflection Ratio: {best_solution.max_deflection_ratio:.3f}")
+
+    print("-" * 30)
+    print("Design Variables:")
+    # 简单的索引解码
+    sec_types = ["Frame (Box)", "Main (H)", "Sec (H)", "Brace (C)"]
+    for i in range(4):
+        idx = int(genes[i])
+        # 这里为了演示简单，直接打印索引，实际可调用 optimizer.section_lib.get_section 获取名字
+        print(f"  {sec_types[i]} Index: {idx}")
+
+    # print(f"  Main Beam Spacing: {genes[4]:.3f} m")
+    # print(f"  Brace Spacing: {genes[5]:.3f} m (Approx)")
+
+    # 5. 简单绘图 (收敛曲线)
+    history = optimizer.best_history
+    fitness_vals = [ind.fitness for ind in history]
+    mass_vals = [ind.mass for ind in history]
+
+    fig, ax1 = plt.subplots()
+
+    color = "tab:red"
+    ax1.set_xlabel("Generation")
+    ax1.set_ylabel("Fitness", color=color)
+    ax1.plot(fitness_vals, color=color)
+    ax1.tick_params(axis="y", labelcolor=color)
+
+    ax2 = ax1.twinx()
+    color = "tab:blue"
+    ax2.set_ylabel("Mass (kg)", color=color)
+    ax2.plot(mass_vals, color=color, linestyle="--")
+    ax2.tick_params(axis="y", labelcolor=color)
+
+    plt.title("Optimization Convergence")
+    plt.tight_layout()
+    # plt.show()
+    save_dir = "results/GA_optimization"
+    time_stamp = datetime.now().strftime("%y%m%d_%H%M%S")
+    save_dir = os.path.join(save_dir, time_stamp)
+    os.makedirs(save_dir, exist_ok=True)
+    plt.savefig(os.path.join(save_dir, "convergence_curve.png"))
+
+    # save results to a json file
+    results = {
+        "feasible": best_solution.is_feasible,
+        "mass_kg": best_solution.mass,
+        "max_stress_ratio": best_solution.max_stress_ratio,
+        "max_deflection_ratio": best_solution.max_deflection_ratio,
+        "design_variables": {
+            "frame_section_index": int(genes[0]),
+            "main_beam_section_index": int(genes[1]),
+            "secondary_beam_section_index": int(genes[2]),
+            "brace_section_index": int(genes[3]),
+            # "main_beam_spacing": genes[4],
+            # "brace_spacing_approx": genes[5],
+        },
+        "base_parameters": {
+            "length_m": base_params.length,
+            "width_m": base_params.width,
+            "height_m": base_params.height,
+            "main_beam_spacing_m": base_params.main_beam_spacing,
+            "num_secondary_width": base_params.num_secondary_width,
+            "num_secondary_height": base_params.num_secondary_height,
+            "add_support_beam": base_params.add_support_beam,
+            "plate_thickness_m": base_params.plate_thickness,
+        },
+    }
+
+    with open(os.path.join(save_dir, "best_solution.json"), "w") as f:
+        json.dump(results, f, indent=4)
+
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
