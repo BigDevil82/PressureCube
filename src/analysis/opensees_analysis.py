@@ -576,14 +576,14 @@ if __name__ == "__main__":
         length=7.2,
         width=3.7,
         height=3.3,
-        main_beam_spacing=1.05,
+        main_beam_spacing=0.95,
         num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
         num_secondary_height=3,  # 高度方向分3段
         add_support_beam=True,  # 添加支撑梁
-        frame_section_index=0,
-        main_beam_section_index=0,
-        secondary_beam_section_index=0,
-        brace_section_index=0,
+        frame_section_index=3,
+        main_beam_section_index=10,
+        secondary_beam_section_index=9,
+        brace_section_index=16,
         plate_thickness=0.005,
     )
 
@@ -596,7 +596,9 @@ if __name__ == "__main__":
     solver = OpenSeesSolver(model)
 
     with Timer("OpenSees Analysis Cost: "):
-        res = solver.run_static_case("PL", pressure_pa=30000)
+        # res = solver.run_static_case("PL", pressure_pa=30000)
+        # res = solver.run_load_combination(factors={"DL": 1.3, "LL": 1.5, "PL": 1.25}, pressure_pa=30000)
+        res = solver.run_load_combination(factors={"DL": 1.0, "LL": 1.0, "PL": 1.0}, pressure_pa=30000)
 
     with Timer("Result Processing Cost: "):
         stat = ResultProcessor(model).run_gb50017_check(res)

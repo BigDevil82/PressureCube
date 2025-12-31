@@ -11,7 +11,7 @@ class StructuralGNN(nn.Module):
     GNN 特征提取器 + Actor-Critic Heads
     """
 
-    def __init__(self, node_dim, edge_dim, action_dim, action_options=5, hidden_dim=128):
+    def __init__(self, node_dim, edge_dim, action_dim, action_options=3, hidden_dim=128):
         super(StructuralGNN, self).__init__()
 
         # --- 1. Graph Encoder (Shared Backbone) ---
@@ -55,7 +55,7 @@ class StructuralGNN(nn.Module):
 
         return x_graph
 
-    def get_action(self, data):
+    def get_action(self, data, eval_mode=False):
         """Actor: 获取动作分布并采样 (用于交互)"""
         x_graph = self.forward(data)
 
@@ -63,15 +63,21 @@ class StructuralGNN(nn.Module):
         logits = self.actor_head(x_graph)
         logits = logits.view(-1, self.action_dim, self.action_options)
 
-        # 创建分类分布
-        dist = Categorical(logits=logits)
+        if eval_mode:
+            # 评估模式下，选择概率最大的动作
+            action = torch.argmax(logits, dim=-1)
+            dist = Categorical(logits=logits)
+            action_log_prob = dist.log_prob(action).sum(dim=-1)
+        else:
+            # 创建分类分布
+            dist = Categorical(logits=logits)
 
-        # 采样动作
-        action = dist.sample()  # Shape: [batch_size, 4]
+            # 采样动作
+            action = dist.sample()  # Shape: [batch_size, 4]
 
-        # 计算 log_prob (Sum over the 4 dimensions)
-        # P(a1, a2, a3, a4) = P(a1) * P(a2) * ... => log_prob 是求和
-        action_log_prob = dist.log_prob(action).sum(dim=-1)
+            # 计算 log_prob (Sum over the 4 dimensions)
+            # P(a1, a2, a3, a4) = P(a1) * P(a2) * ... => log_prob 是求和
+            action_log_prob = dist.log_prob(action).sum(dim=-1)
 
         return action, action_log_prob
 

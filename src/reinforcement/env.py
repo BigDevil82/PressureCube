@@ -3,12 +3,13 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver, ResultCombiner
+from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
 from src.graph.structural_graph import BeamAsNodeGraph
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary, SectionType
 from src.structure.structural_model import BeamResponse, BeamType, StructuralModel, StructuralParameters
+from src.utils.logger import Logger
 
 
 class StructuralEnv(gym.Env):
@@ -28,6 +29,11 @@ class StructuralEnv(gym.Env):
 
         # 1. 初始化资源库 (只加载一次)
         self.section_lib = SectionLibrary("src/data/steel_sections.json")
+        self.logger = Logger("structural_env.log", disable=False)
+        self.sec_counts = [
+            self.section_lib.section_counts[t]
+            for t in [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
+        ]
 
         # 2. 定义动作空间 (归一化到 [-1, 1] 以便于 RL 训练)
         # 0: main_spacing (float)
@@ -38,10 +44,10 @@ class StructuralEnv(gym.Env):
 
         # 4 个变量 (Frame, Main, Sec, Brace)，每个变量有 5 种可能的动作
         # 动作编码: 0: -5(大减), 1: -1(微减), 2: 0(保持), 3: +1(微增), 4: +5(大增)
-        self.action_space = spaces.MultiDiscrete([5, 5, 5, 5])
+        self.action_space = spaces.MultiDiscrete(self.sec_counts)
 
         # 定义动作映射字典 (提升运行效率)
-        self.delta_map = {0: -5, 1: -1, 2: 0, 3: 1, 4: 5}
+        self.delta_map = {0: -1, 1: 0, 2: 1}
 
         # 3. 定义观察空间
         # 由于 PyG 图结构大小可变，标准 Gym Space 难以描述。
@@ -52,36 +58,40 @@ class StructuralEnv(gym.Env):
         self.current_design_model = None
         self.current_fem_model = None
         self.last_results = None
+        self.prev_mass = None  # 新增：记录上一步的质量
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
         # 随机初始化位置，增强鲁棒性
-        self.current_section_indices = np.array(
-            [
-                np.random.randint(0, self.section_lib.section_counts[t])
-                for t in [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
-            ]
-        )
+        if np.random.rand() < 0.2:
+            self.current_section_indices = np.array([np.random.randint(0, c) for c in self.sec_counts])
+        else:
+            self.current_section_indices = np.array(self.sec_counts) - 1
 
-        # 随机初始化或使用默认参数
-        # 这里演示使用默认参数
+        # 随机初始化
         self.current_params = StructuralParameters(
-            length=7.2,
-            width=3.7,
-            height=3.3,
-            main_beam_spacing=1.05,
-            num_secondary_width=3,
-            num_secondary_height=3,
+            length=np.random.choice(np.arange(6.0, 12.0, 0.2)),
+            width=np.random.choice(np.arange(3.0, 4.5, 0.3)),
+            height=np.random.choice(np.arange(3.0, 4.5, 0.3)),
+            main_beam_spacing=0.7,
+            num_secondary_width=4,
+            num_secondary_height=4,
             add_support_beam=True,
             frame_section_index=self.current_section_indices[0],
             main_beam_section_index=self.current_section_indices[1],
             secondary_beam_section_index=self.current_section_indices[2],
             brace_section_index=self.current_section_indices[3],
         )
+        self.pressure = np.random.choice(np.arange(20000.0, 40000.0, 4000.0))
 
         # 执行完整的建模-分析-构图流程
         obs, info = self._run_simulation()
+        self.prev_mass = info["mass"]  # 初始化质量记录
+        self.stress_ratio_prev = info["max_stress_ratio"]
+        self.disp_ratio_prev = info["max_disp_ratio"]
+
+        self._calculate_volume_bounds()
         return obs, info
 
     def step(self, action):
@@ -112,16 +122,9 @@ class StructuralEnv(gym.Env):
         obs, info = self._run_simulation()
 
         # 6. 奖励与早停
-        max_ratio = max(info["max_stress_ratio"], info["max_disp_ratio"])
-        terminated = False
+        reward = self._calculate_reward(info)
 
-        if max_ratio <= 1.0:
-            reward = 100.0
-            terminated = True  # 目标达成，立即停止
-        else:
-            reward = -10.0 * (max_ratio - 1.0) - 1.0
-
-        return obs, reward, terminated, False, info
+        return obs, reward, False, False, info
 
     def _apply_action_to_params(self, action):
         """将 [-1, 1] 的动作映射回物理参数"""
@@ -163,28 +166,21 @@ class StructuralEnv(gym.Env):
         # C. OpenSees 分析
         solver = OpenSeesSolver(self.current_fem_model)
 
-        # 运行工况 (DL, LL, PL)
-        res_dl = solver.run_static_case("DL")
-        if res_dl is None:
-            return None, {"analysis_failed": True}
-        res_ll = solver.run_static_case("LL")
-        res_pl = solver.run_static_case("PL", pressure_pa=30000)
+        # 1. 定义荷载组合
+        combo_strength = {"DL": 1.3, "LL": 1.5, "PL": 1.25}  # 承载能力极限状态
+        combo_service = {"DL": 1.0, "LL": 1.0, "PL": 1.0}  # 正常使用极限状态
 
-        # 组合结果
-        combiner = ResultCombiner()
-        res_strength = combiner.get_max_stress_combo(res_dl, res_ll, res_pl)  # 1.3DL + ...
-        res_service = combiner.get_max_displacement_combo(res_dl, res_ll, res_pl)  # 1.0DL + ...
+        # 2. 直接运行荷载组合分析
+        res_strength = solver.run_load_combination(combo_strength, pressure_pa=self.pressure)
+        res_service = solver.run_load_combination(combo_service, pressure_pa=self.pressure)
 
         # D. 规范校核 (获取 Ratio)
-        # 我们需要一个稍作修改的 Processor，不仅返回 max，还能返回每个单元的 ratio
-        # 这里为了简化，我们假设 Processor 可以辅助计算，或者我们手动计算映射
-
         # 关键步骤：将 FEM 结果映射回 Design Model
         self._map_results_to_design(mesh_gen, res_strength, res_service)
 
         # E. 生成图 (Observation)
         # StructuralGraph 会读取 beam.response 来构建特征
-        graph_gen = BeamAsNodeGraph(self.current_design_model, current_pressure=30000.0)
+        graph_gen = BeamAsNodeGraph(self.current_design_model, current_pressure=self.pressure)
         obs_data = graph_gen.to_pyg_data()
 
         # F. 收集 Info (用于 Reward)
@@ -259,37 +255,88 @@ class StructuralEnv(gym.Env):
 
     def _calculate_reward(self, info):
         mass = info["mass"]
-        s_ratio = info["max_stress_ratio"]
-        d_ratio = info["max_disp_ratio"]
+        # 取最大的应力比或位移比
+        max_ratio = max(info["max_stress_ratio"], info["max_disp_ratio"])
 
-        # 获取最大违约比
-        max_ratio = max(s_ratio, d_ratio)
+        # 1. 归一化质量收益 (范围 0~1)
+        # 假设 max_volume 和 min_volume 已经计算好
+        # 我们希望质量越小，收益越大
+        mass_norm = (self.max_volume * 7850 - mass) / ((self.max_volume - self.min_volume) * 7850 + 1e-5)
+        # 限制在 [0, 1] 之间
+        reward_mass = np.clip(mass_norm, 0, 1)
 
-        # 阶段 1: 寻找可行解 (Feasibility Stage)
-        if max_ratio > 1.0:
-            # 核心逻辑：离 1.0 越远，惩罚呈指数级增长
-            # 这样当 ratio 从 2.0 降到 1.5 时，奖励提升会非常显著，引导智能体快速下降
-            reward = -np.exp(0.5 * (max_ratio - 1.0)) * 10.0
-
-            # 可选：增加一个步数惩罚，逼迫它尽快找到解
-            reward -= 1.0
-
-        # 阶段 2: 优化质量 (Optimization Stage)
+        # 2. 约束惩罚 (平滑惩罚)
+        # 如果 ratio <= 1.0，惩罚为 0
+        # 如果 ratio > 1.0，惩罚随违约程度线性或指数增长
+        if max_ratio <= 1.0:
+            penalty = 0.0
         else:
-            # 只有在满足约束后，才开始关心质量
-            # 给一个巨大的正向 Bias，告诉智能体"进入安全区是天大的好事"
-            reward = 50.0
+            # 惩罚系数 lambda，需要调试，通常建议 0.5 ~ 2.0 左右
+            # 让 agent 感觉到痛，但不要痛到梯度爆炸
+            # 线性惩罚: penalty = (max_ratio - 1.0) * 5.0
+            # 或者平方惩罚 (对大违约更敏感):
+            penalty = ((max_ratio - 1.0) ** 2) * 10.0
 
-            # 质量奖励 (归一化到 0~20 左右)
-            # 假设 30吨是参考基准，越轻越好
-            mass_reward = (30000 - mass) / 1000.0
-            reward += mass_reward
+        # 3. 组合奖励
+        # 基础奖励 1.0 是为了鼓励存活（可选）
+        # 核心逻辑： (省下的材料) - (违约惩罚)
+        total_reward = 1.0 + reward_mass - penalty
 
-        return reward
+        # 记录用于调试
+        self.logger.info(
+            f"Mass: {mass:.0f}, Ratio: {max_ratio:.2f} -> R_mass: {reward_mass:.2f}, Pen: {penalty:.2f}, Total: {total_reward:.2f}"
+        )
+
+        return total_reward
+
+    def _calculate_volume_bounds(self):
+        """预计算最大最小材料用量，用于归一化"""
+        # 最大体积：所有主次梁都用最大截面
+        params_max = StructuralParameters(
+            length=self.current_params.length,
+            width=self.current_params.width,
+            height=self.current_params.height,
+            main_beam_spacing=self.current_params.main_beam_spacing,
+            num_secondary_width=self.current_params.num_secondary_width,
+            num_secondary_height=self.current_params.num_secondary_height,
+            add_support_beam=self.current_params.add_support_beam,
+            frame_section_index=self.section_lib.section_counts[SectionType.BOX] - 1,
+            main_beam_section_index=self.section_lib.section_counts[SectionType.H_MAIN] - 1,
+            secondary_beam_section_index=self.section_lib.section_counts[SectionType.H_SEC] - 1,
+            brace_section_index=self.section_lib.section_counts[SectionType.CHANNEL] - 1,
+        )
+        model_max = StructuralModel(params_max, self.section_lib)
+        model_max.generate()
+        self.max_volume = model_max.calculate_mass_kg() / 7850
+
+        # 最小体积：所有主次梁都用最小截面
+        params_min = StructuralParameters(
+            length=self.current_params.length,
+            width=self.current_params.width,
+            height=self.current_params.height,
+            main_beam_spacing=self.current_params.main_beam_spacing,
+            num_secondary_width=self.current_params.num_secondary_width,
+            num_secondary_height=self.current_params.num_secondary_height,
+            add_support_beam=self.current_params.add_support_beam,
+            frame_section_index=0,
+            main_beam_section_index=0,
+            secondary_beam_section_index=0,
+            brace_section_index=0,
+        )
+        model_min = StructuralModel(params_min, self.section_lib)
+        model_min.generate()
+        self.min_volume = model_min.calculate_mass_kg() / 7850
+
+    def _calculate_normalized_volume(self, model_volume: float) -> float:
+        """计算归一化的材料用量"""
+        return (model_volume - self.min_volume) / (self.max_volume - self.min_volume)
 
     def log_state(self):
         p = self.current_params
         print(f"{'='*20} Current Design Parameters {'='*20}")
+        print(
+            f"Length: {p.length:.2f} m, Width: {p.width:.2f} m, Height: {p.height:.2f} m, Pressure: {self.pressure:.1f} Pa"
+        )
         print(
             f"{p.main_beam_spacing=:.3f} m, "
             f"{p.num_secondary_width=}, {p.num_secondary_height=}, "

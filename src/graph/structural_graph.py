@@ -46,7 +46,7 @@ class BeamAsNodeGraph:
             "coord": max_dim,
             "area": max_area,  # 动态最大面积
             "I": max_I,  # 动态最大惯性矩
-            "load": 50000.0,  # 假设最大设计气压 50kPa
+            "load": 40000.0,  # 假设最大设计内压 40kPa
             "stress_ratio": 5.0,  # 截断阈值
             "disp_ratio": 5.0,  # 截断阈值
         }

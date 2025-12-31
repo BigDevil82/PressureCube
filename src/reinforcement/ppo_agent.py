@@ -1,17 +1,17 @@
 import torch
 import torch.nn as nn
-from torch_geometric.loader import DataLoader
+from torch_geometric.data import Batch
 
 from src.reinforcement.agent_model import StructuralGNN
 
 
 class PPOAgent:
-    def __init__(self, node_dim, edge_dim, action_dim, lr, gamma, K_epochs, eps_clip, device):
+    def __init__(self, node_dim, edge_dim, action_dim, lr, gamma, K_epochs, eps_clip, batch_size, device):
         self.device = device
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs
-
+        self.batch_size = batch_size
         self.policy = StructuralGNN(node_dim, edge_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
         self.loss_fn = nn.MSELoss()
@@ -28,8 +28,7 @@ class PPOAgent:
         if len(self.buffer) == 0:
             return
 
-        # 1. 整理数据
-        # PyG 的 Data 对象不能直接 stack，需要用列表保存
+        # --- 1. 整理数据 (这部分保持不变) ---
         batched_data = []
         actions = []
         log_probs = []
@@ -44,21 +43,17 @@ class PPOAgent:
             rewards.append(r)
             dones.append(done)
 
-        # 转换 Tensor
-        # 注意：Data 对象在 DataLoader 中会自动处理 batch
-        # 【关键修改】Action 不再是 float，而是 long (int64)
-        # 在 Continuous 中我们用 torch.stack(...).squeeze(1)
-        # 在 MultiDiscrete 中，action shape 是 [batch_size, 4]
+        # 转换为 Tensor
         actions = torch.stack(actions).to(self.device).detach()
         if actions.dim() > 2:
             actions = actions.squeeze(1)
-        # 确保是 long 类型用于 Categorical 索引
         actions = actions.long()
+
         old_log_probs = torch.stack(log_probs).detach().to(self.device).squeeze(1)
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
 
-        # 2. 计算 Monte Carlo 奖励 (简单的 Reward-to-Go, 也可以换成 GAE)
+        # --- 2. 计算 Monte Carlo 奖励 (保持不变) ---
         discounted_rewards = []
         discounted_reward = 0
         for reward, is_terminal in zip(reversed(rewards), reversed(dones)):
@@ -68,41 +63,59 @@ class PPOAgent:
             discounted_rewards.insert(0, discounted_reward)
 
         discounted_rewards = torch.tensor(discounted_rewards, dtype=torch.float32).to(self.device)
-        # 归一化奖励，加速收敛
         discounted_rewards = (discounted_rewards - discounted_rewards.mean()) / (
             discounted_rewards.std() + 1e-7
         )
 
-        # 3. PPO 更新循环
-        # 使用 DataLoader 处理 Graph Batching
-        # batch_size 设为 len(buffer) 即全批量更新，也可以设小一点做 mini-batch
-        loader = DataLoader(batched_data, batch_size=len(batched_data), shuffle=False)
+        # --- 3. PPO 更新循环 (关键修改) ---
+
+        # 获取总样本数
+        buffer_size = len(batched_data)
+        # 确保 batch_size 合理
+        batch_size = self.batch_size if self.batch_size < buffer_size else buffer_size
 
         for _ in range(self.K_epochs):
-            # 因为只有一个全批量，这里循环其实只跑一次 forward，但为了兼容 mini-batch 逻辑保留结构
-            for i, batch_data in enumerate(loader):
-                batch_data = batch_data.to(self.device)
+            # 【关键】每个 Epoch 都生成随机索引来实现 Shuffle
+            indices = torch.randperm(buffer_size)
+
+            # Mini-batch 循环
+            for start in range(0, buffer_size, batch_size):
+                end = start + batch_size
+                idx = indices[start:end]  # 获取当前 batch 的索引
+
+                # A. 切片张量数据 (对应当前 batch)
+                mini_actions = actions[idx]
+                mini_old_log_probs = old_log_probs[idx]
+                mini_advantages = discounted_rewards[idx]  # 这里暂时用 Reward 当 Advantage
+
+                # B. 切片图数据并手动 Batch 化
+                # 取出对应的 Data 对象列表
+                mini_batch_graph_list = [batched_data[i] for i in idx]
+                # 使用 PyG 的工具将列表合并为一个 Batch Data 对象
+                mini_batch_data = Batch.from_data_list(mini_batch_graph_list).to(self.device)
+
+                # --- 下面是标准的 PPO 计算，注意变量名换成了 mini_ ---
 
                 # 评估旧动作在新策略下的概率
-                logprobs, state_values, dist_entropy = self.policy.evaluate(batch_data, actions)
+                # 传入的是 mini_batch_data 和 mini_actions
+                logprobs, state_values, dist_entropy = self.policy.evaluate(mini_batch_data, mini_actions)
 
-                # 匹配维度
                 state_values = torch.squeeze(state_values)
 
                 # 计算比率 ratio = pi_new / pi_old
-                ratios = torch.exp(logprobs - old_log_probs)
+                ratios = torch.exp(logprobs - mini_old_log_probs)
 
-                # 计算优势函数 Advantages
-                advantages = discounted_rewards - state_values.detach()
+                # 计算优势函数 (这里用的是 returns - values)
+                advantages = mini_advantages - state_values.detach()
 
                 # Surrogate Loss
                 surr1 = ratios * advantages
                 surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
 
-                # 总 Loss = Actor Loss - Critic Loss * 0.5 - Entropy * 0.01
+                # Loss 计算
                 loss = (
                     -torch.min(surr1, surr2)
-                    + 0.5 * self.loss_fn(state_values, discounted_rewards)
+                    + 0.5 * self.loss_fn(state_values, mini_advantages)
                     - 0.03 * dist_entropy
                 )
 
@@ -119,4 +132,4 @@ class PPOAgent:
 
     def load(self, path):
         print("Loading PPO Agent from:", path)
-        self.policy.load_state_dict(torch.load(path))
+        self.policy.load_state_dict(torch.load(path, weights_only=True))
