@@ -46,7 +46,7 @@ class ChannelSection(SectionProperties):
     H: float = 0.0
     B: float = 0.0
     tw: float = 0.0
-    # C型钢/槽钢惯性矩计算较为特殊，可在初始化时校验或计算
+    tf: float = 0.0  # 新增：为了准确记录，建议增加翼缘厚度字段
 
 
 class SectionLibrary:
@@ -65,6 +65,29 @@ class SectionLibrary:
         """安全获取截面，越界则返回默认或抛出异常"""
         return self._sections[s_type][index]
 
+    def _calc_J_box(self, B: float, t: float) -> float:
+        """
+        计算方钢(闭口截面)扭转常数 J
+        公式: Bredt公式简化 J ≈ t * (B-t)^3
+        """
+        # 注意：此处假设是方钢。如果是矩形管，公式会有所不同。
+        # B: 边长 (m), t: 壁厚 (m)
+        return t * (B - t) ** 3
+
+    def _calc_J_open(self, H: float, B: float, tw: float, tf: float) -> float:
+        """
+        计算 H型钢/槽钢(开口截面)扭转常数 J
+        公式: 矩形分割求和法 J ≈ 1/3 * Σ(bi * ti^3)
+        J ≈ 1/3 * (2 * B * tf^3 + (H - 2*tf) * tw^3)
+        """
+        # hw: 腹板净高
+        hw = H - 2 * tf
+        # 防止出现负数（极端小尺寸校验）
+        if hw < 0:
+            hw = 0
+
+        return (1.0 / 3.0) * (2 * B * pow(tf, 3) + hw * pow(tw, 3))
+
     def _load_from_json(self, path: str):
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -72,8 +95,12 @@ class SectionLibrary:
         # 1. 加载方钢 (Box)
         for i, item in enumerate(data.get("方钢", [])):
             # 转换单位 mm -> m, cm² -> m²
-            b = item["边长B mm"] * 0.001
-            t = item["壁厚t mm"] * 0.001
+            b_val = item["边长B mm"] * MM_TO_M
+            t_val = item["壁厚t mm"] * MM_TO_M
+
+            # 计算 J
+            j_val = self._calc_J_box(b_val, t_val)
+
             self._sections[SectionType.BOX].append(
                 BoxSection(
                     idx=i,
@@ -81,9 +108,9 @@ class SectionLibrary:
                     area=item["截面面积A cm²"] * CM2_TO_M2,
                     Ix=item["惯性矩Ix=Iy cm⁴"] * CM4_TO_M4,
                     Iy=item["惯性矩Ix=Iy cm⁴"] * CM4_TO_M4,
-                    Iz=item["扭转常数I cm"] * CM4_TO_M4,
-                    B=b,
-                    t=t,
+                    Iz=j_val,  # 使用计算值
+                    B=b_val,
+                    t=t_val,
                 )
             )
 
@@ -92,12 +119,23 @@ class SectionLibrary:
         self._parse_h_list(data.get("H型钢-次梁", []), SectionType.H_SEC)
 
         # 3. 加载 C 型钢 / 槽钢
-        # 优先读取 "C型钢"，如果没有则读取 "槽钢"
         c_list = data.get("槽钢", [])
 
         for i, item in enumerate(c_list):
             h, b, d = item["h"], item["b"], item["d"]
+            # 尝试获取翼缘厚度 't'，如果JSON中没有，暂时回退到使用 'd' (腹板厚) 以避免崩溃，
+            # 但实际槽钢 t > d，建议JSON数据源补充 't' 字段。
+            t_flange_mm = item.get("t", d)
+
+            h_m = h * MM_TO_M
+            b_m = b * MM_TO_M
+            tw_m = d * MM_TO_M
+            tf_m = t_flange_mm * MM_TO_M
+
             area, ix, iy = item["截面面积"], item["Ix"], item["Iy"]
+
+            # 计算 J
+            j_val = self._calc_J_open(H=h_m, B=b_m, tw=tw_m, tf=tf_m)
 
             self._sections[SectionType.CHANNEL].append(
                 ChannelSection(
@@ -106,10 +144,11 @@ class SectionLibrary:
                     area=area * CM2_TO_M2,
                     Ix=ix * CM4_TO_M4,
                     Iy=iy * CM4_TO_M4,
-                    Iz=iy * CM4_TO_M4,  # 近似
-                    H=h * MM_TO_M,
-                    B=b * MM_TO_M,
-                    tw=d * MM_TO_M,
+                    Iz=j_val,  # 使用计算值
+                    H=h_m,
+                    B=b_m,
+                    tw=tw_m,
+                    tf=tf_m,
                 )
             )
 
@@ -119,6 +158,14 @@ class SectionLibrary:
     def _parse_h_list(self, raw_list, target_type):
         for i, item in enumerate(raw_list):
             try:
+                h_m = item["截面公称尺寸H mm"] * MM_TO_M
+                b_m = item["截面公称尺寸B mm"] * MM_TO_M
+                tw_m = item["截面公称尺寸t mm"] * MM_TO_M
+                tf_m = item["截面公称尺寸l mm"] * MM_TO_M  # 注意：此处沿用原代码逻辑，假设 'l' 对应 tf
+
+                # 计算 J
+                j_val = self._calc_J_open(H=h_m, B=b_m, tw=tw_m, tf=tf_m)
+
                 self._sections[target_type].append(
                     HShapeSection(
                         idx=i,
@@ -126,15 +173,15 @@ class SectionLibrary:
                         area=item["截面面积cm²"] * CM2_TO_M2,
                         Ix=item["惯性矩Ix cm⁴"] * CM4_TO_M4,
                         Iy=item["惯性矩Iy cm⁴"] * CM4_TO_M4,
-                        Iz=item["惯性矩Iy cm⁴"] * CM4_TO_M4,  # 近似
-                        H=item["截面公称尺寸H mm"] * MM_TO_M,
-                        B=item["截面公称尺寸B mm"] * MM_TO_M,
-                        tw=item["截面公称尺寸t mm"] * MM_TO_M,
-                        tf=item["截面公称尺寸l mm"] * MM_TO_M,
+                        Iz=j_val,  # 使用计算值
+                        H=h_m,
+                        B=b_m,
+                        tw=tw_m,
+                        tf=tf_m,
                     )
                 )
-            except:
-                continue
+            except Exception as e:
+                print(f"Error parsing H型钢 entry: {item} -> {e}")
 
     def _sort_sections_by_Ix(self):
         """按照Ix排序"""
@@ -155,20 +202,18 @@ class SectionLibrary:
 
 # Example Usage (optional, for testing)
 if __name__ == "__main__":
-    library = SectionLibrary(file_path="src/data/steel_sections.json")  # Adjust path for standalone run
+    library = SectionLibrary(file_path="src/data/steel_sections_large.json")  # Adjust path for standalone run
 
     print("Loaded 方钢 sections:")
-    for section_type in library.sections:
-        print(f"Loaded {len(library.sections[section_type])} {section_type} sections:")
-        for sec in library.sections[section_type]:
-            print(sec)
+    for section_type in library._sections:
+        print(f"Loaded {len(library._sections[section_type])} {section_type} sections:")
         print("-" * 100)
 
     # Test get_section
-    frame_section = library.get_section("方钢", 0)
+    frame_section = library.get_section(SectionType.BOX, 0)
     if frame_section:
         print(f"Selected frame section: {frame_section.name}")
 
-    main_beam_section = library.get_section("H型钢-主梁", 0)  # Assuming H型钢 has at least one entry
+    main_beam_section = library.get_section(SectionType.H_MAIN, 0)  # Assuming H型钢 has at least one entry
     if main_beam_section:
         print(f"Selected main beam section: {main_beam_section.name}")
