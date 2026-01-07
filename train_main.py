@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 
 import numpy as np
 import torch
@@ -13,6 +14,7 @@ env_config = {}  # 可以在此传入默认参数
 SEED = 42
 torch.manual_seed(SEED)
 np.random.seed(SEED)
+random.seed(SEED)
 
 # 超参数
 MAX_EPISODES = 500  # 总训练回合数
@@ -20,7 +22,7 @@ MAX_TIMESTEPS = 20  # 每个回合最大步数 (设计优化通常不需要太�
 UPDATE_TIMESTEP = 60  # 每隔多少步更新一次网络
 LR = 0.0003  # 学习率
 GAMMA = 0.99  # 折扣因子
-K_EPOCHS = 10  # 更新时重复训练次数
+K_EPOCHS = 5  # 更新时重复训练次数
 EPS_CLIP = 0.2  # PPO 裁剪参数
 BATCH_SIZE = 64  # 批量大小
 
@@ -41,7 +43,7 @@ def train():
     agent = PPOAgent(NODE_DIM, EDGE_DIM, ACTION_DIM, LR, GAMMA, K_EPOCHS, EPS_CLIP, BATCH_SIZE, device)
     # agent.load("results/ppo/1227_step20_multiDiscrete/ppo_300.pth")  # 可选：加载预训练模型
 
-    log_dir = "results/ppo/1231_step20_multiDiscrete_opt"
+    log_dir = "results/ppo/0105_step20_multiDiscrete_opt"
     os.makedirs(log_dir, exist_ok=True)
     visualizer = TrainingVisualizer(log_dir)
 
@@ -149,6 +151,7 @@ def evaluate(model_path, num_episodes=20):
 
     for ep in range(num_episodes):
         state, _ = env.reset()
+        env.log_state()
         done = False
         min_mass_ep = float("inf")
         is_success_ep = False
@@ -199,4 +202,4 @@ if __name__ == "__main__":
     if args.mode == "train":
         train()
     elif args.mode == "eval":
-        evaluate("results/ppo/1230_step20_multiDiscrete_opt/ppo_500.pth")  # Adjust filename
+        evaluate("results/ppo/0105_step20_multiDiscrete_opt/ppo_500.pth")  # Adjust filename

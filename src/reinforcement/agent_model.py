@@ -11,7 +11,7 @@ class StructuralGNN(nn.Module):
     GNN 特征提取器 + Actor-Critic Heads
     """
 
-    def __init__(self, node_dim, edge_dim, action_dim, action_options=3, hidden_dim=128):
+    def __init__(self, node_dim, edge_dim, action_dim, hidden_dim=128):
         super(StructuralGNN, self).__init__()
 
         # --- 1. Graph Encoder (Shared Backbone) ---
@@ -25,13 +25,15 @@ class StructuralGNN(nn.Module):
         # --- 2. Actor Head (Policy) ---
         # 我们有 4 个决策维度，每个维度有 5 个选项，所以总输出节点是 4 * 5 = 20
         self.action_dim = action_dim  # 4
-        self.action_options = action_options  # 5
+        # self.action_options = action_options  # 5
 
-        # 只需要一个全连接层输出 Logits，不需要 tanh，也不需要 log_std
-        self.actor_head = nn.Linear(hidden_dim * 2, action_dim * action_options)
+        self.actor_frame = nn.Linear(hidden_dim * 2, 20)
+        self.actor_main = nn.Linear(hidden_dim * 2, 20)
+        self.actor_sec = nn.Linear(hidden_dim * 2, 20)
+        self.actor_brace = nn.Linear(hidden_dim * 2, 20)
 
         # --- 3. Critic Head (Value) ---
-        self.critic_fc1 = nn.Linear(hidden_dim * 2, hidden_dim)
+        self.critic_fc = nn.Linear(hidden_dim * 2, hidden_dim)
         self.critic_value = nn.Linear(hidden_dim, 1)
 
     def forward(self, data: Data):
@@ -56,48 +58,53 @@ class StructuralGNN(nn.Module):
         return x_graph
 
     def get_action(self, data, eval_mode=False):
-        """Actor: 获取动作分布并采样 (用于交互)"""
         x_graph = self.forward(data)
 
-        # 获取 logits 并 reshape 成 [batch_size, 4, 5]
-        logits = self.actor_head(x_graph)
-        logits = logits.view(-1, self.action_dim, self.action_options)
+        logits = {
+            "frame": self.actor_frame(x_graph),
+            "main": self.actor_main(x_graph),
+            "sec": self.actor_sec(x_graph),
+            "brace": self.actor_brace(x_graph),
+        }
+
+        dists = {k: Categorical(logits=v) for k, v in logits.items()}
 
         if eval_mode:
-            # 评估模式下，选择概率最大的动作
-            action = torch.argmax(logits, dim=-1)
-            dist = Categorical(logits=logits)
-            action_log_prob = dist.log_prob(action).sum(dim=-1)
+            actions = {k: torch.argmax(v.logits, dim=-1) for k, v in dists.items()}
         else:
-            # 创建分类分布
-            dist = Categorical(logits=logits)
+            actions = {k: v.sample() for k, v in dists.items()}
 
-            # 采样动作
-            action = dist.sample()  # Shape: [batch_size, 4]
+        # 拼成一个 tensor: [batch, 4]
+        action_tensor = torch.stack(
+            [actions["frame"], actions["main"], actions["sec"], actions["brace"]], dim=-1
+        )
 
-            # 计算 log_prob (Sum over the 4 dimensions)
-            # P(a1, a2, a3, a4) = P(a1) * P(a2) * ... => log_prob 是求和
-            action_log_prob = dist.log_prob(action).sum(dim=-1)
+        log_prob = sum(dists[k].log_prob(actions[k]) for k in dists)
 
-        return action, action_log_prob
+        return action_tensor, log_prob
 
-    def evaluate(self, data, action):
+    def evaluate(self, data, actions):
         """Actor + Critic: 评估动作 (用于更新)"""
         x_graph = self.forward(data)
 
-        logits = self.actor_head(x_graph)
-        logits = logits.view(-1, self.action_dim, self.action_options)
+        logits = {
+            "frame": self.actor_frame(x_graph),
+            "main": self.actor_main(x_graph),
+            "sec": self.actor_sec(x_graph),
+            "brace": self.actor_brace(x_graph),
+        }
 
-        dist = Categorical(logits=logits)
+        dists = {k: Categorical(logits=v) for k, v in logits.items()}
 
-        # 计算 Log Prob
-        action_log_probs = dist.log_prob(action).sum(dim=-1)
+        log_probs = (
+            dists["frame"].log_prob(actions[:, 0])
+            + dists["main"].log_prob(actions[:, 1])
+            + dists["sec"].log_prob(actions[:, 2])
+            + dists["brace"].log_prob(actions[:, 3])
+        )
 
-        # 计算熵 (用于鼓励探索)
-        dist_entropy = dist.entropy().sum(dim=-1)
+        entropy = sum(d.entropy() for d in dists.values())
 
-        # Critic Value
-        x_c = F.elu(self.critic_fc1(x_graph))  # 建议 Critic 加个激活函数
-        state_values = self.critic_value(x_c)
+        value = self.critic_value(F.elu(self.critic_fc(x_graph)))
 
-        return action_log_probs, state_values, dist_entropy
+        return log_probs, value.squeeze(-1), entropy

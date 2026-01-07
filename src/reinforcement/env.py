@@ -28,7 +28,7 @@ class StructuralEnv(gym.Env):
         self.config = config
 
         # 1. 初始化资源库 (只加载一次)
-        self.section_lib = SectionLibrary("src/data/steel_sections.json")
+        self.section_lib = SectionLibrary("src/data/steel_sections_large.json")
         self.logger = Logger("structural_env.log", disable=False)
         self.sec_counts = [
             self.section_lib.section_counts[t]
@@ -42,12 +42,10 @@ class StructuralEnv(gym.Env):
         # 3: add_support (bool > 0)
         # 4-7: section indices (int)
 
-        # 4 个变量 (Frame, Main, Sec, Brace)，每个变量有 5 种可能的动作
-        # 动作编码: 0: -5(大减), 1: -1(微减), 2: 0(保持), 3: +1(微增), 4: +5(大增)
-        self.action_space = spaces.MultiDiscrete(self.sec_counts)
+        self.action_space = gym.spaces.MultiDiscrete(self.sec_counts)
 
         # 定义动作映射字典 (提升运行效率)
-        self.delta_map = {0: -1, 1: 0, 2: 1}
+        # self.delta_map = {0: -1, 1: 0, 2: 1}
 
         # 3. 定义观察空间
         # 由于 PyG 图结构大小可变，标准 Gym Space 难以描述。
@@ -64,10 +62,7 @@ class StructuralEnv(gym.Env):
         super().reset(seed=seed)
 
         # 随机初始化位置，增强鲁棒性
-        if np.random.rand() < 0.2:
-            self.current_section_indices = np.array([np.random.randint(0, c) for c in self.sec_counts])
-        else:
-            self.current_section_indices = np.array(self.sec_counts) - 1
+        self.current_section_indices = np.array([np.random.randint(0, c) for c in self.sec_counts])
 
         # 随机初始化
         self.current_params = StructuralParameters(
@@ -95,61 +90,34 @@ class StructuralEnv(gym.Env):
         return obs, info
 
     def step(self, action):
-        # 1. 解析增量动作
-        deltas = [self.delta_map[a] for a in action]
+        """执行动作，返回新的观察值、奖励、完成标志和信息"""
 
-        # 应用增量
-        self.current_section_indices += np.array(deltas)
+        self._apply_action_to_params(action)
 
-        # 3. 边界限制
-        counts = [
-            self.section_lib.section_counts[SectionType.BOX],
-            self.section_lib.section_counts[SectionType.H_MAIN],
-            self.section_lib.section_counts[SectionType.H_SEC],
-            self.section_lib.section_counts[SectionType.CHANNEL],
-        ]
-        # 注意: 索引最大值是 count - 1
-        max_indices = np.array(counts) - 1
-        self.current_section_indices = np.clip(self.current_section_indices, 0, max_indices)
-
-        # 4. 更新 Params 用于建模
-        self.current_params.frame_section_index = self.current_section_indices[0]
-        self.current_params.main_beam_section_index = self.current_section_indices[1]
-        self.current_params.secondary_beam_section_index = self.current_section_indices[2]
-        self.current_params.brace_section_index = self.current_section_indices[3]
-
-        # 5. 仿真
         obs, info = self._run_simulation()
 
-        # 6. 奖励与早停
         reward = self._calculate_reward(info)
 
         return obs, reward, False, False, info
 
     def _apply_action_to_params(self, action):
-        """将 [-1, 1] 的动作映射回物理参数"""
-        act = np.clip(action, -1.0, 1.0)
+        """将 [-1, 1] 的连续动作映射为截面索引"""
+        # 注意: 索引最大值是 count - 1
+        max_indices = np.array(self.sec_counts) - 1
+        action = np.clip(action, 0, max_indices)
 
-        # 辅助映射函数
-        def map_val(val, min_v, max_v):
-            return min_v + (val + 1.0) / 2.0 * (max_v - min_v)
+        frame_idx, main_idx, sec_idx, brace_idx = action
+
+        self.current_params.frame_section_index = frame_idx
+        self.current_params.main_beam_section_index = main_idx
+        self.current_params.secondary_beam_section_index = sec_idx
+        self.current_params.brace_section_index = brace_idx
 
         # 1. 几何参数
         # self.current_params.main_beam_spacing = map_val(act[0], 0.75, 1.5)  # 0.75m ~ 1.5m
         # self.current_params.num_secondary_width = int(map_val(act[1], 2.0, 6.0))
         # self.current_params.num_secondary_height = int(map_val(act[2], 2.0, 6.0))
         # self.current_params.add_support_beam = act[3] > 0
-
-        # 2. 截面索引 (根据库的大小动态映射)
-        # 假设库已经按照面积排序，index越大截面越大
-        def map_idx(val, type_str):
-            count = self.section_lib.section_counts[type_str]
-            return int(map_val(val, 0, count - 0.99))
-
-        self.current_params.frame_section_index = map_idx(act[0], SectionType.BOX)
-        self.current_params.main_beam_section_index = map_idx(act[1], SectionType.H_MAIN)
-        self.current_params.secondary_beam_section_index = map_idx(act[2], SectionType.H_SEC)
-        self.current_params.brace_section_index = map_idx(act[3], SectionType.CHANNEL)
 
     def _run_simulation(self):
         """核心流程：建模 -> 网格 -> 分析 -> 结果映射 -> 图生成"""
@@ -176,7 +144,7 @@ class StructuralEnv(gym.Env):
 
         # D. 规范校核 (获取 Ratio)
         # 关键步骤：将 FEM 结果映射回 Design Model
-        self._map_results_to_design(mesh_gen, res_strength, res_service)
+        self._map_results_to_design(res_strength, res_service)
 
         # E. 生成图 (Observation)
         # StructuralGraph 会读取 beam.response 来构建特征
@@ -205,9 +173,7 @@ class StructuralEnv(gym.Env):
 
         return obs_data, info
 
-    def _map_results_to_design(
-        self, mesh_gen: MeshGenerator, res_strength: AnalysisResults, res_service: AnalysisResults
-    ):
+    def _map_results_to_design(self, res_strength: AnalysisResults, res_service: AnalysisResults):
         """
         将 FEM 单元的分析结果（应力、位移）聚合回原始梁。
         聚合策略：取子单元中的最大值 (Conservative)。
@@ -224,7 +190,7 @@ class StructuralEnv(gym.Env):
             # 这里假设我们通过某种方式知道它属于哪个原始梁
             # 为了实现方便，建议在 MeshGenerator._mesh_single_beam 中：
             # new_beam.tag = beam.id (利用 tag 或新字段存储原始ID)
-            parent_id = getattr(fem_beam, "parent_id", None)
+            parent_id = fem_beam.parent_id
 
             if parent_id is not None:
                 # 计算该 FEM 单元的 Stress Ratio
@@ -268,26 +234,17 @@ class StructuralEnv(gym.Env):
         # 2. 约束惩罚 (平滑惩罚)
         # 如果 ratio <= 1.0，惩罚为 0
         # 如果 ratio > 1.0，惩罚随违约程度线性或指数增长
-        if max_ratio <= 1.0:
-            penalty = 0.0
+        if max_ratio > 1.0:
+            reward = -10.0 * (max_ratio - 1.0)
         else:
-            # 惩罚系数 lambda，需要调试，通常建议 0.5 ~ 2.0 左右
-            # 让 agent 感觉到痛，但不要痛到梯度爆炸
-            # 线性惩罚: penalty = (max_ratio - 1.0) * 5.0
-            # 或者平方惩罚 (对大违约更敏感):
-            penalty = ((max_ratio - 1.0) ** 2) * 10.0
-
-        # 3. 组合奖励
-        # 基础奖励 1.0 是为了鼓励存活（可选）
-        # 核心逻辑： (省下的材料) - (违约惩罚)
-        total_reward = 1.0 + reward_mass - penalty
+            reward = 1.0 + reward_mass
 
         # 记录用于调试
         self.logger.info(
-            f"Mass: {mass:.0f}, Ratio: {max_ratio:.2f} -> R_mass: {reward_mass:.2f}, Pen: {penalty:.2f}, Total: {total_reward:.2f}"
+            f"Mass: {mass:.0f}, Ratio: {max_ratio:.2f} -> R_mass: {reward_mass:.2f}, Reward: {reward:.2f}"
         )
 
-        return total_reward
+        return reward
 
     def _calculate_volume_bounds(self):
         """预计算最大最小材料用量，用于归一化"""
@@ -307,7 +264,7 @@ class StructuralEnv(gym.Env):
         )
         model_max = StructuralModel(params_max, self.section_lib)
         model_max.generate()
-        self.max_volume = model_max.calculate_mass_kg() / 7850
+        self.max_volume = model_max.calculate_mass_kg() / 7850.0
 
         # 最小体积：所有主次梁都用最小截面
         params_min = StructuralParameters(
@@ -325,7 +282,7 @@ class StructuralEnv(gym.Env):
         )
         model_min = StructuralModel(params_min, self.section_lib)
         model_min.generate()
-        self.min_volume = model_min.calculate_mass_kg() / 7850
+        self.min_volume = model_min.calculate_mass_kg() / 7850.0
 
     def _calculate_normalized_volume(self, model_volume: float) -> float:
         """计算归一化的材料用量"""
@@ -338,11 +295,11 @@ class StructuralEnv(gym.Env):
             f"Length: {p.length:.2f} m, Width: {p.width:.2f} m, Height: {p.height:.2f} m, Pressure: {self.pressure:.1f} Pa"
         )
         print(
-            f"{p.main_beam_spacing=:.3f} m, "
-            f"{p.num_secondary_width=}, {p.num_secondary_height=}, "
-            f"{p.add_support_beam=}, "
-            f"{p.frame_section_index=}, {p.main_beam_section_index=}, "
-            f"{p.secondary_beam_section_index=}, {p.brace_section_index=}"
+            # f"{p.main_beam_spacing=:.3f} m, "
+            # f"{p.num_secondary_width=}, {p.num_secondary_height=}, "
+            # f"{p.add_support_beam=}, "
+            f"{p.frame_section_index}, {p.main_beam_section_index}, "
+            f"{p.secondary_beam_section_index}, {p.brace_section_index}"
         )
 
 
