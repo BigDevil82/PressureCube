@@ -58,27 +58,56 @@ class StructuralEnv(gym.Env):
         self.last_results = None
         self.prev_mass = None  # 新增：记录上一步的质量
 
+        # === Reward hyper-params (can be overridden by env_config) ===
+        self.target_ratio = float(self.config.get("target_ratio", 0.95))  # 想让 max ratio 贴近的目标
+        self.w_mass = float(self.config.get("w_mass", 1.0))  # 质量项权重
+        self.w_delta = float(self.config.get("w_delta", 0.3))  # “本步比上步更轻”的奖励
+        self.w_slack = float(self.config.get("w_slack", 2.0))  # 可行域内“太保守”的惩罚
+        self.w_viol = float(self.config.get("w_viol", 50.0))  # 违约惩罚（平方）
+        self.feasible_bonus = float(self.config.get("feasible_bonus", 0.5))
+        self.infeasible_base = float(self.config.get("infeasible_base", -1.0))
+        self.clip_reward = float(self.config.get("clip_reward", 5.0))
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        options = options or {}
 
-        # 随机初始化位置，增强鲁棒性
-        self.current_section_indices = np.array([np.random.randint(0, c) for c in self.sec_counts])
+        rng = self.np_random
 
-        # 随机初始化
-        self.current_params = StructuralParameters(
-            length=np.random.choice(np.arange(6.0, 12.0, 0.2)),
-            width=np.random.choice(np.arange(3.0, 4.5, 0.3)),
-            height=np.random.choice(np.arange(3.0, 4.5, 0.3)),
-            main_beam_spacing=0.7,
-            num_secondary_width=4,
-            num_secondary_height=4,
-            add_support_beam=True,
-            frame_section_index=self.current_section_indices[0],
-            main_beam_section_index=self.current_section_indices[1],
-            secondary_beam_section_index=self.current_section_indices[2],
-            brace_section_index=self.current_section_indices[3],
-        )
-        self.pressure = np.random.choice(np.arange(20000.0, 40000.0, 4000.0))
+        if "init_sections" in options and options["init_sections"] is not None:
+            self.current_section_indices = np.asarray(options["init_sections"], dtype=np.int64)
+        else:
+            self.current_section_indices = np.array(
+                [rng.integers(0, c) for c in self.sec_counts], dtype=np.int64
+            )
+
+        if "params" in options and options["params"] is not None:
+            params = options["params"]
+            if isinstance(params, StructuralParameters):
+                self.current_params = params
+            else:
+                self.current_params = StructuralParameters(**params)
+        else:
+            # 随机初始化
+            self.current_params = StructuralParameters(
+                length=float(rng.choice(np.arange(6.0, 12.0, 0.2))),
+                width=float(rng.choice(np.arange(3.0, 4.5, 0.3))),
+                height=float(rng.choice(np.arange(3.0, 4.5, 0.3))),
+                main_beam_spacing=0.7,
+                num_secondary_width=4,
+                num_secondary_height=4,
+                add_support_beam=True,
+            )
+
+        self.current_params.frame_section_index = int(self.current_section_indices[0])
+        self.current_params.main_beam_section_index = int(self.current_section_indices[1])
+        self.current_params.secondary_beam_section_index = int(self.current_section_indices[2])
+        self.current_params.brace_section_index = int(self.current_section_indices[3])
+
+        if "pressure" in options and options["pressure"] is not None:
+            self.pressure = float(options["pressure"])
+        else:
+            self.pressure = float(rng.choice(np.arange(20000.0, 40000.0, 4000.0)))
 
         # 执行完整的建模-分析-构图流程
         obs, info = self._run_simulation()
@@ -101,12 +130,17 @@ class StructuralEnv(gym.Env):
         return obs, reward, False, False, info
 
     def _apply_action_to_params(self, action):
-        """将 [-1, 1] 的连续动作映射为截面索引"""
-        # 注意: 索引最大值是 count - 1
-        max_indices = np.array(self.sec_counts) - 1
-        action = np.clip(action, 0, max_indices)
+        """动作是 4 个离散 index：frame/main/sec/brace"""
+        max_indices = np.array(self.sec_counts, dtype=np.int64) - 1
 
-        frame_idx, main_idx, sec_idx, brace_idx = action
+        action = np.asarray(action).reshape(-1)
+        if action.shape[0] != 4:
+            raise ValueError(f"Action must have 4 dims, got {action.shape}")
+
+        action = action.astype(np.int64)
+        action = np.clip(action, 0, max_indices).astype(np.int64)
+
+        frame_idx, main_idx, sec_idx, brace_idx = action.tolist()
 
         self.current_params.frame_section_index = frame_idx
         self.current_params.main_beam_section_index = main_idx
@@ -220,30 +254,64 @@ class StructuralEnv(gym.Env):
             )
 
     def _calculate_reward(self, info):
-        mass = info["mass"]
-        # 取最大的应力比或位移比
-        max_ratio = max(info["max_stress_ratio"], info["max_disp_ratio"])
+        """
+        目标：在满足 sr<=1 & dr<=1 的前提下尽量减重，同时避免“过度保守”(ratio 长期 0.3)
+        """
+        mass = float(info["mass"])
+        sr = float(info["max_stress_ratio"])
+        dr = float(info["max_disp_ratio"])
 
-        # 1. 归一化质量收益 (范围 0~1)
-        # 假设 max_volume 和 min_volume 已经计算好
-        # 我们希望质量越小，收益越大
-        mass_norm = (self.max_volume * 7850 - mass) / ((self.max_volume - self.min_volume) * 7850 + 1e-5)
-        # 限制在 [0, 1] 之间
-        reward_mass = np.clip(mass_norm, 0, 1)
+        # --- 1) 质量归一化（0=最轻, 1=最重），并转成“越轻越大”的 reward_mass ---
+        min_mass = self.min_volume * 7850.0
+        max_mass = self.max_volume * 7850.0
+        denom = (max_mass - min_mass) + 1e-6
+        mass_norm = (mass - min_mass) / denom
+        mass_norm = float(np.clip(mass_norm, 0.0, 1.0))
+        reward_mass = 1.0 - mass_norm  # [0,1]，越轻越大
 
-        # 2. 约束惩罚 (平滑惩罚)
-        # 如果 ratio <= 1.0，惩罚为 0
-        # 如果 ratio > 1.0，惩罚随违约程度线性或指数增长
-        if max_ratio > 1.0:
-            reward = -10.0 * (max_ratio - 1.0)
+        # --- 2) 违约惩罚（平方，既能压住大违约，又不至于对小违约“过度恐惧”）---
+        viol_s = max(0.0, sr - 1.0)
+        viol_d = max(0.0, dr - 1.0)
+        penalty_viol = self.w_viol * (viol_s * viol_s + viol_d * viol_d)
+
+        feasible = (sr <= 1.0) and (dr <= 1.0)
+
+        # --- 3) 可行域“贴边”惩罚：ratio 太小 => 罚（促使从 0.3 往 0.9~1.0 靠近）---
+        # 只在可行域内启用，避免违约时策略被“贴边惩罚”误导
+        if feasible:
+            slack_s = max(0.0, self.target_ratio - sr)
+            slack_d = max(0.0, self.target_ratio - dr)
+            penalty_slack = self.w_slack * (slack_s * slack_s + slack_d * slack_d)
         else:
-            reward = 1.0 + reward_mass
+            penalty_slack = 0.0
 
-        # 记录用于调试
+        # --- 4) 逐步减重奖励：鼓励在 20-step 内“越改越轻”（你 env 里已经有 prev_mass 缓存）---
+        if self.prev_mass is None:
+            delta_norm = 0.0
+        else:
+            delta_norm = (float(self.prev_mass) - mass) / denom  # >0 表示变轻
+            delta_norm = float(np.clip(delta_norm, -1.0, 1.0))
+
+        reward_delta = self.w_delta * delta_norm
+
+        # --- 5) 合成 ---
+        if feasible:
+            reward = self.w_mass * reward_mass + reward_delta + self.feasible_bonus - penalty_slack
+        else:
+            # 不可行：给一个基础负分 + 违约惩罚（保留质量项，避免“摆烂重结构”）
+            reward = self.w_mass * reward_mass + reward_delta + self.infeasible_base - penalty_viol
+
+        # 更新缓存
+        self.prev_mass = mass
+
+        # 防止极端值影响 PPO 稳定性
+        reward = float(np.clip(reward, -self.clip_reward, self.clip_reward))
+
         self.logger.info(
-            f"Mass: {mass:.0f}, Ratio: {max_ratio:.2f} -> R_mass: {reward_mass:.2f}, Reward: {reward:.2f}"
+            f"Mass={mass:.0f}, sr={sr:.3f}, dr={dr:.3f}, "
+            f"R_mass={reward_mass:.3f}, dM={delta_norm:.3f}, "
+            f"feas={feasible}, Reward={reward:.3f}"
         )
-
         return reward
 
     def _calculate_volume_bounds(self):

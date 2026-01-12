@@ -10,7 +10,17 @@ from src.reinforcement.ppo_agent import PPOAgent
 from src.utils.visualize import TrainingVisualizer
 
 # --- 1. 配置参数 ---
-env_config = {}  # 可以在此传入默认参数
+env_config = {
+    "reset_section_init": "max",  # 强烈建议先 max
+    "target_ratio": 0.95,
+    "w_mass": 1.0,
+    "w_delta": 0.3,
+    "w_slack": 2.0,
+    "w_viol": 50.0,
+    "feasible_bonus": 0.5,
+    "infeasible_base": -1.0,
+    "clip_reward": 5.0,
+}
 SEED = 42
 torch.manual_seed(SEED)
 np.random.seed(SEED)
@@ -161,6 +171,7 @@ def evaluate(model_path, num_episodes=20):
             action, _ = agent.policy.get_action(state, eval_mode=True)
             action_np = action.detach().cpu().numpy().flatten()
             next_state, reward, terminated, _, info = env.step(action_np)
+            terminated = terminated or (step == 19)
 
             ratio = max(info["max_stress_ratio"], info["max_disp_ratio"])
             mass = info["mass"]

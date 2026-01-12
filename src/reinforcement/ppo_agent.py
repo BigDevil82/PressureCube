@@ -53,8 +53,8 @@ class PPOAgent:
         if actions.dim() > 2:
             actions = actions.squeeze(1)
 
-        # 关键：转为 float32
-        actions = actions.float()
+        # 关键：转为 Long 类型以供分类使用
+        actions = actions.long()
 
         old_log_probs = torch.stack(log_probs).detach().to(self.device).squeeze(1)
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
