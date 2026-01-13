@@ -27,10 +27,7 @@ class StructuralGNN(nn.Module):
         self.action_dim = action_dim  # 4
         # self.action_options = action_options  # 5
 
-        self.actor_frame = nn.Linear(hidden_dim * 2, 20)
-        self.actor_main = nn.Linear(hidden_dim * 2, 20)
-        self.actor_sec = nn.Linear(hidden_dim * 2, 20)
-        self.actor_brace = nn.Linear(hidden_dim * 2, 20)
+        self.actor = nn.Linear(hidden_dim * 2, action_dim)  # 选择缩哪一类梁
 
         # --- 3. Critic Head (Value) ---
         self.critic_fc = nn.Linear(hidden_dim * 2, hidden_dim)
@@ -60,50 +57,29 @@ class StructuralGNN(nn.Module):
     def get_action(self, data, eval_mode=False):
         x_graph = self.forward(data)
 
-        logits = {
-            "frame": self.actor_frame(x_graph),
-            "main": self.actor_main(x_graph),
-            "sec": self.actor_sec(x_graph),
-            "brace": self.actor_brace(x_graph),
-        }
+        logits = self.actor(x_graph)
 
-        dists = {k: Categorical(logits=v) for k, v in logits.items()}
+        dists = Categorical(logits=logits)
 
         if eval_mode:
-            actions = {k: torch.argmax(v.logits, dim=-1) for k, v in dists.items()}
+            actions = torch.argmax(dists.logits, dim=-1)
         else:
-            actions = {k: v.sample() for k, v in dists.items()}
+            actions = dists.sample()
 
-        # 拼成一个 tensor: [batch, 4]
-        action_tensor = torch.stack(
-            [actions["frame"], actions["main"], actions["sec"], actions["brace"]], dim=-1
-        )
+        log_prob = dists.log_prob(actions)
 
-        log_prob = sum(dists[k].log_prob(actions[k]) for k in dists)
-
-        return action_tensor, log_prob
+        return actions, log_prob
 
     def evaluate(self, data, actions):
         """Actor + Critic: 评估动作 (用于更新)"""
         x_graph = self.forward(data)
 
-        logits = {
-            "frame": self.actor_frame(x_graph),
-            "main": self.actor_main(x_graph),
-            "sec": self.actor_sec(x_graph),
-            "brace": self.actor_brace(x_graph),
-        }
+        logits = self.actor(x_graph)
+        dists = Categorical(logits=logits)
 
-        dists = {k: Categorical(logits=v) for k, v in logits.items()}
+        log_probs = dists.log_prob(actions)
 
-        log_probs = (
-            dists["frame"].log_prob(actions[:, 0])
-            + dists["main"].log_prob(actions[:, 1])
-            + dists["sec"].log_prob(actions[:, 2])
-            + dists["brace"].log_prob(actions[:, 3])
-        )
-
-        entropy = sum(d.entropy() for d in dists.values())
+        entropy = dists.entropy()
 
         value = self.critic_value(F.elu(self.critic_fc(x_graph)))
 

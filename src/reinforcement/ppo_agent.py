@@ -43,20 +43,8 @@ class PPOAgent:
             rewards.append(r)
             dones.append(done)
 
-        # 转换为 Tensor
-        # 【修改点 1】Action 处理
-        # 以前是 .long()，现在连续动作必须是 .float()
-        actions = torch.stack(actions).to(self.device).detach()
-
-        # 在 Continuous 场景下，action shape 应该是 [batch_size, 4]
-        # 如果 stack 后多了一维 (例如 [batch, 1, 4])，需要 squeeze
-        if actions.dim() > 2:
-            actions = actions.squeeze(1)
-
-        # 关键：转为 Long 类型以供分类使用
-        actions = actions.long()
-
-        old_log_probs = torch.stack(log_probs).detach().to(self.device).squeeze(1)
+        actions = torch.stack(actions).to(self.device).detach().view(-1).long()
+        old_log_probs = torch.stack(log_probs).detach().to(self.device).view(-1)
         rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
 

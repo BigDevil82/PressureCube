@@ -44,18 +44,21 @@ class StructuralEnv(gym.Env):
 
         self.action_space = gym.spaces.MultiDiscrete(self.sec_counts)
 
-        # 定义动作映射字典 (提升运行效率)
-        # self.delta_map = {0: -1, 1: 0, 2: 1}
-
         # 3. 定义观察空间
         # 由于 PyG 图结构大小可变，标准 Gym Space 难以描述。
         # 这里为了兼容性定义为一个空的 Dict，实际上 step 会返回 Data 对象
         self.observation_space = spaces.Dict({})
 
+        # 增量 reward 超参数
+        self.delta_scale = float(self.config.get("delta_scale", 20.0))  # 放大奖励，学习更稳
+        self.infeasible_penalty = float(self.config.get("infeasible_penalty", -1.0))
+        self.noop_penalty = float(self.config.get("noop_penalty", -0.01))
+
         # 状态缓存
         self.current_design_model = None
         self.current_fem_model = None
-        self.last_results = None
+        self.last_obs = None
+        self.last_info = None
         self.prev_mass = None  # 新增：记录上一步的质量
 
         # === Reward hyper-params (can be overridden by env_config) ===
@@ -68,6 +71,17 @@ class StructuralEnv(gym.Env):
         self.infeasible_base = float(self.config.get("infeasible_base", -1.0))
         self.clip_reward = float(self.config.get("clip_reward", 5.0))
 
+    def _sync_indices_to_params(self):
+        self.current_params.frame_section_index = int(self.current_section_indices[0])
+        self.current_params.main_beam_section_index = int(self.current_section_indices[1])
+        self.current_params.secondary_beam_section_index = int(self.current_section_indices[2])
+        self.current_params.brace_section_index = int(self.current_section_indices[3])
+
+    def _mass_norm(self, mass_kg: float) -> float:
+        min_mass = self.min_volume * 7850.0
+        max_mass = self.max_volume * 7850.0
+        return float((mass_kg - min_mass) / (max_mass - min_mass + 1e-6))
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         options = options or {}
@@ -77,57 +91,86 @@ class StructuralEnv(gym.Env):
         if "init_sections" in options and options["init_sections"] is not None:
             self.current_section_indices = np.asarray(options["init_sections"], dtype=np.int64)
         else:
-            self.current_section_indices = np.array(
-                [rng.integers(0, c) for c in self.sec_counts], dtype=np.int64
-            )
+            self.current_section_indices = np.array([c - 1 for c in self.sec_counts], dtype=np.int64)
 
-        if "params" in options and options["params"] is not None:
-            params = options["params"]
-            if isinstance(params, StructuralParameters):
-                self.current_params = params
-            else:
-                self.current_params = StructuralParameters(**params)
-        else:
-            # 随机初始化
-            self.current_params = StructuralParameters(
-                length=float(rng.choice(np.arange(6.0, 12.0, 0.2))),
-                width=float(rng.choice(np.arange(3.0, 4.5, 0.3))),
-                height=float(rng.choice(np.arange(3.0, 4.5, 0.3))),
-                main_beam_spacing=0.7,
-                num_secondary_width=4,
-                num_secondary_height=4,
-                add_support_beam=True,
-            )
-
-        self.current_params.frame_section_index = int(self.current_section_indices[0])
-        self.current_params.main_beam_section_index = int(self.current_section_indices[1])
-        self.current_params.secondary_beam_section_index = int(self.current_section_indices[2])
-        self.current_params.brace_section_index = int(self.current_section_indices[3])
+        self.current_params = StructuralParameters(
+            length=float(rng.choice(np.arange(6.0, 12.0, 0.2))),
+            width=float(rng.choice(np.arange(3.0, 4.5, 0.3))),
+            height=float(rng.choice(np.arange(3.0, 4.5, 0.3))),
+            main_beam_spacing=0.7,
+            num_secondary_width=4,
+            num_secondary_height=4,
+            add_support_beam=True,
+            frame_section_index=int(self.current_section_indices[0]),
+            main_beam_section_index=int(self.current_section_indices[1]),
+            secondary_beam_section_index=int(self.current_section_indices[2]),
+            brace_section_index=int(self.current_section_indices[3]),
+        )
 
         if "pressure" in options and options["pressure"] is not None:
             self.pressure = float(options["pressure"])
         else:
             self.pressure = float(rng.choice(np.arange(20000.0, 40000.0, 4000.0)))
 
+        self._calculate_volume_bounds()
+
         # 执行完整的建模-分析-构图流程
         obs, info = self._run_simulation()
         self.prev_mass = info["mass"]  # 初始化质量记录
         self.stress_ratio_prev = info["max_stress_ratio"]
         self.disp_ratio_prev = info["max_disp_ratio"]
+        self.last_obs = obs
+        self.last_info = info
 
-        self._calculate_volume_bounds()
         return obs, info
 
     def step(self, action):
-        """执行动作，返回新的观察值、奖励、完成标志和信息"""
+        # gymnasium 可能传 numpy 标量
+        if isinstance(action, (np.ndarray,)):
+            action = int(action.item())
+        else:
+            action = int(action)
 
-        self._apply_action_to_params(action)
+        # STOP：直接结束回合（不给额外奖励，已通过前面 shrink 累积获得）
+        if action == 4:
+            return self.last_obs, 0.0, True, False, self.last_info
+
+        # 备份旧状态（避免 infeasible 时再跑一次仿真）
+        old_indices = self.current_section_indices.copy()
+        old_obs = self.last_obs
+        old_info = self.last_info
+        old_mass_norm = self._mass_norm(float(self.prev_mass))
+
+        # 选到已经不能减的类型：小惩罚，不终止
+        if self.current_section_indices[action] <= 0:
+            return self.last_obs, self.noop_penalty, False, False, self.last_info
+
+        # 提议 shrink
+        self.current_section_indices[action] -= 1
+        self._sync_indices_to_params()
 
         obs, info = self._run_simulation()
+        sr = float(info["max_stress_ratio"])
+        dr = float(info["max_disp_ratio"])
+        feasible = max(sr, dr) <= 1.0
 
-        reward = self._calculate_reward(info)
+        if not feasible:
+            # 回滚并终止：表示触碰约束边界
+            self.current_section_indices = old_indices
+            self._sync_indices_to_params()
+            return old_obs, self.infeasible_penalty, True, False, old_info
 
-        return obs, reward, False, False, info
+        # 可行：奖励 = 变轻的归一化增量（放大 delta_scale）
+        new_mass = float(info["mass"])
+        new_mass_norm = self._mass_norm(new_mass)
+        reward = self.delta_scale * (old_mass_norm - new_mass_norm)
+
+        # 更新缓存
+        self.prev_mass = new_mass
+        self.last_obs = obs
+        self.last_info = info
+
+        return obs, float(reward), False, False, info
 
     def _apply_action_to_params(self, action):
         """动作是 4 个离散 index：frame/main/sec/brace"""

@@ -12,7 +12,8 @@ from src.utils.visualize import TrainingVisualizer
 # --- 1. 配置参数 ---
 env_config = {
     "reset_section_init": "max",  # 强烈建议先 max
-    "target_ratio": 0.95,
+    "target_ratio": 0.98,
+    "delta_scale": 20.0,
     "w_mass": 1.0,
     "w_delta": 0.3,
     "w_slack": 2.0,
@@ -20,6 +21,7 @@ env_config = {
     "feasible_bonus": 0.5,
     "infeasible_base": -1.0,
     "clip_reward": 5.0,
+    "noop_penalty": -0.01,
 }
 SEED = 42
 torch.manual_seed(SEED)
@@ -28,8 +30,8 @@ random.seed(SEED)
 
 # 超参数
 MAX_EPISODES = 500  # 总训练回合数
-MAX_TIMESTEPS = 20  # 每个回合最大步数 (设计优化通常不需要太长步数)
-UPDATE_TIMESTEP = 60  # 每隔多少步更新一次网络
+MAX_TIMESTEPS = 60  # 每个回合最大步数 (设计优化通常不需要太长步数)
+UPDATE_TIMESTEP = 20  # 每隔多少步更新一次网络
 LR = 0.0003  # 学习率
 GAMMA = 0.99  # 折扣因子
 K_EPOCHS = 5  # 更新时重复训练次数
@@ -39,7 +41,7 @@ BATCH_SIZE = 64  # 批量大小
 # 维度定义 (基于之前的 StructuralGraph)
 NODE_DIM = 19  # 6(geom) + 4(type) + 3(phys) + 4(resp)
 EDGE_DIM = 3  # 3(coord)
-ACTION_DIM = 4  # 8个设计变量
+ACTION_DIM = 5  # 5个设计变量
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -53,7 +55,7 @@ def train():
     agent = PPOAgent(NODE_DIM, EDGE_DIM, ACTION_DIM, LR, GAMMA, K_EPOCHS, EPS_CLIP, BATCH_SIZE, device)
     # agent.load("results/ppo/1227_step20_multiDiscrete/ppo_300.pth")  # 可选：加载预训练模型
 
-    log_dir = "results/ppo/0105_step20_multiDiscrete_opt"
+    log_dir = "results/ppo/0112_step60_Discrete_opt"
     os.makedirs(log_dir, exist_ok=True)
     visualizer = TrainingVisualizer(log_dir)
 
@@ -77,11 +79,9 @@ def train():
             state = state.to(device)
             action, action_log_prob = agent.policy.get_action(state)
 
-            # 转为 numpy 传给环境
-            action_np = action.detach().cpu().numpy().flatten()
+            action_int = int(action.item())
+            next_state, reward, terminated, truncated, info = env.step(action_int)
 
-            # 2. 环境执行动作
-            next_state, reward, terminated, truncated, info = env.step(action_np)
             terminated = terminated or t == MAX_TIMESTEPS
             done = terminated or truncated
 
@@ -169,8 +169,9 @@ def evaluate(model_path, num_episodes=20):
         for step in range(20):  # Max steps
             state = state.to(device)
             action, _ = agent.policy.get_action(state, eval_mode=True)
-            action_np = action.detach().cpu().numpy().flatten()
-            next_state, reward, terminated, _, info = env.step(action_np)
+            action_int = int(action.item())
+            next_state, reward, terminated, truncated, info = env.step(action_int)
+
             terminated = terminated or (step == 19)
 
             ratio = max(info["max_stress_ratio"], info["max_disp_ratio"])
