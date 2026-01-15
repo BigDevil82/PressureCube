@@ -160,6 +160,12 @@ class BeamManager:
         self._beam_map[key] = beam_id
         self.counter += 1
 
+    def get_beam_length(self, beam_id: int) -> float:
+        beam = self.beams[beam_id]
+        p1 = self.node_manager.points[beam.start_node]
+        p2 = self.node_manager.points[beam.end_node]
+        return p1.distance_to(p2)
+
 
 # ==========================================
 # 3. 核心：几何生成引擎 (The New Architecture)

@@ -283,8 +283,9 @@ class StructuralEnv(gym.Env):
                 d2 = res_service.displacements.get(fem_beam.end_node, np.zeros(6))
                 disp_val = max(np.linalg.norm(d1[:3]), np.linalg.norm(d2[:3]))
 
-                # 归一化位移 (L/400) - 这里 L 取主梁间距作为参考
-                limit = self.current_params.width * 1000 / 250.0
+                # 归一化位移 (L/250) - 这里 L 取主梁间距作为参考
+                # limit = self.current_params.width * 1000 / 250.0
+                limit = self.current_design_model.beam_manager.get_beam_length(parent_id) * 1000 / 250.0
                 agg_disp[parent_id] = max(agg_disp.get(parent_id, 0), disp_val / limit)
 
         # 将聚合结果写回 Design Model
