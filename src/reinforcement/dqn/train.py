@@ -14,7 +14,7 @@ def train(steps=30000, log_every_episodes=10):
     agent = DQNAgent(obs_dim=len(obs), n_actions=env.n_actions)
     replay = Replay()
 
-    logger = MetricsLogger("results/dqn/metrics.csv", window=1000)
+    logger = MetricsLogger("results/dqn/0116/metrics.csv", window=1000)
 
     obs, info = env.reset()
     mask = info["action_mask"]
@@ -90,7 +90,7 @@ def train(steps=30000, log_every_episodes=10):
                     f"steps2feas={s['steps_to_feasible_mean']:.1f} "
                     f"ret={s['return_mean']:.2f}"
                 )
-                logger.plot(window=5, save_path="results/dqn/metrics_plot.png")
+                logger.plot(window=5, save_path="results/dqn/0116/metrics_plot.png")
 
             # ---- reset episode accumulators ----
             obs, info = env.reset()

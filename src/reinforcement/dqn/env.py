@@ -119,7 +119,8 @@ class SteelSectionOptEnv(gym.Env):
             self.idx = self.max_indices.copy()
 
         # 2) 几何随机（你现有的参数化方式） :contentReference[oaicite:2]{index=2}
-        L, W, H = self._sample_geometry(rng)
+        # L, W, H = self._sample_geometry(rng)
+        L, W, H = 8.0, 3.7, 3.3
 
         # 3) 荷载：默认30kPa；也可以按你的旧env随机（20~40kPa） :contentReference[oaicite:3]{index=3}
         if options.get("pressure") is not None:
