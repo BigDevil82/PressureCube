@@ -57,6 +57,16 @@ class SteelSectionOptEnv(gym.Env):
         self.penalty_feas_to_infeas = float(self.config.get("penalty_feas_to_infeas", 2.0))
         self.penalty_noop = float(self.config.get("penalty_noop", 0.05))
 
+        # --- reward function selection ---
+        reward_type = self.config.get("reward_type", "original")
+        if reward_type != "original":
+            # Import reward variants
+            from src.reinforcement.dqn.configs.reward_variants import get_reward_function
+
+            self.reward_fn = get_reward_function(reward_type)
+        else:
+            self.reward_fn = None  # Use original implementation
+
         # --- runtime cache ---
         self.current_params: StructuralParameters | None = None
         self.current_design_model: StructuralModel | None = None
@@ -69,6 +79,17 @@ class SteelSectionOptEnv(gym.Env):
         self.prev_mnorm = None
         self.no_improve = 0
         self.t = 0
+
+    def _calc_m0(self):
+        """计算当前 params 下的质量 m0，用于归一化"""
+        self.current_params.frame_section_index = int(self.max_indices[0])
+        self.current_params.main_beam_section_index = int(self.max_indices[1])
+        self.current_params.secondary_beam_section_index = int(self.max_indices[2])
+        self.current_params.brace_section_index = int(self.max_indices[3])
+        self.current_design_model = StructuralModel(self.current_params, self.section_lib)
+        self.current_design_model.generate()
+
+        return self.current_design_model.calculate_mass_kg()
 
     # ---------------- action encoding ----------------
     @staticmethod
@@ -102,9 +123,9 @@ class SteelSectionOptEnv(gym.Env):
 
     # ---------------- reset sampling ----------------
     def _sample_geometry(self, rng: np.random.Generator):
-        L = float(rng.choice(np.arange(6.0, 12.0, 0.2)))
-        W = float(rng.choice(np.arange(3.0, 4.5, 0.3)))
-        H = float(rng.choice(np.arange(3.0, 4.5, 0.3)))
+        L = float(round(rng.choice(np.arange(6.0, 12.0, 0.2)), 2))
+        W = float(round(rng.choice(np.arange(3.0, 4.5, 0.3)), 2))
+        H = float(round(rng.choice(np.arange(3.0, 4.5, 0.3)), 2))
         return L, W, H
 
     def reset(self, seed=None, options=None):
@@ -112,24 +133,22 @@ class SteelSectionOptEnv(gym.Env):
         options = options or {}
         rng = np.random.default_rng(seed) if seed is not None else self.np_random
 
-        # 1) 截面初始：默认全最大
+        # 1) 截面初始：随机初始化 or 固定指定
         if options.get("init_sections") is not None:
             self.idx = np.asarray(options["init_sections"], dtype=np.int64).copy()
         else:
-            self.idx = self.max_indices.copy()
+            self.idx = np.array(
+                [rng.choice(np.arange(0, self.sec_counts[i])) for i in range(4)],
+                dtype=np.int64,
+            )
 
         # 2) 几何随机（你现有的参数化方式） :contentReference[oaicite:2]{index=2}
         # L, W, H = self._sample_geometry(rng)
-        L, W, H = 8.0, 3.7, 3.3
+        # L, W, H = 8.0, 3.7, 3.3
+        L, W, H = options.get("L", 8.0), options.get("W", 3.7), options.get("H", 3.3)
 
-        # 3) 荷载：默认30kPa；也可以按你的旧env随机（20~40kPa） :contentReference[oaicite:3]{index=3}
-        if options.get("pressure") is not None:
-            self.pressure = float(options["pressure"])
-        else:
-            if bool(self.config.get("random_pressure", False)):
-                self.pressure = float(rng.choice(np.arange(20000.0, 40000.0, 4000.0)))
-            else:
-                self.pressure = float(self.config.get("default_pressure", 30000.0))
+        # 3) 荷载：默认30kPa；
+        self.pressure = options.get("pressure", 30000.0)
 
         # 4) 固定拓扑控制参数（按你现在的设定）
         self.current_params = StructuralParameters(
@@ -149,7 +168,7 @@ class SteelSectionOptEnv(gym.Env):
         # 5) 跑一次仿真，得到基准 m0、利用率
         out = self._run_simulation_and_collect()
 
-        self.m0 = float(out["mass"])
+        self.m0 = self._calc_m0()
         self.prev_v = self._violation(out["u_sigma"], out["u_delta"])
         self.prev_mnorm = float(out["mass"] / (self.m0 + 1e-9))
         self.no_improve = 0
@@ -196,17 +215,33 @@ class SteelSectionOptEnv(gym.Env):
         feasible_prev = self.prev_v <= 0.0
         feasible_now = v <= 0.0
 
-        # 5) 奖励（两段增量）
-        if v > 0.0:
-            r = self.alpha * (self.prev_v - v) - self.beta * (mnorm - self.prev_mnorm)
+        # 5) 奖励（使用可插拔的reward function或original实现）
+        if self.reward_fn is not None:
+            # Use pluggable reward function
+            env_state = {
+                "violation": v,
+                "prev_violation": self.prev_v,
+                "mnorm": mnorm,
+                "prev_mnorm": self.prev_mnorm,
+                "u_sigma": u_sigma,
+                "u_delta": u_delta,
+                "feasible_prev": feasible_prev,
+                "feasible_now": feasible_now,
+                "deltas": deltas,
+            }
+            r = self.reward_fn(env_state)
         else:
-            r = self.c_feas - self.beta * (mnorm - self.prev_mnorm)
+            # Original implementation
+            if v > 0.0:
+                r = self.alpha * (self.prev_v - v) - self.beta * (mnorm - self.prev_mnorm)
+            else:
+                r = self.c_feas - self.beta * (mnorm - self.prev_mnorm)
 
-        if feasible_prev and (not feasible_now):
-            r -= self.penalty_feas_to_infeas
+            if feasible_prev and (not feasible_now):
+                r -= self.penalty_feas_to_infeas
 
-        if np.all(deltas == 0):
-            r -= self.penalty_noop
+            if np.all(deltas == 0):
+                r -= self.penalty_noop
 
         # 6) early stop：可行 & 无改进
         if feasible_now and (mnorm >= self.prev_mnorm - self.eps_improve):
@@ -295,8 +330,15 @@ class SteelSectionOptEnv(gym.Env):
         total_mass = float(self.current_design_model.calculate_mass_kg())
 
         # 统计：全结构 max ratio + 控制类别（按你的 BeamResponse 聚合逻辑） :contentReference[oaicite:4]{index=4}
-        max_stress = 0.0
-        max_disp = 0.0
+        max_stress_ratio = 0.0
+        max_disp_ratio = 0.0
+
+        L_mm = self.current_params.width * 1000.0  # 你的 env.py 里是这么取的
+        limit = L_mm / 250.0
+        for node_id, d in res_service.displacements.items():
+            disp_norm_ratio = np.linalg.norm(d[:3]) / (limit + 1e-12)  # XYZ displacement
+            if disp_norm_ratio > max_disp_ratio:
+                max_disp_ratio = disp_norm_ratio
 
         type_max_s = np.zeros(4, dtype=np.float32)
         type_max_d = np.zeros(4, dtype=np.float32)
@@ -306,8 +348,8 @@ class SteelSectionOptEnv(gym.Env):
                 continue
             sr = float(b.response.max_stress_ratio)
             dr = float(b.response.max_disp_ratio)
-            max_stress = max(max_stress, sr)
-            max_disp = max(max_disp, dr)
+            max_stress_ratio = max(max_stress_ratio, sr)
+            # max_disp = max(max_disp, dr)
 
             if b.beam_type == BeamType.FRAME:
                 k = 0
@@ -328,8 +370,8 @@ class SteelSectionOptEnv(gym.Env):
 
         return {
             "mass": total_mass,
-            "u_sigma": float(max_stress),
-            "u_delta": float(max_disp),
+            "u_sigma": float(max_stress_ratio),
+            "u_delta": float(max_disp_ratio),
             "argmax_sigma": argmax_sigma,
             "argmax_delta": argmax_delta,
             "pressure": float(self.pressure),

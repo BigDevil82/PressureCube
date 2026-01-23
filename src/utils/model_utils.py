@@ -8,7 +8,7 @@ from mpl_toolkits.mplot3d import Axes3D
 
 from src.structure.enums import BeamType
 from src.structure.section_library import SectionLibrary
-from src.structure.structural_model import Beam, Point, StructuralModel, StructuralParameters, Window
+from src.structure.structural_model import Beam, Point, StructuralModel, StructuralParameters
 
 
 def load_config(config_path):
@@ -37,7 +37,6 @@ def create_structural_model(config):
                 "on_face": window_dict["on_face"],
                 "is_door": window_dict.get("is_door", False),
             }
-            windows.append(Window(**window_dict))
 
     # 创建结构参数对象
     section_library = SectionLibrary()

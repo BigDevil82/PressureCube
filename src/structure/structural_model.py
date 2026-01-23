@@ -698,13 +698,17 @@ if __name__ == "__main__":
 
     # 配置参数
     params = StructuralParameters(
-        length=12.0,  # 10米长
-        width=3.7,  # 3米宽
-        height=3.3,  # 3米高
-        main_beam_spacing=1.05,  # 主梁每1.5米一道
-        num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
+        length=8.0,  # 10米长
+        width=3.6,  # 3米宽
+        height=3.6,  # 3米高
+        main_beam_spacing=0.9,  # 主梁每1.5米一道
+        num_secondary_width=2,  # 宽度方向分3段 (2条中间次梁)
         num_secondary_height=3,  # 高度方向分3段
-        add_support_beam=True,  # 添加支撑梁
+        add_support_beam=False,  # 添加支撑梁
+        frame_section_index=1,
+        main_beam_section_index=16,
+        secondary_beam_section_index=17,
+        brace_section_index=18,
     )
 
     model = StructuralModel(params, SectionLibrary())

@@ -573,43 +573,43 @@ if __name__ == "__main__":
 
     # 配置参数
     params = StructuralParameters(
-        length=7.2,
-        width=3.7,
-        height=3.3,
-        main_beam_spacing=0.95,
-        num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
-        num_secondary_height=3,  # 高度方向分3段
-        add_support_beam=True,  # 添加支撑梁
-        frame_section_index=3,
-        main_beam_section_index=10,
-        secondary_beam_section_index=9,
-        brace_section_index=16,
-        plate_thickness=0.005,
+        length=9.2,  # 10米长
+        width=3.7,  # 3米宽
+        height=3.3,  # 3米高
+        main_beam_spacing=0.7,  # 主梁每1.5米一道
+        num_secondary_width=5,  # 宽度方向分3段 (2条中间次梁)
+        num_secondary_height=4,  # 高度方向分3段
+        add_support_beam=False,  # 添加支撑梁
+        frame_section_index=0,
+        main_beam_section_index=16,
+        secondary_beam_section_index=6,
+        brace_section_index=17,
     )
+    pressure = 23912  # 内压 30kPa
 
-    model = StructuralModel(params, SectionLibrary())
+    model = StructuralModel(params, SectionLibrary("src/data/steel_sections_large.json"))
     model.generate()
+    print("Total mass：", model.calculate_mass_kg(), "kg")
 
     mesh_generator = MeshGenerator(model, 0.5)
     model = mesh_generator.generate()
 
-    solver = OpenSeesSolver(model)
-
     with Timer("OpenSees Analysis Cost: "):
-        # res = solver.run_static_case("PL", pressure_pa=30000)
-        # res = solver.run_load_combination(factors={"DL": 1.3, "LL": 1.5, "PL": 1.25}, pressure_pa=30000)
-        res = solver.run_load_combination(factors={"DL": 1.0, "LL": 1.0, "PL": 1.0}, pressure_pa=30000)
+        solver = OpenSeesSolver(model)
+        combo_strength = {"DL": 1.3, "LL": 1.5, "PL": 1.25}
+        combo_service = {"DL": 1.0, "LL": 1.0, "PL": 1.0}
+        res_strength = solver.run_load_combination(combo_strength, pressure_pa=pressure)
+        strength_check = ResultProcessor(model).run_gb50017_check(res_strength)
+        res_service = solver.run_load_combination(combo_service, pressure_pa=pressure)
+        disp_check = ResultProcessor(model).run_gb50017_check(res_service)
 
-    with Timer("Result Processing Cost: "):
-        stat = ResultProcessor(model).run_gb50017_check(res)
-
-    print(f"Max Stress Ratio: {stat.max_stress_ratio:.3f}")
-    print(f"Max Stress: {stat.max_stress:.3f} MPa")
-    print(f"Max Stress Pos: {stat.max_stress_pos}")
-    print(f"Max Deflection Ratio: {stat.max_deflection_ratio:.3f}")
-    print(f"Max Deflection: {stat.max_deflection:.3f} mm")
-    print(f"Max Deflection Pos: {stat.max_deflection_pos}")
-    print(model.points[stat.max_deflection_pos].coordinates())
+    print(f"Max Stress Ratio: {strength_check.max_stress_ratio:.3f}")
+    print(f"Max Stress: {strength_check.max_stress:.3f} MPa")
+    print(f"Max Stress Pos: {strength_check.max_stress_pos}")
+    print(f"Max Deflection Ratio: {disp_check.max_deflection_ratio:.3f}")
+    print(f"Max Deflection: {disp_check.max_deflection:.3f} mm")
+    print(f"Max Deflection Pos: {disp_check.max_deflection_pos}")
+    print(model.points[disp_check.max_deflection_pos].coordinates())
 
     # with Timer("Modal Analysis Cost: "):
     #     frequencies, periods = solver.run_modal_case(6)

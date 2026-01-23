@@ -298,11 +298,23 @@ class MeshGenerator:
 
 
 if __name__ == "__main__":
+    from src.structure.section_library import SectionLibrary
+    from src.structure.structural_model import StructuralParameters
     from src.utils.model_utils import StructureVisualizer, create_structural_model, load_config
 
-    # model = create_structural_model(load_config("config.yaml"))
-    # mesh_params = MeshParameters(max_grid_size=0.1)
-    # mesh_generator = MeshGenerator(model, mesh_params)
-    # meshed_model = mesh_generator.generate_mesh()
-    # visualizer = StructureVisualizer(meshed_model)
-    # visualizer.show_all_views(False)
+    p = StructuralParameters(
+        length=8.8,
+        width=4.2,
+        height=3.8,
+        main_beam_spacing=0.7,
+        num_secondary_width=4,
+        num_secondary_height=4,
+        add_support_beam=True,
+    )
+    section_lib = SectionLibrary("src/data/steel_sections_large.json")
+    model = StructuralModel(
+        p,
+        section_lib=section_lib,
+    )
+    mesh_generator = MeshGenerator(model, max_mesh_size=0.5)
+    meshed_model = mesh_generator.generate()

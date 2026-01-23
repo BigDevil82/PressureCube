@@ -13,15 +13,19 @@ class EpisodeStats:
     episode: int
     steps: int
     ep_return: float
-    feasible: int
     best_mnorm: float
     final_mnorm: float
     best_u_sigma: float
-    best_u_delta: float
     final_u_sigma: float
+    best_u_delta: float
     final_u_delta: float
     steps_to_feasible: int
     feasible_steps_ratio: float
+    final_feasible: int
+    pressure: float = -1.0  # optional field for logging pressure
+    size: str = ""  # optional field for logging size description
+    init_secs: str = ""  # optional field for logging initial structure description
+    best_secs: str = ""  # optional field for logging best structure description
 
 
 class MetricsLogger:
@@ -55,7 +59,7 @@ class MetricsLogger:
         arr = lambda name: np.array([getattr(x, name) for x in self.recent], dtype=float)
         return {
             "N": len(self.recent),
-            "feasible_rate": arr("feasible").mean(),
+            "feasible_rate": arr("final_feasible").mean(),
             "best_mnorm_mean": arr("best_mnorm").mean(),
             "best_mnorm_p10": np.percentile(arr("best_mnorm"), 10),
             "best_mnorm_p90": np.percentile(arr("best_mnorm"), 90),
@@ -67,11 +71,12 @@ class MetricsLogger:
         df = pd.read_csv(self.csv_path)
 
         def smooth(x: pd.Series):
+            return x
             return x.rolling(window, min_periods=1).mean()
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
-        axes[0, 0].plot(df["episode"], smooth(df["feasible"]))
+        axes[0, 0].plot(df["episode"], smooth(df["final_feasible"]))
         axes[0, 0].set_xlabel("episode")
         axes[0, 0].set_ylabel("feasible (rolling mean)")
 
@@ -84,7 +89,7 @@ class MetricsLogger:
         axes[1, 0].set_ylabel("steps_to_feasible (rolling mean)")
 
         axes[1, 1].plot(df["episode"], df["ep_return"])
-        axes[1, 1].plot(df["episode"], smooth(df["ep_return"]))
+        # axes[1, 1].plot(df["episode"], smooth(df["ep_return"]))
         axes[1, 1].set_xlabel("episode")
         axes[1, 1].set_ylabel("return (rolling mean)")
 
