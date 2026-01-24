@@ -2,6 +2,7 @@
 Training script for Steel Section Optimization using Stable-Baselines3.
 
 Uses MaskablePPO from sb3-contrib for action masking support.
+Extended version: optimizes both section indices and topology parameters.
 """
 
 import argparse
@@ -19,7 +20,7 @@ from src.reinforcement.sb3.env import SteelSectionOptEnvSB3
 
 
 def mask_fn(env: SteelSectionOptEnvSB3) -> np.ndarray:
-    """Get action mask from environment."""
+    """Get action mask from environment for MultiDiscrete action space."""
     return env.action_masks()
 
 
@@ -143,6 +144,7 @@ def train(
     n_envs: int = 4,
     eval_mode: str = "surrogate",
     surrogate_path: Optional[str] = None,
+    resume_path: Optional[str] = None,
     output_dir: Optional[str] = None,
     learning_rate: float = 3e-4,
     n_steps: int = 256,  # Reduced for faster logging (was 2048)
@@ -163,6 +165,7 @@ def train(
         eval_mode: "fea" or "surrogate"
         surrogate_path: Path to surrogate model (required for surrogate mode)
         output_dir: Output directory for logs and checkpoints
+        resume_path: Path to resume model
         learning_rate: Learning rate
         n_steps: Steps per rollout
         batch_size: Minibatch size
@@ -207,21 +210,27 @@ def train(
     train_env = VecMonitor(train_env)
 
     # Initialize model
-    model = MaskablePPO(
-        "MlpPolicy",
-        train_env,
-        learning_rate=learning_rate,
-        n_steps=n_steps,
-        batch_size=batch_size,
-        n_epochs=n_epochs,
-        gamma=gamma,
-        verbose=verbose,
-        tensorboard_log=f"{output_dir}/logs",
-        seed=seed,
-        policy_kwargs={
-            "net_arch": dict(pi=[128, 128], vf=[128, 128]),
-        },
-    )
+    # Larger network for extended observation space (26-dim)
+    if resume_path is None:
+        model = MaskablePPO(
+            "MlpPolicy",
+            train_env,
+            learning_rate=learning_rate,
+            n_steps=n_steps,
+            batch_size=batch_size,
+            n_epochs=n_epochs,
+            gamma=gamma,
+            verbose=verbose,
+            tensorboard_log=f"{output_dir}/logs",
+            seed=seed,
+            policy_kwargs={
+                "net_arch": dict(pi=[256, 256], vf=[256, 256]),
+            },
+        )
+    else:
+        # Resume from checkpoint if provided
+        print(f"Resuming training from: {resume_path}")
+        model = MaskablePPO.load(resume_path, env=train_env)
 
     print(f"Model initialized: {model.policy}")
 
@@ -263,6 +272,7 @@ def main():
     parser.add_argument("--n_envs", type=int, default=4, help="Number of parallel environments")
     parser.add_argument("--eval_mode", type=str, default="surrogate", choices=["fea", "surrogate"])
     parser.add_argument("--surrogate_path", type=str, default=None, help="Path to surrogate model")
+    parser.add_argument("--resume_path", type=str, default=None, help="Path to resume model")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--n_steps", type=int, default=128, help="Steps per rollout")
@@ -293,6 +303,7 @@ def main():
         eval_mode=args.eval_mode,
         surrogate_path=args.surrogate_path,
         output_dir=args.output_dir,
+        resume_path=args.resume_path,
         learning_rate=args.lr,
         n_steps=args.n_steps,
         batch_size=args.batch_size,

@@ -1,5 +1,7 @@
 """
-Use trained MaskablePPO model to optimize steel sections for new structures.
+Use trained MaskablePPO model to optimize steel sections and topology for new structures.
+
+Extended version: optimizes both section indices and topology parameters.
 
 Usage:
     python -m src.reinforcement.sb3.optimize \
@@ -9,8 +11,8 @@ Usage:
 """
 
 import argparse
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 import numpy as np
 from sb3_contrib import MaskablePPO
@@ -25,12 +27,13 @@ class OptimizationResult:
     """Result of structural optimization."""
 
     sections: List[int]  # [frame, main, secondary, brace]
+    topology: Dict  # {spacing, num_secondary_width, num_secondary_height, add_support_beam}
     mass: float
     u_sigma: float
     u_delta: float
     feasible: bool
     steps: int
-    trajectory: List[dict]  # History of all states
+    trajectory: List[dict] = field(default_factory=list)  # History of all states
 
 
 def mask_fn(env: SteelSectionOptEnvSB3) -> np.ndarray:
@@ -44,11 +47,8 @@ def optimize_structure(
     W: float,
     H: float,
     pressure: float = 30000.0,
-    main_beam_spacing: float = 0.7,
-    num_secondary_width: int = 4,
-    num_secondary_height: int = 4,
-    add_support_beam: bool = True,
     init_sections: Optional[List[int]] = None,
+    init_topology: Optional[Dict] = None,
     eval_mode: str = "fea",
     surrogate_path: Optional[str] = None,
     max_steps: int = 50,
@@ -56,17 +56,14 @@ def optimize_structure(
     verbose: bool = True,
 ) -> OptimizationResult:
     """
-    Optimize steel sections for a given structure using trained model.
+    Optimize steel sections and topology for a given structure using trained model.
 
     Args:
         model_path: Path to trained MaskablePPO model (.zip)
         L, W, H: Structure dimensions (meters)
         pressure: Internal pressure (Pa)
-        main_beam_spacing: Spacing between main beams
-        num_secondary_width: Number of secondary beams in width direction
-        num_secondary_height: Number of secondary beams in height direction
-        add_support_beam: Whether to add support beams
         init_sections: Initial section indices [frame, main, sec, brace] or None for random
+        init_topology: Initial topology dict or None for random
         eval_mode: "fea" for real analysis, "surrogate" for fast prediction
         surrogate_path: Path to surrogate model (required if eval_mode="surrogate")
         max_steps: Maximum optimization steps
@@ -74,7 +71,7 @@ def optimize_structure(
         verbose: Print progress
 
     Returns:
-        OptimizationResult with optimal sections and metrics
+        OptimizationResult with optimal sections, topology, and metrics
     """
     # Load model
     model = MaskablePPO.load(model_path)
@@ -87,10 +84,6 @@ def optimize_structure(
         "surrogate_path": surrogate_path,
         "fixed_geometry": (L, W, H),
         "pressure": pressure,
-        "main_beam_spacing": main_beam_spacing,
-        "num_secondary_width": num_secondary_width,
-        "num_secondary_height": num_secondary_height,
-        "add_support_beam": add_support_beam,
         "T": max_steps,
         "K_no_improve": max_steps,  # Disable early stopping
     }
@@ -98,16 +91,19 @@ def optimize_structure(
     env = SteelSectionOptEnvSB3(env_config)
     env = ActionMasker(env, mask_fn)
 
-    # Reset with optional initial sections
+    # Reset with optional initial state
     reset_options = {}
     if init_sections is not None:
         reset_options["init_sections"] = init_sections
+    if init_topology is not None:
+        reset_options["init_topology"] = init_topology
 
     obs, info = env.reset(options=reset_options)
 
     if verbose:
         print(f"\nStructure: L={L}m, W={W}m, H={H}m, pressure={pressure/1000:.1f}kPa")
         print(f"Initial sections: {env.unwrapped.idx.tolist()}")
+        print(f"Initial topology: {info.get('topology', {})}")
         print(
             f"Initial: mass={info['mass']:.1f}kg, u_sigma={info['u_sigma']:.3f}, u_delta={info['u_delta']:.3f}"
         )
@@ -119,6 +115,7 @@ def optimize_structure(
         {
             "step": 0,
             "sections": env.unwrapped.idx.tolist(),
+            "topology": info.get("topology", {}),
             "mass": info["mass"],
             "u_sigma": info["u_sigma"],
             "u_delta": info["u_delta"],
@@ -150,12 +147,13 @@ def optimize_structure(
         state = {
             "step": step,
             "sections": env.unwrapped.idx.tolist(),
+            "topology": info.get("topology", {}),
             "mass": info["mass"],
             "u_sigma": info["u_sigma"],
             "u_delta": info["u_delta"],
             "feasible": info["feasible"],
             "mnorm": info.get("mnorm", info["mass"] / env.unwrapped.m0),
-            "action": int(action),
+            "action": action.tolist() if isinstance(action, np.ndarray) else action,
             "reward": float(reward),
         }
         trajectory.append(state)
@@ -166,10 +164,11 @@ def optimize_structure(
                 best_feasible = state.copy()
 
         if verbose:
-            action_delta = env.unwrapped.decode_action(int(action))
+            section_deltas, topology_deltas, support_toggle = env.unwrapped.decode_action(action)
+            topo = list(state["topology"].values())
             print(
-                f"Step {step:2d}: action={action_delta.tolist()} -> "
-                f"sections={state['sections']}, mass={state['mass']:.1f}kg, "
+                f"Step {step:2d}: sec_delta={section_deltas.tolist()}, topo_delta={topology_deltas.tolist()}, toggle={support_toggle} -> "
+                f"sections={state['sections']}, topo={topo}, mass={state['mass']:.1f}kg, "
                 f"u_sigma={state['u_sigma']:.3f}, u_delta={state['u_delta']:.3f}, "
                 f"feasible={state['feasible']}, reward={reward:.3f}"
             )
@@ -183,6 +182,7 @@ def optimize_structure(
             print("-" * 60)
             print(f"Best feasible found at step {final['step']}:")
             print(f"  Sections: {final['sections']}")
+            print(f"  Topology: {final.get('topology', {})}")
             print(f"  Mass: {final['mass']:.1f}kg (mnorm={final['mnorm']:.3f})")
             print(f"  u_sigma: {final['u_sigma']:.3f}, u_delta: {final['u_delta']:.3f}")
     else:
@@ -191,11 +191,13 @@ def optimize_structure(
             print("-" * 60)
             print("No feasible solution found. Final state:")
             print(f"  Sections: {final['sections']}")
+            print(f"  Topology: {final.get('topology', {})}")
             print(f"  Mass: {final['mass']:.1f}kg")
             print(f"  u_sigma: {final['u_sigma']:.3f}, u_delta: {final['u_delta']:.3f}")
 
     return OptimizationResult(
         sections=final["sections"],
+        topology=final.get("topology", {}),
         mass=final["mass"],
         u_sigma=final["u_sigma"],
         u_delta=final["u_delta"],
@@ -211,31 +213,30 @@ def validate_with_fea(
     W: float,
     H: float,
     pressure: float = 30000.0,
-    main_beam_spacing: float = 0.7,
-    num_secondary_width: int = 4,
-    num_secondary_height: int = 4,
-    add_support_beam: bool = True,
 ) -> dict:
     """
     Validate optimization result with real FEA.
 
     Use this when optimization was done with surrogate model.
+    Uses the topology from the optimization result.
     """
+    topo = result.topology
     evaluator = StructuralEvaluator(mode="fea")
     result_fea = evaluator.evaluate(
         L=L,
         W=W,
         H=H,
         pressure=pressure,
-        main_beam_spacing=main_beam_spacing,
-        num_secondary_width=num_secondary_width,
-        num_secondary_height=num_secondary_height,
-        add_support_beam=add_support_beam,
+        main_beam_spacing=topo.get("spacing", 0.7),
+        num_secondary_width=topo.get("num_secondary_width", 4),
+        num_secondary_height=topo.get("num_secondary_height", 4),
+        add_support_beam=topo.get("add_support_beam", True),
         sections=result.sections,
     )
 
     return {
         "sections": result.sections,
+        "topology": result.topology,
         "mass": result_fea.mass,
         "u_sigma": result_fea.u_sigma,
         "u_delta": result_fea.u_delta,
@@ -244,7 +245,7 @@ def validate_with_fea(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Optimize steel sections using trained model")
+    parser = argparse.ArgumentParser(description="Optimize steel sections and topology using trained model")
 
     # Model
     parser.add_argument("--model_path", type=str, required=True, help="Path to trained model (.zip)")
@@ -254,12 +255,6 @@ def main():
     parser.add_argument("--W", type=float, required=True, help="Structure width (m)")
     parser.add_argument("--H", type=float, required=True, help="Structure height (m)")
     parser.add_argument("--pressure", type=float, default=30000.0, help="Internal pressure (Pa)")
-
-    # Topology
-    parser.add_argument("--main_beam_spacing", type=float, default=0.7)
-    parser.add_argument("--num_secondary_width", type=int, default=4)
-    parser.add_argument("--num_secondary_height", type=int, default=4)
-    parser.add_argument("--add_support_beam", action="store_true", default=True)
 
     # Initial sections (optional)
     parser.add_argument("--init_frame", type=int, default=None)
@@ -286,17 +281,13 @@ def main():
     if all(x is not None for x in [args.init_frame, args.init_main, args.init_sec, args.init_brace]):
         init_sections = [args.init_frame, args.init_main, args.init_sec, args.init_brace]
 
-    # Run optimization
+    # Run optimization (topology is now optimized by the agent)
     result = optimize_structure(
         model_path=args.model_path,
         L=args.L,
         W=args.W,
         H=args.H,
         pressure=args.pressure,
-        main_beam_spacing=args.main_beam_spacing,
-        num_secondary_width=args.num_secondary_width,
-        num_secondary_height=args.num_secondary_height,
-        add_support_beam=args.add_support_beam,
         init_sections=init_sections,
         eval_mode=args.eval_mode,
         surrogate_path=args.surrogate_path,
@@ -314,12 +305,8 @@ def main():
             W=args.W,
             H=args.H,
             pressure=args.pressure,
-            main_beam_spacing=args.main_beam_spacing,
-            num_secondary_width=args.num_secondary_width,
-            num_secondary_height=args.num_secondary_height,
-            add_support_beam=args.add_support_beam,
         )
-        print(f"FEA validation:")
+        print("FEA validation:")
         print(f"  Mass: {fea_result['mass']:.1f}kg")
         print(f"  u_sigma: {fea_result['u_sigma']:.3f}, u_delta: {fea_result['u_delta']:.3f}")
         print(f"  Feasible: {fea_result['feasible']}")
@@ -327,6 +314,7 @@ def main():
     # Summary
     print(f"\nOptimization complete in {result.steps} steps")
     print(f"Final sections: {result.sections}")
+    print(f"Final topology: {result.topology}")
     print(f"Final mass: {result.mass:.1f}kg")
     print(f"Feasible: {result.feasible}")
 

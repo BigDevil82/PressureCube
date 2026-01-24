@@ -3,6 +3,8 @@ Steel Section Optimization Environment for Stable-Baselines3.
 
 Compatible with MaskablePPO from sb3-contrib.
 Supports both FEA and Surrogate evaluation modes.
+
+Extended version: optimizes both section indices (4) and topology parameters (4).
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -19,9 +21,16 @@ class SteelSectionOptEnvSB3(gym.Env):
     """
     Steel section optimization environment for SB3.
 
-    State: 12-dim vector [L/12, W/4.5, H/4.5, i_f/max, i_m/max, i_s/max, i_b/max,
-                          u_sigma, u_delta, m/m0, argmax_sigma/3, argmax_delta/3]
-    Action: 81 discrete actions (4 section types × 3 deltas each, 3^4=81)
+    Optimizes 8 variables:
+    - 4 section indices: frame, main, secondary, brace
+    - 4 topology parameters: main_beam_spacing, num_secondary_width/height, add_support_beam
+
+    Action space: MultiDiscrete([3,3,3,3, 3,3,3, 2])
+    - First 4: section delta {-1, 0, +1}
+    - Next 3: topology delta {-1, 0, +1} for spacing/num_secondary
+    - Last 1: support beam toggle {0=keep, 1=toggle}
+
+    Observation space: ~31-dim vector with geometry, section properties, topology, and performance metrics.
     """
 
     metadata = {"render_modes": []}
@@ -46,12 +55,22 @@ class SteelSectionOptEnvSB3(gym.Env):
         self.sec_counts = [self.section_lib.section_counts[t] for t in self.sec_types]
         self.max_indices = np.array(self.sec_counts, dtype=np.int64) - 1
 
-        # Action space: 81 discrete actions
-        self.n_actions = 81
-        self.action_space = spaces.Discrete(self.n_actions)
+        # Topology discrete options
+        self.spacing_options = np.array([0.7, 0.8, 0.9, 1.0, 1.1, 1.2], dtype=np.float64)
+        self.num_secondary_range = (2, 6)  # min, max (inclusive)
 
-        # Observation space: 10-dim vector
-        self.obs_dim = 10
+        # Precompute normalization ranges for section properties
+        self._compute_section_ranges()
+
+        # Action space: MultiDiscrete
+        # [sec_frame, sec_main, sec_sec, sec_brace, spacing, num_w, num_h, support]
+        # First 7: delta {-1, 0, +1} -> 3 choices
+        # Last 1: toggle {0=keep, 1=toggle} -> 2 choices
+        self.action_space = spaces.MultiDiscrete([3, 3, 3, 3, 3, 3, 3, 2])
+
+        # Observation space: extended with physics features
+        # [geometry(3) + section_idx_norm(4) + section_physics(12) + topology(4) + pressure(1) + performance(3)] = 27
+        self.obs_dim = 27
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.obs_dim,), dtype=np.float32)
 
         # Episode parameters
@@ -70,14 +89,12 @@ class SteelSectionOptEnvSB3(gym.Env):
         self.fixed_geometry = config.get("fixed_geometry", None)  # (L, W, H) or None
         self.pressure = float(config.get("pressure", 30000.0))
 
-        # Topology config
-        self.main_beam_spacing = float(config.get("main_beam_spacing", 0.7))
-        self.num_secondary_width = int(config.get("num_secondary_width", 4))
-        self.num_secondary_height = int(config.get("num_secondary_height", 4))
-        self.add_support_beam = bool(config.get("add_support_beam", True))
-
         # Runtime state
-        self.idx: np.ndarray = None
+        self.idx: np.ndarray = None  # Section indices [4]
+        self.spacing_idx: int = 0  # Index into spacing_options
+        self.num_secondary_width: int = 4
+        self.num_secondary_height: int = 4
+        self.add_support_beam: bool = True
         self.L: float = None
         self.W: float = None
         self.H: float = None
@@ -88,36 +105,103 @@ class SteelSectionOptEnvSB3(gym.Env):
         self.t: int = 0
         self._current_metrics: Dict = {}
 
+    def _compute_section_ranges(self):
+        """Precompute min/max for section properties for normalization."""
+        self.section_ranges = {}
+        for sec_type in self.sec_types:
+            sections = [
+                self.section_lib.get_section(sec_type, i)
+                for i in range(self.section_lib.section_counts[sec_type])
+            ]
+            areas = [s.area for s in sections]
+            Ixs = [s.Ix for s in sections]
+            Iys = [s.Iy for s in sections]
+            self.section_ranges[sec_type] = {
+                "area": (min(areas), max(areas)),
+                "Ix": (min(Ixs), max(Ixs)),
+                "Iy": (min(Iys), max(Iys)),
+            }
+
+        # Global max for normalization (use max across all types)
+        self.max_area = max(r["area"][1] for r in self.section_ranges.values())
+        self.max_Ix = max(r["Ix"][1] for r in self.section_ranges.values())
+        self.max_Iy = max(r["Iy"][1] for r in self.section_ranges.values())
+
+    @property
+    def main_beam_spacing(self) -> float:
+        """Current main beam spacing value."""
+        return float(self.spacing_options[self.spacing_idx])
+
     # ==================== Action Encoding ====================
 
     @staticmethod
-    def decode_action(a: int) -> np.ndarray:
-        """Decode action 0..80 to delta array [-1,0,+1]^4."""
-        ds = []
-        x = int(a)
-        for _ in range(4):
-            ds.append(x % 3)
-            x //= 3
-        ds = ds[::-1]
-        return np.array([d - 1 for d in ds], dtype=np.int64)
+    def decode_action(action: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int]:
+        """
+        Decode MultiDiscrete action to deltas.
 
-    @staticmethod
-    def encode_action(deltas: np.ndarray) -> int:
-        """Encode delta array to action index."""
-        digits = [int(d + 1) for d in deltas]
-        a = 0
-        for dig in digits:
-            a = a * 3 + dig
-        return int(a)
+        Args:
+            action: np.ndarray of shape (8,) with values:
+                    [0-3]: section deltas (0,1,2 -> -1,0,+1)
+                    [4-6]: topology deltas (0,1,2 -> -1,0,+1)
+                    [7]: support beam toggle (0=keep, 1=toggle)
+
+        Returns:
+            section_deltas: np.ndarray of shape (4,) with values {-1, 0, +1}
+            topology_deltas: np.ndarray of shape (3,) with values {-1, 0, +1}
+            support_toggle: int (0 or 1)
+        """
+        section_deltas = np.array([action[i] - 1 for i in range(4)], dtype=np.int64)
+        topology_deltas = np.array([action[i] - 1 for i in range(4, 7)], dtype=np.int64)
+        support_toggle = int(action[7])
+        return section_deltas, topology_deltas, support_toggle
 
     def action_masks(self) -> np.ndarray:
-        """Return valid action mask for MaskablePPO."""
-        mask = np.ones(self.n_actions, dtype=bool)
-        for a in range(self.n_actions):
-            d = self.decode_action(a)
-            new_idx = self.idx + d
-            if np.any(new_idx < 0) or np.any(new_idx > self.max_indices):
-                mask[a] = False
+        """
+        Return valid action mask for MaskablePPO with MultiDiscrete.
+
+        For MultiDiscrete, mask is a flat array of size sum(nvec).
+        Each action dimension has its own mask segment.
+        """
+        nvec = self.action_space.nvec  # [3,3,3,3, 3,3,3, 2]
+        mask = np.ones(sum(nvec), dtype=bool)
+        offset = 0
+
+        # Section masks (first 4 dimensions, each size 3)
+        for i in range(4):
+            for delta_choice in range(3):  # 0,1,2 -> -1,0,+1
+                delta = delta_choice - 1
+                new_idx = self.idx[i] + delta
+                if new_idx < 0 or new_idx > self.max_indices[i]:
+                    mask[offset + delta_choice] = False
+            offset += nvec[i]
+
+        # Spacing mask (dimension 4, size 3)
+        for delta_choice in range(3):
+            delta = delta_choice - 1
+            new_spacing_idx = self.spacing_idx + delta
+            if new_spacing_idx < 0 or new_spacing_idx >= len(self.spacing_options):
+                mask[offset + delta_choice] = False
+        offset += nvec[4]
+
+        # num_secondary_width mask (dimension 5, size 3)
+        for delta_choice in range(3):
+            delta = delta_choice - 1
+            new_val = self.num_secondary_width + delta
+            if new_val < self.num_secondary_range[0] or new_val > self.num_secondary_range[1]:
+                mask[offset + delta_choice] = False
+        offset += nvec[5]
+
+        # num_secondary_height mask (dimension 6, size 3)
+        for delta_choice in range(3):
+            delta = delta_choice - 1
+            new_val = self.num_secondary_height + delta
+            if new_val < self.num_secondary_range[0] or new_val > self.num_secondary_range[1]:
+                mask[offset + delta_choice] = False
+        offset += nvec[6]
+
+        # support_beam toggle (dimension 7, size 2) - always valid
+        # mask[offset:offset+2] stays True
+
         return mask
 
     # ==================== Environment Core ====================
@@ -163,37 +247,85 @@ class SteelSectionOptEnvSB3(gym.Env):
         )
         return result
 
+    def _get_section_properties(self) -> Tuple[List[float], List[float], List[float]]:
+        """Get current section properties for observation."""
+        areas, Ixs, Iys = [], [], []
+        for i, sec_type in enumerate(self.sec_types):
+            section = self.section_lib.get_section(sec_type, int(self.idx[i]))
+            areas.append(section.area)
+            Ixs.append(section.Ix)
+            Iys.append(section.Iy)
+        return areas, Ixs, Iys
+
     def _build_obs(self, metrics: Dict) -> np.ndarray:
-        """Build observation vector."""
-        i_norm = np.array(
-            [
-                self.idx[0] / max(1, self.max_indices[0]),
-                self.idx[1] / max(1, self.max_indices[1]),
-                self.idx[2] / max(1, self.max_indices[2]),
-                self.idx[3] / max(1, self.max_indices[3]),
-            ],
+        """
+        Build observation vector with physics features.
+
+        Components (26-dim total):
+        - Geometry (3): L, W, H normalized
+        - Section indices (4): normalized by max index
+        - Section physics (12): area, Ix, Iy for each of 4 section types
+        - Topology (4): spacing, num_w, num_h, add_support
+        - Performance (3): u_sigma, u_delta, mnorm
+        """
+        # Section index normalization
+        idx_norm = np.array(
+            [self.idx[i] / max(1, self.max_indices[i]) for i in range(4)],
             dtype=np.float32,
         )
 
-        # argmax: which section type has max violation
-        type_metrics = np.zeros((4, 2), dtype=np.float32)  # placeholder
-        argmax_sigma = 0
-        argmax_delta = 0
+        # Section physical properties
+        areas, Ixs, Iys = self._get_section_properties()
+        areas_norm = [a / (self.max_area + 1e-12) for a in areas]
+        Ixs_norm = [ix / (self.max_Ix + 1e-12) for ix in Ixs]
+        Iys_norm = [iy / (self.max_Iy + 1e-12) for iy in Iys]
+
+        # Topology normalization
+        spacing_norm = self.spacing_idx / (len(self.spacing_options) - 1)
+        num_w_norm = (self.num_secondary_width - self.num_secondary_range[0]) / (
+            self.num_secondary_range[1] - self.num_secondary_range[0]
+        )
+        num_h_norm = (self.num_secondary_height - self.num_secondary_range[0]) / (
+            self.num_secondary_range[1] - self.num_secondary_range[0]
+        )
 
         obs = np.array(
             [
+                # Geometry (3)
                 float(self.L / 12.0),
                 float(self.W / 4.5),
                 float(self.H / 4.5),
-                float(i_norm[0]),
-                float(i_norm[1]),
-                float(i_norm[2]),
-                float(i_norm[3]),
+                # Section indices (4)
+                float(idx_norm[0]),
+                float(idx_norm[1]),
+                float(idx_norm[2]),
+                float(idx_norm[3]),
+                # Section areas (4)
+                float(areas_norm[0]),
+                float(areas_norm[1]),
+                float(areas_norm[2]),
+                float(areas_norm[3]),
+                # Section Ix (4)
+                float(Ixs_norm[0]),
+                float(Ixs_norm[1]),
+                float(Ixs_norm[2]),
+                float(Ixs_norm[3]),
+                # Section Iy (4)
+                float(Iys_norm[0]),
+                float(Iys_norm[1]),
+                float(Iys_norm[2]),
+                float(Iys_norm[3]),
+                # Topology (4)
+                float(spacing_norm),
+                float(num_w_norm),
+                float(num_h_norm),
+                float(self.add_support_beam),
+                # pressure
+                float(self.pressure / 40000.0),
+                # Performance (3)
                 float(metrics["u_sigma"]),
                 float(metrics["u_delta"]),
                 float(metrics["mass"] / (self.m0 + 1e-9)),
-                # float(argmax_sigma / 3.0),
-                # float(argmax_delta / 3.0),
             ],
             dtype=np.float32,
         )
@@ -223,6 +355,28 @@ class SteelSectionOptEnvSB3(gym.Env):
                 dtype=np.int64,
             )
 
+        # Initialize topology
+        if options.get("init_topology") is not None:
+            topo = options["init_topology"]
+            self.spacing_idx = int(topo.get("spacing_idx", rng.integers(0, len(self.spacing_options))))
+            self.num_secondary_width = int(
+                topo.get("num_secondary_width", rng.integers(*self.num_secondary_range) + 1)
+            )
+            self.num_secondary_height = int(
+                topo.get("num_secondary_height", rng.integers(*self.num_secondary_range) + 1)
+            )
+            self.add_support_beam = bool(topo.get("add_support_beam", True))
+        else:
+            # Random topology initialization
+            self.spacing_idx = int(rng.integers(0, len(self.spacing_options)))
+            self.num_secondary_width = int(
+                rng.integers(self.num_secondary_range[0], self.num_secondary_range[1] + 1)
+            )
+            self.num_secondary_height = int(
+                rng.integers(self.num_secondary_range[0], self.num_secondary_range[1] + 1)
+            )
+            self.add_support_beam = bool(rng.choice([True, False]))
+
         # Geometry
         if self.fixed_geometry is not None:
             self.L, self.W, self.H = self.fixed_geometry
@@ -230,6 +384,12 @@ class SteelSectionOptEnvSB3(gym.Env):
             self.L, self.W, self.H = options["geometry"]
         else:
             self.L, self.W, self.H = self._sample_geometry(rng)
+
+        # pressure
+        if options.get("pressure") is not None:
+            self.pressure = options["pressure"]
+        else:
+            self.pressure = rng.integers(20, 41) * 1000.0  # 20kPa to 40kPa
 
         # Evaluate initial state
         metrics = self._evaluate()
@@ -250,23 +410,47 @@ class SteelSectionOptEnvSB3(gym.Env):
             "mnorm": self.prev_mnorm,
             "violation": self.prev_v,
             "action_mask": self.action_masks(),
+            "topology": {
+                "spacing": self.main_beam_spacing,
+                "num_secondary_width": self.num_secondary_width,
+                "num_secondary_height": self.num_secondary_height,
+                "add_support_beam": self.add_support_beam,
+            },
         }
         return obs, info
 
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+        """
+        Execute action and return next state.
+
+        Args:
+            action: np.ndarray of shape (8,) from MultiDiscrete action space
+        """
         # Decode action
-        deltas = self.decode_action(int(action))
+        section_deltas, topology_deltas, support_toggle = self.decode_action(action)
 
-        # Check validity
-        new_idx = self.idx + deltas
-        if np.any(new_idx < 0) or np.any(new_idx > self.max_indices):
-            # Invalid action (should not happen with masking)
-            obs = self._build_obs(self._current_metrics)
-            info = {"action_mask": self.action_masks(), "illegal_action": True}
-            return obs, -1.0, False, False, info
-
-        # Apply action
+        # Apply section changes
+        new_idx = self.idx + section_deltas
+        # Clip to valid range (should be valid due to masking, but safety check)
+        new_idx = np.clip(new_idx, 0, self.max_indices)
         self.idx = new_idx
+
+        # Apply topology changes
+        new_spacing_idx = self.spacing_idx + topology_deltas[0]
+        new_spacing_idx = int(np.clip(new_spacing_idx, 0, len(self.spacing_options) - 1))
+        self.spacing_idx = new_spacing_idx
+
+        new_num_w = self.num_secondary_width + topology_deltas[1]
+        new_num_w = int(np.clip(new_num_w, self.num_secondary_range[0], self.num_secondary_range[1]))
+        self.num_secondary_width = new_num_w
+
+        new_num_h = self.num_secondary_height + topology_deltas[2]
+        new_num_h = int(np.clip(new_num_h, self.num_secondary_range[0], self.num_secondary_range[1]))
+        self.num_secondary_height = new_num_h
+
+        if support_toggle == 1:
+            self.add_support_beam = not self.add_support_beam
+
         self.t += 1
 
         # Evaluate
@@ -279,7 +463,6 @@ class SteelSectionOptEnvSB3(gym.Env):
         m = float(metrics["mass"])
         mnorm = float(m / (self.m0 + 1e-9))
 
-        feasible_prev = self.prev_v <= 0.0
         feasible_now = v <= 0.0
 
         k_vio = 1.0
@@ -289,16 +472,14 @@ class SteelSectionOptEnvSB3(gym.Env):
             return k_vio * v + k_mass * mnorm
 
         phi_prev = calculate_potential(self.prev_v, self.prev_mnorm)
-
-        # phi_curr = k_v * v_curr + k_vol * mnorm_curr
         phi_curr = calculate_potential(v, mnorm)
 
-        # Reward = (Potential Decrease) - Step Cost
-        # 如果 phi 变小了 (更好)，reward 为正
+        # Reward = (Potential Decrease)
         r = phi_prev - phi_curr
 
-        # Penalty for no-op
-        if np.all(deltas == 0):
+        # Penalty for no-op (all deltas are zero and no toggle)
+        is_noop = np.all(section_deltas == 0) and np.all(topology_deltas == 0) and support_toggle == 0
+        if is_noop:
             r -= self.penalty_noop
 
         # Early stopping: feasible and no improvement
@@ -320,6 +501,12 @@ class SteelSectionOptEnvSB3(gym.Env):
             "mnorm": mnorm,
             "violation": v,
             "action_mask": self.action_masks(),
+            "topology": {
+                "spacing": self.main_beam_spacing,
+                "num_secondary_width": self.num_secondary_width,
+                "num_secondary_height": self.num_secondary_height,
+                "add_support_beam": self.add_support_beam,
+            },
         }
 
         return obs, float(r), terminated, truncated, info
