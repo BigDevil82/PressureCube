@@ -282,17 +282,20 @@ class SteelSectionOptEnvSB3(gym.Env):
         feasible_prev = self.prev_v <= 0.0
         feasible_now = v <= 0.0
 
-        # Calculate reward
-        if v > 0.0:
-            # Infeasible: reward improvement in violation
-            r = self.alpha * (self.prev_v - v) - self.beta * (mnorm - self.prev_mnorm)
-        else:
-            # Feasible: constant reward minus mass increase
-            r = self.c_feas - self.beta * (mnorm - self.prev_mnorm)
+        k_vio = 1.0
+        k_mass = 4
 
-        # Penalty for leaving feasible region
-        if feasible_prev and not feasible_now:
-            r -= self.penalty_feas_to_infeas
+        def calculate_potential(v: float, mnorm: float) -> float:
+            return k_vio * v + k_mass * mnorm
+
+        phi_prev = calculate_potential(self.prev_v, self.prev_mnorm)
+
+        # phi_curr = k_v * v_curr + k_vol * mnorm_curr
+        phi_curr = calculate_potential(v, mnorm)
+
+        # Reward = (Potential Decrease) - Step Cost
+        # 如果 phi 变小了 (更好)，reward 为正
+        r = phi_prev - phi_curr
 
         # Penalty for no-op
         if np.all(deltas == 0):
