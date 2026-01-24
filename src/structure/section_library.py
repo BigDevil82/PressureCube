@@ -153,7 +153,8 @@ class SectionLibrary:
             )
 
         # 排序并重新索引
-        self._sort_sections_by_area()
+        # self._sort_sections_by_area()
+        self._sort_sections_by_Ix()
 
     def _parse_h_list(self, raw_list, target_type):
         for i, item in enumerate(raw_list):

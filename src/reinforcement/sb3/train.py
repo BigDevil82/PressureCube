@@ -10,11 +10,10 @@ from datetime import datetime
 from typing import Callable, Dict, Optional
 
 import numpy as np
-from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
-
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 
 from src.reinforcement.sb3.env import SteelSectionOptEnvSB3
 
@@ -41,7 +40,7 @@ class MetricsCallback(BaseCallback):
     Custom callback to log episode-level metrics.
 
     Logs to TensorBoard:
-    - custom/ep_feasible_rate: Rate of feasible final states
+    - custom/ep_final_feas_rate: Rate of feasible final states
     - custom/ep_final_mnorm_mean: Mean normalized mass at episode end
     - custom/ep_final_mnorm_min: Best (min) normalized mass achieved
     - custom/ep_final_u_sigma_mean: Mean stress utilization
@@ -49,81 +48,94 @@ class MetricsCallback(BaseCallback):
     - custom/ep_best_feasible_mnorm: Best mnorm among feasible episodes
     """
 
-    def __init__(self, verbose: int = 0, log_freq: int = 10):
+    def __init__(self, verbose: int = 0):
         super().__init__(verbose)
-        self.log_freq = log_freq
 
-        # Episode-level tracking (reset after logging)
-        self.ep_final_feasible = []
-        self.ep_final_mnorm = []
-        self.ep_final_u_sigma = []
-        self.ep_final_u_delta = []
+        # 1. 临时缓存：用于记录每个并行环境正在进行的回合中的历史最佳
+        # 格式：self.current_best[env_idx] = {'mnorm': inf, 'u_sigma': ..., 'u_delta': ...}
+        self.current_best = []
 
-        # Global best tracking
-        self.best_feasible_mnorm = float("inf")
-        self.total_episodes = 0
+        # 2. 结果仓库：用于存放到 TensorBoard 的数据 (每个 Rollout 结算一次)
+        self.rollout_best_mnorms = []
+        self.rollout_best_u_sigmas = []
+        self.rollout_best_u_deltas = []
+
+        # 3. 逐步可行性统计
+        self.step_feasible_count = 0
+        self.step_total_count = 0
+
+    def _init_callback(self) -> None:
+        # 初始化并行环境的缓存，数量等于 n_envs
+        # 这里的 mnorm 初始设为无穷大，表示还没找到可行解
+        num_envs = self.training_env.num_envs
+        self.current_best = [{"mnorm": float("inf"), "u_sigma": 0.0, "u_delta": 0.0} for _ in range(num_envs)]
 
     def _on_step(self) -> bool:
-        # Check for episode termination via "terminal_observation" key
-        # This is set by VecEnv when episode ends
-        for i, done in enumerate(self.locals.get("dones", [])):
+        # 获取当前这一步所有环境的信息
+        infos = self.locals["infos"]
+        dones = self.locals["dones"]
+        num_envs = len(infos)
+
+        for i in range(num_envs):
+            info = infos[i]
+            done = dones[i]
+
+            # --- A. 统计逐步可行率 (Step-wise Feasibility) ---
+            is_feasible = info.get("feasible", False)
+            if is_feasible:
+                self.step_feasible_count += 1
+            self.step_total_count += 1
+
+            # --- B. 更新当前回合的最佳纪录 (Best Feasible Tracking) ---
+            # 只有当当前步是 feasible 的，且质量比之前记录的更小，才更新
+            current_mnorm = info.get("mnorm", float("inf"))
+
+            if is_feasible and current_mnorm < self.current_best[i]["mnorm"]:
+                self.current_best[i] = {
+                    "mnorm": current_mnorm,
+                    "u_sigma": info.get("u_sigma", 0.0),
+                    "u_delta": info.get("u_delta", 0.0),
+                }
+
+            # --- C. 回合结束处理 (Episode Termination) ---
             if done:
-                info = self.locals["infos"][i]
-                self.total_episodes += 1
+                # 1. 只有当这个回合里至少出现过一次可行解时，才记录数据
+                best_rec = self.current_best[i]
+                if best_rec["mnorm"] != float("inf"):
+                    self.rollout_best_mnorms.append(best_rec["mnorm"])
+                    self.rollout_best_u_sigmas.append(best_rec["u_sigma"])
+                    self.rollout_best_u_deltas.append(best_rec["u_delta"])
 
-                # Get final state metrics
-                feasible = info.get("feasible", False)
-                mnorm = info.get("mnorm", 1.0)
-                u_sigma = info.get("u_sigma", 1.0)
-                u_delta = info.get("u_delta", 1.0)
-
-                self.ep_final_feasible.append(int(feasible))
-                self.ep_final_mnorm.append(mnorm)
-                self.ep_final_u_sigma.append(u_sigma)
-                self.ep_final_u_delta.append(u_delta)
-
-                # Track best feasible
-                if feasible and mnorm < self.best_feasible_mnorm:
-                    self.best_feasible_mnorm = mnorm
+                # 2. 重置该环境的缓存，准备迎接下一个 Episode
+                self.current_best[i] = {"mnorm": float("inf"), "u_sigma": 0.0, "u_delta": 0.0}
 
         return True
 
     def _on_rollout_end(self) -> None:
-        # Log aggregated metrics every rollout
-        if not self.ep_final_feasible:
-            return
+        """
+        每训练一轮（默认为 512 步），计算一次统计数据写入 TensorBoard
+        """
+        # 1. 记录逐步可行率 (Global Step Feasibility Rate)
+        if self.step_total_count > 0:
+            feas_rate = self.step_feasible_count / self.step_total_count
+            self.logger.record("custom/step_feasible_rate", feas_rate)
 
-        n_eps = len(self.ep_final_feasible)
+        # 重置步数计数器
+        self.step_feasible_count = 0
+        self.step_total_count = 0
 
-        # Feasibility rate
-        feas_rate = np.mean(self.ep_final_feasible)
-        self.logger.record("custom/ep_feasible_rate", feas_rate)
-        self.logger.record("custom/ep_count", n_eps)
-        self.logger.record("custom/total_episodes", self.total_episodes)
+        # 2. 记录“回合最佳”的统计值
+        if self.rollout_best_mnorms:
+            self.logger.record("custom/ep_best_mnorm_mean", np.mean(self.rollout_best_mnorms))
+            self.logger.record("custom/ep_best_mnorm_min", np.min(self.rollout_best_mnorms))
+            # 记录对应的应力和位移（这是对应那个最轻时刻的，不是平均值）
+            self.logger.record("custom/ep_best_u_sigma_mean", np.mean(self.rollout_best_u_sigmas))
+            self.logger.record("custom/ep_best_u_delta_mean", np.mean(self.rollout_best_u_deltas))
 
-        # Mass metrics
-        self.logger.record("custom/ep_final_mnorm_mean", np.mean(self.ep_final_mnorm))
-        self.logger.record("custom/ep_final_mnorm_min", np.min(self.ep_final_mnorm))
-
-        # Utilization metrics
-        self.logger.record("custom/ep_final_u_sigma_mean", np.mean(self.ep_final_u_sigma))
-        self.logger.record("custom/ep_final_u_delta_mean", np.mean(self.ep_final_u_delta))
-
-        # Best feasible
-        if self.best_feasible_mnorm < float("inf"):
-            self.logger.record("custom/best_feasible_mnorm", self.best_feasible_mnorm)
-
-        # Feasible-only mnorm stats
-        feasible_mnorms = [m for m, f in zip(self.ep_final_mnorm, self.ep_final_feasible) if f]
-        if feasible_mnorms:
-            self.logger.record("custom/ep_feasible_mnorm_mean", np.mean(feasible_mnorms))
-            self.logger.record("custom/ep_feasible_mnorm_min", np.min(feasible_mnorms))
-
-        # Clear episode buffers
-        self.ep_final_feasible.clear()
-        self.ep_final_mnorm.clear()
-        self.ep_final_u_sigma.clear()
-        self.ep_final_u_delta.clear()
+        # 清空列表
+        self.rollout_best_mnorms.clear()
+        self.rollout_best_u_sigmas.clear()
+        self.rollout_best_u_deltas.clear()
 
 
 def train(
@@ -139,7 +151,6 @@ def train(
     gamma: float = 0.99,
     seed: int = 42,
     fixed_geometry: Optional[tuple] = None,
-    eval_freq: int = 10_000,
     save_freq: int = 50_000,
     verbose: int = 1,
 ):
@@ -159,7 +170,6 @@ def train(
         gamma: Discount factor
         seed: Random seed
         fixed_geometry: (L, W, H) tuple or None for random
-        eval_freq: Evaluation frequency
         save_freq: Checkpoint save frequency
         verbose: Verbosity level
     """
@@ -185,6 +195,7 @@ def train(
     }
 
     # Create vectorized environments
+    # Use SubprocVecEnv for parallel sampling (faster with surrogate mode)
     if n_envs == 1:
         train_env = DummyVecEnv([make_env(env_config, 0, seed)])
     else:
@@ -194,10 +205,6 @@ def train(
         )
 
     train_env = VecMonitor(train_env)
-
-    # Create eval environment (single env, deterministic)
-    eval_env = DummyVecEnv([make_env(env_config, 0, seed + 1000)])
-    eval_env = VecMonitor(eval_env)
 
     # Initialize model
     model = MaskablePPO(
@@ -219,14 +226,14 @@ def train(
     print(f"Model initialized: {model.policy}")
 
     # Callbacks
-    eval_callback = EvalCallback(
-        eval_env,
-        best_model_save_path=f"{output_dir}/checkpoints",
-        log_path=f"{output_dir}/eval_logs",
-        eval_freq=eval_freq // n_envs,
-        n_eval_episodes=10,
-        deterministic=True,
-        render=False,
+    # Note: EvalCallback doesn't work with MaskablePPO (action_masks issue)
+    # Use CheckpointCallback for periodic saves, MetricsCallback for logging
+    checkpoint_callback = CheckpointCallback(
+        save_freq=max(save_freq // n_envs, 1),
+        save_path=f"{output_dir}/checkpoints",
+        name_prefix="model",
+        save_replay_buffer=False,
+        save_vecnormalize=False,
     )
 
     metrics_callback = MetricsCallback(verbose=verbose)
@@ -235,7 +242,7 @@ def train(
     print(f"Starting training for {total_timesteps} timesteps...")
     model.learn(
         total_timesteps=total_timesteps,
-        callback=[eval_callback, metrics_callback],
+        callback=[checkpoint_callback, metrics_callback],
         progress_bar=True,
     )
 
@@ -245,7 +252,6 @@ def train(
 
     # Cleanup
     train_env.close()
-    eval_env.close()
 
     return model
 
@@ -259,14 +265,14 @@ def main():
     parser.add_argument("--surrogate_path", type=str, default=None, help="Path to surrogate model")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
-    parser.add_argument("--n_steps", type=int, default=2048, help="Steps per rollout")
+    parser.add_argument("--n_steps", type=int, default=128, help="Steps per rollout")
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--fixed_L", type=float, default=None, help="Fixed length (optional)")
     parser.add_argument("--fixed_W", type=float, default=None, help="Fixed width (optional)")
     parser.add_argument("--fixed_H", type=float, default=None, help="Fixed height (optional)")
-    parser.add_argument("--eval_freq", type=int, default=10_000, help="Evaluation frequency")
+    parser.add_argument("--save_freq", type=int, default=50_000, help="Checkpoint save frequency")
     parser.add_argument("--verbose", type=int, default=1, help="Verbosity level")
 
     args = parser.parse_args()
@@ -293,7 +299,7 @@ def main():
         gamma=args.gamma,
         seed=args.seed,
         fixed_geometry=fixed_geometry,
-        eval_freq=args.eval_freq,
+        save_freq=args.save_freq,
         verbose=args.verbose,
     )
 
