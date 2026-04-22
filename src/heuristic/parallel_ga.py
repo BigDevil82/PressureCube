@@ -128,7 +128,7 @@ def evaluate_individual(
         surrogate_path=surrogate_path,
     )
     if eval_mode == "surrogate":
-        violation = max(0, u_sigma - 0.95) + max(0, u_delta - 0.95)
+        violation = max(0, u_sigma - 0.9) + max(0, u_delta - 0.9)
     else:
         violation = max(0, u_sigma - 1.0) + max(0, u_delta - 1.0)
 
