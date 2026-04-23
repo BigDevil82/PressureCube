@@ -8,8 +8,9 @@ import streamlit as st
 
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import DesignCheckResult, ResultProcessor
+from src.structure.layout.params import StructuralParameters
 from src.structure.mesh_generator import MeshGenerator
-from src.structure.structural_model import BeamType, StructuralModel, StructuralParameters
+from src.structure.structural_model import BeamType, StructuralModel
 
 st.set_page_config(layout="wide", page_title="有限元模型")
 

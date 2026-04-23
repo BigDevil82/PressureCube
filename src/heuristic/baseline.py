@@ -3,6 +3,7 @@ Greedy shrink baseline for steel section optimization.
 
 Sequential reduction strategy: frame → main beam → secondary beam → brace
 """
+
 import csv
 import json
 import os
@@ -12,7 +13,7 @@ from typing import Any
 import numpy as np
 
 from src.reinforcement.dqn.env import SteelSectionOptEnv
-from src.structure.structural_model import StructuralParameters
+from src.structure.layout.params import StructuralParameters
 
 
 class GreedyShrinkBaseline:
@@ -154,8 +155,14 @@ class GreedyShrinkBaseline:
         print(f"Output: {output_path}\n")
 
         for i, structure in enumerate(test_structures):
-            print(f"[{i+1}/{len(test_structures)}] Structure {structure['structure_id']}: ", end="", flush=True)
-            print(f"L={structure['L']:.1f}, W={structure['W']:.1f}, H={structure['H']:.1f} ... ", end="", flush=True)
+            print(
+                f"[{i+1}/{len(test_structures)}] Structure {structure['structure_id']}: ", end="", flush=True
+            )
+            print(
+                f"L={structure['L']:.1f}, W={structure['W']:.1f}, H={structure['H']:.1f} ... ",
+                end="",
+                flush=True,
+            )
 
             try:
                 result = self.optimize(structure)

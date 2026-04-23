@@ -6,11 +6,13 @@ from typing import Dict, List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
+from structure.layout.params import StructuralParameters
+
 # 添加src目录到Python路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.structure.section_library import SectionLibrary
-from src.structure.structural_model import BeamType, Point, StructuralModel, StructuralParameters, Window
+from src.structure.structural_model import BeamType, Point, StructuralModel, Window
 
 
 class ViewType(Enum):

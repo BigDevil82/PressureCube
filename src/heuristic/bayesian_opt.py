@@ -22,7 +22,7 @@ import optuna
 from optuna.samplers import TPESampler
 
 from src.reinforcement.dqn.env import SteelSectionOptEnv
-from src.structure.structural_model import StructuralParameters
+from src.structure.layout.params import StructuralParameters
 
 
 @dataclass

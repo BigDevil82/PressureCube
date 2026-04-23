@@ -5,9 +5,10 @@ from gymnasium import spaces
 from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
 from src.structure.enums import BeamType
+from src.structure.layout.params import StructuralParameters
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary, SectionType
-from src.structure.structural_model import BeamResponse, StructuralModel, StructuralParameters
+from src.structure.structural_model import BeamResponse, StructuralModel
 from src.utils.logger import Logger
 
 

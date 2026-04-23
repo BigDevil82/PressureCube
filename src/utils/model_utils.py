@@ -7,8 +7,9 @@ import yaml
 from mpl_toolkits.mplot3d import Axes3D
 
 from src.structure.enums import BeamType
+from src.structure.layout.params import StructuralParameters
 from src.structure.section_library import SectionLibrary
-from src.structure.structural_model import Beam, Point, StructuralModel, StructuralParameters
+from src.structure.structural_model import Beam, Point, StructuralModel
 
 
 def load_config(config_path):

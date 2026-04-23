@@ -18,8 +18,9 @@ from src.analysis.unit import (
     RHO_STEEL_KG_M3,
     RHO_STEEL_TONNE_MM3,
 )
+from src.structure.layout.params import StructuralParameters
 from src.structure.section_library import SectionLibrary
-from src.structure.structural_model import Beam, StructuralModel, StructuralParameters
+from src.structure.structural_model import Beam, StructuralModel
 from src.utils.constants import KPA_TO_MPA, LOAD_DEAD_BOTTOM_KPA, LOAD_LIVE_BOTTOM_KPA
 from src.utils.logger import logger
 

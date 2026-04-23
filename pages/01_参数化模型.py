@@ -5,9 +5,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.structure.enums import BeamType
+from src.structure.layout.params import StructuralParameters
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary, SectionType
-from src.structure.structural_model import StructuralModel, StructuralParameters
+from src.structure.structural_model import StructuralModel
 
 st.set_page_config(layout="wide", page_title="参数化模型")
 

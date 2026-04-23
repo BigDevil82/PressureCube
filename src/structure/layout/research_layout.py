@@ -1,19 +1,17 @@
 import math
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 import numpy as np
 
 from src.structure.enums import BeamType
 from src.structure.layout.base import Zone
-
-if TYPE_CHECKING:
-    from src.structure.structural_model import StructuralParameters
+from src.structure.layout.params import StructuralParameters
 
 
 class ResearchLayoutEngine:
     """Current research-oriented layout engine (legacy behavior)."""
 
-    def __init__(self, params: "StructuralParameters"):
+    def __init__(self, params: StructuralParameters):
         self.p = params
         self.zones: list[Zone] = []
         self.main_zone = None

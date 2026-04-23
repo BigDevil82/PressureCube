@@ -6,8 +6,9 @@ import numpy as np
 
 from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver
 from src.analysis.unit import M2_TO_MM2, M4_TO_MM4, M_TO_MM
+from src.structure.layout.params import StructuralParameters
 from src.structure.section_library import SectionLibrary
-from src.structure.structural_model import BeamType, StructuralModel, StructuralParameters
+from src.structure.structural_model import BeamType, StructuralModel
 
 # 钢材设计强度 (Q345 示例)
 DESIGN_STRENGTH_F = 314  # MPa (N/mm2)

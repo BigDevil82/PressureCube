@@ -6,7 +6,7 @@ import numpy as np
 
 from src.structure.enums import BeamType
 from src.structure.layout.base import Zone
-from structure.layout.params import StructuralParameters
+from src.structure.layout.params import StructuralParameters
 
 
 @dataclass

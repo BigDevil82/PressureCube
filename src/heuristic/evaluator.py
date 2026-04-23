@@ -30,9 +30,10 @@ import numpy as np
 
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
+from src.structure.layout.params import StructuralParameters
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary
-from src.structure.structural_model import StructuralModel, StructuralParameters
+from src.structure.structural_model import StructuralModel
 
 
 @dataclass

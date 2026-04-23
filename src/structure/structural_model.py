@@ -1,57 +1,12 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 import numpy as np
 
 from src.structure.enums import BeamType
 from src.structure.layout import LayoutEngineProtocol, create_layout_engine
+from src.structure.layout.params import StructuralParameters
 from src.structure.section_library import SectionLibrary, SectionProperties, SectionType
-
-# ==========================================
-# 1. 基础数据结构保持不变
-# ==========================================
-
-
-@dataclass
-class ExtensionParameters:
-    """侧面凸出部分参数"""
-
-    active: bool = True
-    length: float = 1.1  # Y负方向长度
-    width: float = 1.85  # X方向宽度
-    height: float = 0.0  # 自动计算
-    offset_x: float = 0.0  # 自动计算
-
-
-@dataclass
-class StructuralParameters:
-    """结构参数类"""
-
-    length: float
-    width: float
-    height: float
-    main_beam_spacing: float
-    num_secondary_width: int
-    num_secondary_height: int
-    add_support_beam: bool = True
-    layout_strategy: str = "research"
-
-    # 截面索引
-    frame_section_index: int = 0
-    main_beam_section_index: int = 0
-    secondary_beam_section_index: int = 0
-    brace_section_index: int = 0
-
-    extension: ExtensionParameters = field(default_factory=ExtensionParameters)
-
-    # 其他物理参数
-    plate_thickness: float = 0.005
-
-    def __post_init__(self):
-        if self.extension.active:
-            self.extension.width = self.width / 2
-            self.extension.height = self.height
-            self.extension.offset_x = self.width - self.extension.width
 
 
 @dataclass

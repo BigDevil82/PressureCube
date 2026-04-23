@@ -298,8 +298,8 @@ class MeshGenerator:
 
 
 if __name__ == "__main__":
+    from src.structure.layout.params import StructuralParameters
     from src.structure.section_library import SectionLibrary
-    from src.structure.structural_model import StructuralParameters
     from src.utils.model_utils import StructureVisualizer, create_structural_model, load_config
 
     p = StructuralParameters(

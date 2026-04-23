@@ -1,6 +1,7 @@
 """
 Evaluation framework for trained DQN models on steel structure optimization.
 """
+
 import csv
 import json
 import os
@@ -13,7 +14,7 @@ from scipy import stats
 
 from src.reinforcement.dqn.agent import DQNAgent
 from src.reinforcement.dqn.env import SteelSectionOptEnv
-from src.structure.structural_model import StructuralParameters
+from src.structure.layout.params import StructuralParameters
 
 
 class ModelEvaluator:
@@ -184,8 +185,14 @@ class ModelEvaluator:
         print(f"Output: {output_path}\n")
 
         for i, structure in enumerate(test_structures):
-            print(f"[{i+1}/{len(test_structures)}] Structure {structure['structure_id']}: ", end="", flush=True)
-            print(f"L={structure['L']:.1f}, W={structure['W']:.1f}, H={structure['H']:.1f} ... ", end="", flush=True)
+            print(
+                f"[{i+1}/{len(test_structures)}] Structure {structure['structure_id']}: ", end="", flush=True
+            )
+            print(
+                f"L={structure['L']:.1f}, W={structure['W']:.1f}, H={structure['H']:.1f} ... ",
+                end="",
+                flush=True,
+            )
 
             try:
                 result = self.evaluate_structure(structure)
@@ -240,7 +247,9 @@ class ModelEvaluator:
                 num_steps = [r["num_steps"] for r in successes]
                 times = [r["time_seconds"] for r in successes]
 
-                print(f"Feasibility rate:   {len(feasible)}/{len(successes)} ({len(feasible)/len(successes)*100:.1f}%)")
+                print(
+                    f"Feasibility rate:   {len(feasible)}/{len(successes)} ({len(feasible)/len(successes)*100:.1f}%)"
+                )
                 print(f"Mass reduction:     {np.mean(mass_reductions):.2f}% ± {np.std(mass_reductions):.2f}%")
                 print(f"  Min/Max:          {np.min(mass_reductions):.2f}% / {np.max(mass_reductions):.2f}%")
                 print(f"Steps/struct:       {np.mean(num_steps):.1f} ± {np.std(num_steps):.1f}")

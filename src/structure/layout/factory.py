@@ -1,3 +1,4 @@
+from src.structure.layout.engineering_layout import EngineeringLayoutEngine
 from src.structure.layout.research_layout import ResearchLayoutEngine
 
 
@@ -8,6 +9,6 @@ def create_layout_engine(params):
         return ResearchLayoutEngine(params)
 
     if strategy == "engineering":
-        raise NotImplementedError("Engineering layout engine is not implemented yet.")
+        return EngineeringLayoutEngine(params)
 
     raise ValueError(f"Unknown layout strategy: {strategy}")
