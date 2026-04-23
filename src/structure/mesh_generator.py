@@ -24,6 +24,7 @@ class MeshGenerator:
         # 映射字典: Old ID -> New ID(s)
         self._node_map: Dict[int, int] = {}  # 旧节点 -> 新节点（端点）
         self._beam_divisions: Dict[int, int] = {}  # 梁ID -> 划分段数
+        self._virtual_edge_divisions: Dict[tuple[int, int], int] = {}
 
         # 缓存：记录每根旧梁细分后产生的所有新节点序列（包含首尾）
         self._beam_new_nodes: Dict[int, List[int]] = {}
@@ -89,35 +90,27 @@ class MeshGenerator:
                 # 但为了网格兼容性，我们必须给这条“虚边”分配一个划分数。
                 # 如果有梁，取梁的划分数；如果没有，我们需要临时记录并参与计算。
                 edge_divs = []
-                edge_beams = []  # 记录对应的梁ID，如果没有则为None
+                edge_defs = []
 
                 for n_start, n_end in edges:
-                    beam_id = self._find_beam_id(n_start, n_end)
-                    if beam_id is not None:
-                        div = self._beam_divisions[beam_id]
-                        edge_beams.append(beam_id)
-                    else:
-                        # 这种情况在新模型逻辑下极少发生（因为板是由网格线围成的），
-                        # 但为了健壮性，如果找不到梁，我们假设它是一个虚拟边界。
-                        # 这里简化处理：如果没有梁，我们暂不强求约束（或者假设为1）
-                        # 更严谨的做法是维护一个 edge_key -> divs 的字典
-                        div = 1
-                        edge_beams.append(None)
+                    edge_def = self._get_edge_definition(n_start, n_end)
+                    div = self._get_edge_division(edge_def)
+                    edge_defs.append(edge_def)
                     edge_divs.append(div)
 
                 # 比较 U 方向对边 (Edge 0 vs Edge 2)
                 max_u = max(edge_divs[0], edge_divs[2])
                 if edge_divs[0] < max_u or edge_divs[2] < max_u:
                     changed = True
-                    self._update_edge_div(edge_beams[0], max_u)
-                    self._update_edge_div(edge_beams[2], max_u)
+                    self._update_edge_div(edge_defs[0], max_u)
+                    self._update_edge_div(edge_defs[2], max_u)
 
                 # 比较 V 方向对边 (Edge 1 vs Edge 3)
                 max_v = max(edge_divs[1], edge_divs[3])
                 if edge_divs[1] < max_v or edge_divs[3] < max_v:
                     changed = True
-                    self._update_edge_div(edge_beams[1], max_v)
-                    self._update_edge_div(edge_beams[3], max_v)
+                    self._update_edge_div(edge_defs[1], max_v)
+                    self._update_edge_div(edge_defs[3], max_v)
 
             if not changed:
                 # print(f"约束传播在第 {it+1} 次迭代收敛。")
@@ -131,9 +124,116 @@ class MeshGenerator:
         key = tuple(sorted((n1, n2)))
         return self.original_model.beam_manager._beam_map.get(key)
 
-    def _update_edge_div(self, beam_id, new_div):
-        if beam_id is not None:
-            self._beam_divisions[beam_id] = new_div
+    def _sorted_edge_key(self, n1: int, n2: int) -> tuple[int, int]:
+        return tuple(sorted((n1, n2)))
+
+    def _edge_length(self, n1: int, n2: int) -> float:
+        p1 = self.original_model.node_manager.points[n1]
+        p2 = self.original_model.node_manager.points[n2]
+        return np.linalg.norm([p1.x - p2.x, p1.y - p2.y, p1.z - p2.z])
+
+    def _get_segment_axis(self, n1: int, n2: int) -> int:
+        p1 = self.original_model.node_manager.points[n1]
+        p2 = self.original_model.node_manager.points[n2]
+        deltas = [abs(p1.x - p2.x), abs(p1.y - p2.y), abs(p1.z - p2.z)]
+        return int(np.argmax(deltas))
+
+    def _get_edge_definition(self, n1: int, n2: int) -> dict:
+        direct_beam_id = self._find_beam_id(n1, n2)
+        if direct_beam_id is not None:
+            return {"kind": "beam", "beam_ids": [direct_beam_id], "nodes": [n1, n2]}
+
+        points = self.original_model.node_manager.points
+        p1 = points[n1]
+        p2 = points[n2]
+        axis = self._get_segment_axis(n1, n2)
+        tol = 1e-6
+
+        segment_nodes = []
+        for nid, point in points.items():
+            coords = [point.x, point.y, point.z]
+            start = [p1.x, p1.y, p1.z]
+            end = [p2.x, p2.y, p2.z]
+
+            if not (
+                min(start[axis], end[axis]) - tol <= coords[axis] <= max(start[axis], end[axis]) + tol
+            ):
+                continue
+
+            other_axes = [0, 1, 2]
+            other_axes.remove(axis)
+            if all(abs(coords[ax] - start[ax]) <= tol and abs(coords[ax] - end[ax]) <= tol for ax in other_axes):
+                segment_nodes.append(nid)
+
+        segment_nodes = sorted(
+            set(segment_nodes),
+            key=lambda nid: (
+                self.original_model.node_manager.points[nid].coordinates()[axis],
+                nid,
+            ),
+        )
+
+        if n1 not in segment_nodes or n2 not in segment_nodes:
+            return {"kind": "virtual", "beam_ids": [], "nodes": [n1, n2]}
+
+        start_idx = segment_nodes.index(n1)
+        end_idx = segment_nodes.index(n2)
+        if start_idx > end_idx:
+            segment_nodes = list(reversed(segment_nodes[end_idx : start_idx + 1]))
+        else:
+            segment_nodes = segment_nodes[start_idx : end_idx + 1]
+
+        beam_ids = []
+        for i in range(len(segment_nodes) - 1):
+            beam_id = self._find_beam_id(segment_nodes[i], segment_nodes[i + 1])
+            if beam_id is None:
+                return {"kind": "virtual", "beam_ids": [], "nodes": [n1, n2]}
+            beam_ids.append(beam_id)
+
+        if beam_ids:
+            return {"kind": "chain", "beam_ids": beam_ids, "nodes": segment_nodes}
+        return {"kind": "virtual", "beam_ids": [], "nodes": [n1, n2]}
+
+    def _get_edge_division(self, edge_def: dict) -> int:
+        if edge_def["kind"] == "beam":
+            return self._beam_divisions[edge_def["beam_ids"][0]]
+        if edge_def["kind"] == "chain":
+            return sum(self._beam_divisions[beam_id] for beam_id in edge_def["beam_ids"])
+
+        edge_key = self._sorted_edge_key(edge_def["nodes"][0], edge_def["nodes"][-1])
+        if edge_key not in self._virtual_edge_divisions:
+            self._virtual_edge_divisions[edge_key] = max(
+                1, math.ceil(self._edge_length(edge_key[0], edge_key[1]) / self.max_mesh_size)
+            )
+        return self._virtual_edge_divisions[edge_key]
+
+    def _update_edge_div(self, edge_def, new_div):
+        if edge_def["kind"] == "beam":
+            self._beam_divisions[edge_def["beam_ids"][0]] = new_div
+        elif edge_def["kind"] == "chain":
+            beam_ids = edge_def["beam_ids"]
+            total_len = sum(
+                self._edge_length(
+                    self.original_model.beams[beam_id].start_node,
+                    self.original_model.beams[beam_id].end_node,
+                )
+                for beam_id in beam_ids
+            )
+            assigned = 0
+            for idx, beam_id in enumerate(beam_ids):
+                if idx == len(beam_ids) - 1:
+                    div = max(1, new_div - assigned)
+                else:
+                    beam = self.original_model.beams[beam_id]
+                    ratio = self._edge_length(beam.start_node, beam.end_node) / total_len if total_len > 1e-9 else 0
+                    div = max(1, round(new_div * ratio))
+                    remaining_segments = len(beam_ids) - idx - 1
+                    div = min(div, new_div - assigned - remaining_segments)
+                self._beam_divisions[beam_id] = div
+                assigned += div
+        else:
+            edge_key = self._sorted_edge_key(edge_def["nodes"][0], edge_def["nodes"][-1])
+            self._virtual_edge_divisions[edge_key] = new_div
 
     def _generate_geometry(self):
         """生成物理网格"""
@@ -202,24 +302,44 @@ class MeshGenerator:
 
         # 收集四条边的细分节点序列
         for n_start, n_end in edges:
-            beam_id = self._find_beam_id(n_start, n_end)
-            if beam_id is None:
-                raise ValueError("Some beam not exist when mesh plate")
-            # 获取该梁的节点序列
-            seq = self._beam_new_nodes[beam_id]
-
-            # 检查方向：梁定义的节点顺序可能与板边的顺序相反
-            # 梁可能是 n_end -> n_start, 我们需要映射后的新ID来检查
-            new_n_start = self._node_map[n_start]
-
-            if seq[0] == new_n_start:
-                edge_node_lists.append(seq)
-            else:
-                edge_node_lists.append(seq[::-1])  # 反转序列
+            edge_def = self._get_edge_definition(n_start, n_end)
+            edge_node_lists.append(self._build_edge_node_sequence(edge_def, n_start, n_end))
 
         # edge_node_lists 现在包含了 [Bottom, Right, Top, Left] 四边的节点序列
         # 进行 Coons Patch 插值生成内部节点和板单元
         self._create_coons_patch_mesh(plate, edge_node_lists)
+
+    def _build_edge_node_sequence(self, edge_def: dict, n_start: int, n_end: int) -> List[int]:
+        if edge_def["kind"] == "virtual":
+            divs = self._get_edge_division(edge_def)
+            return self._build_virtual_edge_sequence(n_start, n_end, divs)
+
+        ordered_nodes = edge_def["nodes"]
+        if ordered_nodes[0] != n_start:
+            ordered_nodes = list(reversed(ordered_nodes))
+
+        node_sequence = [self._node_map[ordered_nodes[0]]]
+        for i in range(len(ordered_nodes) - 1):
+            beam_id = self._find_beam_id(ordered_nodes[i], ordered_nodes[i + 1])
+            seq = self._beam_new_nodes[beam_id]
+            if seq[0] != self._node_map[ordered_nodes[i]]:
+                seq = seq[::-1]
+            node_sequence.extend(seq[1:])
+        return node_sequence
+
+    def _build_virtual_edge_sequence(self, n_start: int, n_end: int, divs: int) -> List[int]:
+        start_node = self.original_model.node_manager.points[n_start]
+        end_node = self.original_model.node_manager.points[n_end]
+        p1 = np.array([start_node.x, start_node.y, start_node.z])
+        p2 = np.array([end_node.x, end_node.y, end_node.z])
+        vec = (p2 - p1) / divs
+
+        sequence = [self._node_map[n_start]]
+        for i in range(1, divs):
+            pos = p1 + vec * i
+            sequence.append(self.meshed_model.node_manager.get_or_create(*pos))
+        sequence.append(self._node_map[n_end])
+        return sequence
 
     def _create_coons_patch_mesh(self, original_plate: Plate, edge_nodes: List):
         # edge_nodes: [nodes_bottom, nodes_right, nodes_top, nodes_left]
