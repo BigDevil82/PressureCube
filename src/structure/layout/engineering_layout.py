@@ -61,6 +61,10 @@ class EngineeringLayoutEngine:
         self.right_window_spans: set[tuple[float, float]] = set()
         self.front_back_window_side_y: set[float] = set()
         self.right_window_side_x: set[float] = set()
+        self.ext_left_door_side_x: set[float] = set()
+        self.window_anchor_zs: set[float] = set()
+        self.window_expanded_brace_zs: set[float] = set()
+        self.window_vertical_ranges: list[tuple[float, float]] = []
         self.openings: list[Opening] = []
 
         self._init_geometry()
@@ -228,6 +232,9 @@ class EngineeringLayoutEngine:
             if sorted_vals and self.p.height - sorted_vals[-1] < threshold:
                 z_vals.discard(sorted_vals[-1])
 
+        self.window_expanded_brace_zs = {
+            z for z in z_vals if all(not math.isclose(z, anchor, abs_tol=1e-4) for anchor in anchors)
+        }
         return z_vals
 
     def _fill_secondary_z_grids_with_windows(self):
@@ -267,23 +274,16 @@ class EngineeringLayoutEngine:
         return spans
 
     def _build_openings(self):
-        self._build_extension_opening()
+        self._build_ext_overlap_opening()
         self._build_window_openings()
         self._build_door_opening()
 
-    def _build_extension_opening(self):
+    def _build_ext_overlap_opening(self):
         ext = self.p.extension
         if not ext.active:
             return
 
-        self.openings.append(
-            Opening(
-                face="left",
-                x_range=(ext.offset_x, self.p.width),
-                y_range=(0.0, 0.0),
-                z_range=(0.0, ext.height),
-            )
-        )
+        self.openings.append(Opening("right", (ext.offset_x, self.p.width), (0.0, 0.0), (0.0, self.p.height)))
 
     def _build_window_openings(self):
         window = self.p.window
@@ -294,23 +294,28 @@ class EngineeringLayoutEngine:
         z1 = window.sill_height + window.height
         if z0 >= z1:
             return
+        self.window_anchor_zs.update({z0, z1})
+        self.window_vertical_ranges.append((z0, z1))
 
         spans = self._main_face_spans()
 
         for idx in window.front_spans:
             span = self._safe_span(spans, idx)
             if span is not None:
-                self.front_back_window_side_y.update(span)
+                self.front_back_window_side_y.add((self.p.width, span[0]))
+                self.front_back_window_side_y.add((self.p.width, span[1]))
                 self.openings.append(Opening("front", (self.p.width, self.p.width), span, (z0, z1)))
 
         for idx in window.back_spans:
             span = self._safe_span(spans, idx)
             if span is not None:
-                self.front_back_window_side_y.update(span)
+                self.front_back_window_side_y.add((0.0, span[0]))
+                self.front_back_window_side_y.add((0.0, span[1]))
                 self.openings.append(Opening("back", (0.0, 0.0), span, (z0, z1)))
 
         for span in self._resolve_right_window_spans():
-            self.right_window_side_x.update(span)
+            self.right_window_side_x.add((self.p.length, span[0]))
+            self.right_window_side_x.add((self.p.length, span[1]))
             self.openings.append(Opening("right", span, (self.p.length, self.p.length), (z0, z1)))
 
     def _build_door_opening(self):
@@ -318,23 +323,23 @@ class EngineeringLayoutEngine:
         if not door.active:
             return
 
-        if door.face != "right":
+        ext = self.p.extension
+        if not ext.active or door.face != "left":
             return
 
-        center_x = self.p.width / 2 if door.center_x is None else door.center_x
-        x0 = max(0.0, center_x - door.width / 2)
-        x1 = min(self.p.width, center_x + door.width / 2)
-        z0 = door.bottom_offset
-        z1 = min(self.p.height, door.bottom_offset + door.height)
+        x1 = self.p.width
+        x0 = max(ext.offset_x, x1 - door.width)
+        z0 = 0.0
+        z1 = min(self.p.height, self.p.window.sill_height + self.p.window.height)
 
         if x1 <= x0 or z1 <= z0:
             return
 
         self.grids_x.update({x0, x1})
         self.grids_z.update({z0, z1})
-        self.right_window_side_x.update({x0, x1})
+        self.ext_left_door_side_x.update({x0, x1})
         self.secondary_z_locs.update(z for z in (z0, z1) if 0 < z < self.p.height)
-        self.openings.append(Opening("right", (x0, x1), (self.p.length, self.p.length), (z0, z1)))
+        self.openings.append(Opening("left", (x0, x1), (-ext.length, -ext.length), (z0, z1)))
 
     def _is_secondary_x(self, x: float, tol: float = 1e-4) -> bool:
         return any(math.isclose(x, value, abs_tol=tol) for value in self.secondary_x_locs)
@@ -348,11 +353,26 @@ class EngineeringLayoutEngine:
     def _is_brace_z(self, z: float, tol: float = 1e-4) -> bool:
         return any(math.isclose(z, value, abs_tol=tol) for value in self.brace_z_locs)
 
-    def _is_window_side_y(self, y: float, tol: float = 1e-4) -> bool:
-        return any(math.isclose(y, value, abs_tol=tol) for value in self.front_back_window_side_y)
+    def _is_window_side_y(self, x: float, y: float, tol: float = 1e-4) -> bool:
+        return any(math.isclose(x, px, abs_tol=tol) and math.isclose(y, py, abs_tol=tol) for px, py in self.front_back_window_side_y)
 
-    def _is_window_side_x(self, x: float, tol: float = 1e-4) -> bool:
-        return any(math.isclose(x, value, abs_tol=tol) for value in self.right_window_side_x)
+    def _is_window_side_x(self, x: float, y: float, tol: float = 1e-4) -> bool:
+        return any(math.isclose(y, py, abs_tol=tol) and math.isclose(x, px, abs_tol=tol) for py, px in self.right_window_side_x)
+
+    def _is_window_mid_height(self, z: float, tol: float = 1e-4) -> bool:
+        return any(z0 + tol < z < z1 - tol for z0, z1 in self.window_vertical_ranges)
+
+    def _is_window_expanded_brace_z(self, z: float, tol: float = 1e-4) -> bool:
+        return any(math.isclose(z, value, abs_tol=tol) for value in self.window_expanded_brace_zs)
+
+    def _is_ext_left_face(self, y: float, tol: float = 1e-4) -> bool:
+        return self.p.extension.active and math.isclose(y, -self.p.extension.length, abs_tol=tol)
+
+    def _is_ext_door_side_x(self, x: float, tol: float = 1e-4) -> bool:
+        return any(math.isclose(x, value, abs_tol=tol) for value in self.ext_left_door_side_x)
+
+    def _is_main_left_overlap_face(self, x: float, y: float, tol: float = 1e-4) -> bool:
+        return self.p.extension.active and math.isclose(y, 0.0, abs_tol=tol) and x < self.p.extension.offset_x - tol
 
     def is_in_opening(self, x, y, z, tol=1e-4) -> bool:
         return any(opening.contains(x, y, z, tol) for opening in self.openings)
@@ -391,7 +411,10 @@ class EngineeringLayoutEngine:
             if math.isclose(z, 0, abs_tol=1e-4) or math.isclose(z, self.p.height, abs_tol=1e-4):
                 proposed_type = BeamType.MAIN
             else:
-                proposed_type = BeamType.BRACE if self._is_brace_z(z) else BeamType.SECONDARY
+                if self._is_window_mid_height(z) or self._is_window_expanded_brace_z(z):
+                    proposed_type = BeamType.BRACE
+                else:
+                    proposed_type = BeamType.BRACE if self._is_brace_z(z) else BeamType.SECONDARY
 
         elif axis == "y":
             if math.isclose(z, 0, abs_tol=1e-4) or math.isclose(z, self.p.height, abs_tol=1e-4):
@@ -400,11 +423,14 @@ class EngineeringLayoutEngine:
                 elif self._is_secondary_x(x):
                     proposed_type = BeamType.SECONDARY
             else:
-                proposed_type = BeamType.BRACE if self._is_brace_z(z) else BeamType.SECONDARY
+                if self._is_window_mid_height(z) or self._is_window_expanded_brace_z(z):
+                    proposed_type = BeamType.BRACE
+                else:
+                    proposed_type = BeamType.BRACE if self._is_brace_z(z) else BeamType.SECONDARY
 
         elif axis == "z":
             if math.isclose(x, self.p.width, abs_tol=1e-4) or math.isclose(x, 0.0, abs_tol=1e-4):
-                if self._is_window_side_y(y):
+                if self._is_window_side_y(x, y):
                     proposed_type = BeamType.FRAME
                 elif self._is_secondary_z(z):
                     proposed_type = BeamType.SECONDARY
@@ -412,8 +438,18 @@ class EngineeringLayoutEngine:
                     proposed_type = BeamType.BRACE
                 else:
                     proposed_type = BeamType.MAIN
-            elif math.isclose(y, self.p.length, abs_tol=1e-4):
-                if self._is_window_side_x(x) or self._is_secondary_x(x):
+            elif self._is_ext_left_face(y):
+                if self._is_ext_door_side_x(x):
+                    proposed_type = BeamType.FRAME
+                else:
+                    return None, "", False
+            elif self._is_main_left_overlap_face(x, y):
+                if self._is_brace_x(x):
+                    proposed_type = BeamType.BRACE
+                else:
+                    proposed_type = BeamType.MAIN
+            elif math.isclose(y, self.p.length, abs_tol=1e-4) or math.isclose(y, 0.0, abs_tol=1e-4):
+                if self._is_window_side_x(x, y):
                     proposed_type = BeamType.FRAME
                 elif self._is_brace_x(x):
                     proposed_type = BeamType.BRACE

@@ -61,7 +61,6 @@ def default_ui_state():
         "main_idx": 3,
         "sec_idx": 2,
         "brace_idx": 1,
-        "min_edge_remainder": 0.1,
         "support_beam_max_spacing": 0.75,
         "window_active": True,
         "window_sill_height": 0.9,
@@ -69,11 +68,6 @@ def default_ui_state():
         "front_spans": [],
         "back_spans": [],
         "right_spans": [],
-        "door_active": True,
-        "door_width": 0.91,
-        "door_height": 2.21,
-        "door_bottom_offset": 0.3,
-        "door_center_x": 1.8,
     }
 
 
@@ -99,7 +93,6 @@ def hydrate_defaults():
         defaults["num_sec_h"] = saved_params.num_secondary_height
 
     if isinstance(saved_params, EngineeringLayoutParameters):
-        defaults["min_edge_remainder"] = saved_params.min_edge_remainder
         defaults["support_beam_max_spacing"] = saved_params.support_beam_max_spacing
         defaults["window_active"] = saved_params.window.active
         defaults["window_sill_height"] = saved_params.window.sill_height
@@ -107,25 +100,17 @@ def hydrate_defaults():
         defaults["front_spans"] = saved_params.window.front_spans
         defaults["back_spans"] = saved_params.window.back_spans
         defaults["right_spans"] = saved_params.window.right_spans
-        defaults["door_active"] = saved_params.door.active
-        defaults["door_width"] = saved_params.door.width
-        defaults["door_height"] = saved_params.door.height
-        defaults["door_bottom_offset"] = saved_params.door.bottom_offset
-        defaults["door_center_x"] = (
-            saved_params.width / 2 if saved_params.door.center_x is None else saved_params.door.center_x
-        )
 
     return defaults
 
 
-def build_engineering_preview(length, width, height, beam_spacing, add_brace, min_edge_remainder, support_spacing):
+def build_engineering_preview(length, width, height, beam_spacing, add_brace, support_spacing):
     preview_params = EngineeringLayoutParameters(
         length=length,
         width=width,
         height=height,
         main_beam_spacing=beam_spacing,
         add_support_beam=add_brace,
-        min_edge_remainder=min_edge_remainder,
         support_beam_max_spacing=support_spacing,
         window=WindowParameters(active=False),
     )
@@ -184,14 +169,6 @@ with st.sidebar:
             "高度方向次梁段数", min_value=1, max_value=8, value=int(defaults["num_sec_h"]), key="num_sec_h"
         )
     else:
-        min_edge_remainder = st.slider(
-            "边缘最小余量 (m)",
-            0.05,
-            0.30,
-            float(defaults["min_edge_remainder"]),
-            0.01,
-            key="min_edge_remainder",
-        )
         support_beam_max_spacing = st.slider(
             "支撑梁最大间距 (m)",
             0.3,
@@ -202,7 +179,7 @@ with st.sidebar:
         )
 
         preview_engine = build_engineering_preview(
-            L, W, H, beam_spacing, add_brace, min_edge_remainder, support_beam_max_spacing
+            L, W, H, beam_spacing, add_brace, support_beam_max_spacing
         )
         main_span_options = list(range(len(preview_engine._main_face_spans())))
         right_span_options = list(range(len(sorted(preview_engine.secondary_x_locs)) + 1))
@@ -242,27 +219,6 @@ with st.sidebar:
             options=right_span_options,
             default=[idx for idx in defaults["right_spans"] if idx in right_span_options],
             key="right_spans",
-        )
-
-        st.subheader("🚪 门洞参数")
-        door_active = st.checkbox("启用门洞", value=defaults["door_active"], key="door_active")
-        door_width = st.slider("门宽 (m)", 0.6, 1.5, float(defaults["door_width"]), 0.01, key="door_width")
-        door_height = st.slider("门高 (m)", 1.8, min(3.0, H), float(defaults["door_height"]), 0.01, key="door_height")
-        door_bottom_offset = st.slider(
-            "门底离舱底高度 (m)",
-            0.0,
-            max(0.0, H - door_height),
-            float(defaults["door_bottom_offset"]),
-            0.01,
-            key="door_bottom_offset",
-        )
-        door_center_x = st.slider(
-            "门洞中心沿宽度位置 (m)",
-            0.0,
-            float(W),
-            min(float(defaults["door_center_x"]), float(W)),
-            0.01,
-            key="door_center_x",
         )
 
     st.subheader("🔩 截面选择")
@@ -330,7 +286,6 @@ else:
         main_beam_section_index=main_idx,
         secondary_beam_section_index=sec_idx,
         brace_section_index=brace_idx,
-        min_edge_remainder=min_edge_remainder,
         support_beam_max_spacing=support_beam_max_spacing,
         window=WindowParameters(
             active=window_active,
@@ -341,11 +296,12 @@ else:
             right_spans=sorted(right_spans),
         ),
     )
-    params.door.active = door_active
-    params.door.width = door_width
-    params.door.height = door_height
-    params.door.bottom_offset = door_bottom_offset
-    params.door.center_x = door_center_x
+    params.door.active = True
+    params.door.face = "left"
+    params.door.width = 0.91
+    params.door.height = params.window.sill_height + params.window.height
+    params.door.bottom_offset = 0.0
+    params.door.center_x = None
 
 model = StructuralModel(params, lib)
 model.generate()
