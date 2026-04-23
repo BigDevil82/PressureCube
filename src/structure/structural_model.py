@@ -51,6 +51,7 @@ class Plate:
     nodes: List[int]
     on_face: str
     area: float
+    panel_type: str = "steel"
 
 
 # ==========================================
@@ -231,25 +232,26 @@ class StructuralModel:
                             cx, cy, cz = uc, w, vc  # w is y
                             pts = [(u1, w, v1), (u2, w, v1), (u2, w, v2), (u1, w, v2)]
 
-                        # 1. 检查是否在连通口 (Opening)
-                        if engine.is_in_opening(cx, cy, cz):
-                            continue
-
-                        # 2. 检查区域包含性
+                        # 1. 检查区域包含性
                         active_zones = [zn for zn in engine.zones if zn.contains(cx, cy, cz)]
                         # 过滤掉 Hollow (设备间)
                         active_real_zones = [zn for zn in active_zones if not zn.is_hollow]
                         if not active_real_zones:
                             continue
 
-                        # 3. 检查是否在表面
+                        # 2. 检查是否在表面
                         is_surface = any(zn.on_surface(cx, cy, cz) for zn in active_real_zones)
 
                         if is_surface:
                             face = active_real_zones[0].get_face(cx, cy, cz)
+                            in_opening = engine.is_in_opening(cx, cy, cz)
+                            in_sealed_opening = engine.is_in_sealed_opening(cx, cy, cz)
+                            if in_opening and not in_sealed_opening:
+                                continue
                             # 创建板
                             nids = [self.node_manager.get_or_create(*p) for p in pts]
-                            self.add_plate(nids, face)
+                            panel_type = "opening" if in_sealed_opening else "steel"
+                            self.add_plate(nids, face, panel_type=panel_type)
 
         # 调用通用函数
         xs, ys, zs = engine.sorted_x, engine.sorted_y, engine.sorted_z
@@ -258,7 +260,7 @@ class StructuralModel:
         scan_plane(ys, zs, xs, "YZ")  # Front / Back
         scan_plane(xs, zs, ys, "XZ")  # Left / Right
 
-    def add_plate(self, node_list: List[int], on_face: str):
+    def add_plate(self, node_list: List[int], on_face: str, panel_type: str = "steel"):
         # calculate area of the plate
         p1 = self.points[node_list[0]]
         p2 = self.points[node_list[1]]
@@ -268,7 +270,7 @@ class StructuralModel:
         area = np.linalg.norm(np.cross(vec1, vec2))
         if area < 1e-6:
             return  # 忽略面积过小的板
-        self.plates[self.plate_counter] = Plate(self.plate_counter, node_list, on_face, area)
+        self.plates[self.plate_counter] = Plate(self.plate_counter, node_list, on_face, area, panel_type)
         self.plate_counter += 1
 
     def _get_section(self, b_type: BeamType) -> SectionProperties:
@@ -311,8 +313,12 @@ class StructuralModel:
 
         # 计算板质量
         for plate in self.plates.values():
-            density = 7850.0  # 钢板密度 (kg/m^3)，假设为常数
-            thickness = self.params.plate_thickness
+            if plate.panel_type == "opening":
+                density = self.params.opening_panel.density_kg_m3
+                thickness = self.params.opening_panel.thickness
+            else:
+                density = 7850.0  # 钢板密度 (kg/m^3)，假设为常数
+                thickness = self.params.plate_thickness
             area = plate.area
             mass = density * area * thickness
             total_mass += mass
@@ -341,6 +347,7 @@ class StructuralModel:
 
 # --- 使用示例 ---
 if __name__ == "__main__":
+    from src.structure.layout.params import EngineeringLayoutParameters, WindowParameters
     from src.structure.mesh_generator import MeshGenerator
     from src.utils.model_utils import StructureVisualizer, ViewType
 
@@ -353,18 +360,37 @@ if __name__ == "__main__":
         num_secondary_width=2,  # 宽度方向分3段 (2条中间次梁)
         num_secondary_height=3,  # 高度方向分3段
         add_support_beam=False,  # 添加支撑梁
-        frame_section_index=1,
-        main_beam_section_index=16,
-        secondary_beam_section_index=17,
-        brace_section_index=18,
     )
-
     model = StructuralModel(params, SectionLibrary())
     model.generate()
+    mesh_generator = MeshGenerator(model, 0.5)
+    model = mesh_generator.generate()
+    visualizer = StructureVisualizer(model)
+    visualizer.show_face(ViewType.FULL_3D)
+    # # visualizer.show_all_views(grid=False)
+
+    # # 配置参数
+    # windows = WindowParameters(
+    #     front_spans=[2, 4],  # 前墙第1段有窗
+    #     back_spans=[3],
+    #     right_spans=[1, 2],  # 右墙第2段有窗
+    # )
+    # params = EngineeringLayoutParameters(
+    #     length=7.2,  # 10米长
+    #     width=3.6,  # 3米宽
+    #     height=3.3,  # 3米高
+    #     main_beam_spacing=0.95,  # 主梁每1.5米一道
+    #     add_support_beam=False,  # 添加支撑梁
+    #     support_beam_max_spacing=0.65,
+    #     window=windows,
+    # )
+
+    # model = StructuralModel(params, SectionLibrary())
+    # model.generate()
 
     # mesh_generator = MeshGenerator(model, 0.5)
     # model = mesh_generator.generate()
 
-    visualizer = StructureVisualizer(model)
-    visualizer.show_face(ViewType.FULL_3D)
-    # visualizer.show_all_views(grid=False)
+    # visualizer = StructureVisualizer(model)
+    # visualizer.show_face(ViewType.FULL_3D)
+    # # visualizer.show_all_views(grid=False)

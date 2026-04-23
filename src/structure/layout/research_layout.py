@@ -109,6 +109,9 @@ class ResearchLayoutEngine:
         in_z = (z > 0 + tol) and (z < ext.height - tol)
         return in_x and in_z
 
+    def is_in_sealed_opening(self, x, y, z, tol=1e-4) -> bool:
+        return False
+
     def determine_beam(
         self, p_start: np.ndarray, p_end: np.ndarray, axis: str
     ) -> tuple[Optional[BeamType], str, bool]:

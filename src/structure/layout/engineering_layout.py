@@ -15,6 +15,7 @@ class Opening:
     x_range: tuple[float, float]
     y_range: tuple[float, float]
     z_range: tuple[float, float]
+    sealed: bool = True
 
     def contains(self, x: float, y: float, z: float, tol: float = 1e-4) -> bool:
         if self.face in {"front", "back"}:
@@ -283,7 +284,9 @@ class EngineeringLayoutEngine:
         if not ext.active:
             return
 
-        self.openings.append(Opening("right", (ext.offset_x, self.p.width), (0.0, 0.0), (0.0, self.p.height)))
+        self.openings.append(
+            Opening("right", (ext.offset_x, self.p.width), (0.0, 0.0), (0.0, self.p.height), sealed=False)
+        )
 
     def _build_window_openings(self):
         window = self.p.window
@@ -376,6 +379,9 @@ class EngineeringLayoutEngine:
 
     def is_in_opening(self, x, y, z, tol=1e-4) -> bool:
         return any(opening.contains(x, y, z, tol) for opening in self.openings)
+
+    def is_in_sealed_opening(self, x, y, z, tol=1e-4) -> bool:
+        return any(opening.sealed and opening.contains(x, y, z, tol) for opening in self.openings)
 
     def determine_beam(
         self, p_start: np.ndarray, p_end: np.ndarray, axis: str

@@ -414,7 +414,7 @@ class MeshGenerator:
                 n4 = int(grid_ids[i + 1, j])
 
                 # 传递原始板的属性
-                self.meshed_model.add_plate([n1, n2, n3, n4], original_plate.on_face)
+                self.meshed_model.add_plate([n1, n2, n3, n4], original_plate.on_face, original_plate.panel_type)
 
 
 if __name__ == "__main__":

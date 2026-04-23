@@ -38,6 +38,17 @@ class WindowParameters:
 
 
 @dataclass
+class OpeningPanelParameters:
+    """门窗封板材料参数，默认采用玻璃钢近似。"""
+
+    elastic_modulus_mpa: float = 12000.0
+    poisson_ratio: float = 0.25
+    density_kg_m3: float = 1900.0
+    thickness: float | None = None
+    design_strength_mpa: float = 180.0
+
+
+@dataclass
 class BaseLayoutParameters:
     """两套布局方案共享的参数基类"""
 
@@ -57,6 +68,7 @@ class BaseLayoutParameters:
 
     # 其他物理参数
     plate_thickness: float = 0.005
+    opening_panel: OpeningPanelParameters = field(default_factory=OpeningPanelParameters)
 
     layout_strategy: str = field(init=False, default="base")
 
@@ -65,6 +77,8 @@ class BaseLayoutParameters:
             self.extension.width = self.width / 2
             self.extension.height = self.height
             self.extension.offset_x = self.width - self.extension.width
+        if self.opening_panel.thickness is None:
+            self.opening_panel.thickness = self.plate_thickness
 
 
 @dataclass

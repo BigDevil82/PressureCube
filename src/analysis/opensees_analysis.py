@@ -189,9 +189,14 @@ class OpenSeesSolver:
         for plate_id, plate_obj in self.model.plates.items():
             # Calculate plate mass
             plate_area_m2 = plate_obj.area
-            plate_thickness_m = self.model.params.plate_thickness
+            if plate_obj.panel_type == "opening":
+                plate_thickness_m = self.model.params.opening_panel.thickness
+                plate_density_kg_m3 = self.model.params.opening_panel.density_kg_m3
+            else:
+                plate_thickness_m = self.model.params.plate_thickness
+                plate_density_kg_m3 = RHO_STEEL_KG_M3
             plate_volume_m3 = plate_area_m2 * plate_thickness_m
-            plate_mass_kg = plate_volume_m3 * RHO_STEEL_KG_M3
+            plate_mass_kg = plate_volume_m3 * plate_density_kg_m3
             plate_mass_tonne = plate_mass_kg / 1000.0
 
             # Distribute mass equally to 4 nodes
@@ -218,6 +223,23 @@ class OpenSeesSolver:
         # Plate Section
         plate_thk_mm = self.model.params.plate_thickness * M_TO_MM
         ops.section("ElasticMembranePlateSection", 2000, E_STEEL_MPA, NU_STEEL, plate_thk_mm)
+        # Opening panel material/section (FRP placeholder defaults, configurable in params)
+        opening_density_tonne_mm3 = self.model.params.opening_panel.density_kg_m3 / 1e12
+        ops.nDMaterial(
+            "ElasticIsotropic",
+            1001,
+            self.model.params.opening_panel.elastic_modulus_mpa,
+            self.model.params.opening_panel.poisson_ratio,
+            opening_density_tonne_mm3,
+        )
+        opening_plate_thk_mm = self.model.params.opening_panel.thickness * M_TO_MM
+        ops.section(
+            "ElasticMembranePlateSection",
+            2001,
+            self.model.params.opening_panel.elastic_modulus_mpa,
+            self.model.params.opening_panel.poisson_ratio,
+            opening_plate_thk_mm,
+        )
 
         # 3. Elements - Beams
         transf_tag = 1
@@ -252,7 +274,8 @@ class OpenSeesSolver:
 
         # 4. Elements - Plates (ShellDKGQ)
         for pid, plate in self.model.plates.items():
-            ops.element("ShellDKGQ", int(pid), *plate.nodes, 2000)
+            section_tag = 2001 if plate.panel_type == "opening" else 2000
+            ops.element("ShellDKGQ", int(pid), *plate.nodes, section_tag)
 
         # 5. Boundary Conditions (Pin 底部节点)
         for nid in self.support_node_ids:
@@ -342,8 +365,13 @@ class OpenSeesSolver:
 
         # B. 结构自重 (板) - 分配到节点
         for pid, plate in self.model.plates.items():
-            plate_thk_m = self.model.params.plate_thickness
-            mass_kg = plate.area * plate_thk_m * RHO_STEEL_KG_M3
+            if plate.panel_type == "opening":
+                plate_thk_m = self.model.params.opening_panel.thickness
+                plate_density_kg_m3 = self.model.params.opening_panel.density_kg_m3
+            else:
+                plate_thk_m = self.model.params.plate_thickness
+                plate_density_kg_m3 = RHO_STEEL_KG_M3
+            mass_kg = plate.area * plate_thk_m * plate_density_kg_m3
             force_n = mass_kg * G_M_S2
             fz = -force_n / len(plate.nodes)
             for nid in plate.nodes:
@@ -485,8 +513,13 @@ class OpenSeesSolver:
 
             # B. 结构自重 (板) - 分配到节点
             for pid, plate in self.model.plates.items():
-                plate_thk_m = self.model.params.plate_thickness
-                mass_kg = plate.area * plate_thk_m * RHO_STEEL_KG_M3
+                if plate.panel_type == "opening":
+                    plate_thk_m = self.model.params.opening_panel.thickness
+                    plate_density_kg_m3 = self.model.params.opening_panel.density_kg_m3
+                else:
+                    plate_thk_m = self.model.params.plate_thickness
+                    plate_density_kg_m3 = RHO_STEEL_KG_M3
+                mass_kg = plate.area * plate_thk_m * plate_density_kg_m3
                 force_n = mass_kg * G_M_S2
                 fz = -force_n / len(plate.nodes)
                 for nid in plate.nodes:

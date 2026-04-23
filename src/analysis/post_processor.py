@@ -174,6 +174,14 @@ class ResultProcessor:
         c_M = 6.0 / t2
 
         for pid, stress_raw in res.plate_stresses.items():
+            plate = self.model.plates.get(pid)
+            if plate is None:
+                continue
+            design_strength = (
+                self.model.params.opening_panel.design_strength_mpa
+                if plate.panel_type == "opening"
+                else DESIGN_STRENGTH_F
+            )
             # 遍历 4 个高斯点
             for i in range(4):
                 offset = i * 8
@@ -199,7 +207,7 @@ class ResultProcessor:
                     # sigma_vm = sqrt(sx^2 + sy^2 - sx*sy + 3*txy^2)
                     mises = math.sqrt(sig_x**2 + sig_y**2 - sig_x * sig_y + 3 * tau_xy**2)
 
-                    ratio = mises / DESIGN_STRENGTH_F
+                    ratio = mises / design_strength
 
                     if ratio > max_ratio:
                         max_ratio = ratio
