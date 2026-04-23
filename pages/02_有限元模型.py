@@ -4,6 +4,7 @@ import shutil
 import time
 
 import opstool.vis.plotly as opsvis
+import plotly.graph_objects as go
 import streamlit as st
 
 from src.analysis.opensees_analysis import OpenSeesSolver
@@ -53,6 +54,100 @@ st.markdown(
 )
 
 st.title("🔬 OpenSees 有限元模型分析")
+
+
+def get_beam_color(beam_type):
+    if beam_type == BeamType.FRAME:
+        return "#FF4B4B", 10
+    if beam_type == BeamType.MAIN:
+        return "#1E90FF", 7
+    if beam_type == BeamType.SECONDARY:
+        return "#FFA500", 4
+    if beam_type == BeamType.BRACE:
+        return "#27C344", 2
+    return "#888888", 1
+
+
+def build_model_preview_figure(target_model: StructuralModel) -> go.Figure:
+    traces = []
+    beams_by_type = {}
+
+    for beam in target_model.beams.values():
+        if beam.is_virtual:
+            continue
+        beams_by_type.setdefault(beam.beam_type, {"x": [], "y": [], "z": []})
+        start = target_model.points[beam.start_node]
+        end = target_model.points[beam.end_node]
+        beams_by_type[beam.beam_type]["x"].extend([start.x, end.x, None])
+        beams_by_type[beam.beam_type]["y"].extend([start.y, end.y, None])
+        beams_by_type[beam.beam_type]["z"].extend([start.z, end.z, None])
+
+    for beam_type, data in beams_by_type.items():
+        color, width = get_beam_color(beam_type)
+        traces.append(
+            go.Scatter3d(
+                x=data["x"],
+                y=data["y"],
+                z=data["z"],
+                mode="lines",
+                line=dict(color=color, width=width),
+                name=str(beam_type).split(".")[-1],
+            )
+        )
+
+    all_node_ids = sorted(target_model.points.keys())
+    node_to_idx = {nid: i for i, nid in enumerate(all_node_ids)}
+    mesh_x = [target_model.points[nid].x for nid in all_node_ids]
+    mesh_y = [target_model.points[nid].y for nid in all_node_ids]
+    mesh_z = [target_model.points[nid].z for nid in all_node_ids]
+    plate_groups = {
+        "steel": {"i": [], "j": [], "k": [], "color": "#A9A9A9", "name": "Steel Plate", "opacity": 0.35},
+        "opening": {"i": [], "j": [], "k": [], "color": "#00B7C2", "name": "Opening Panel", "opacity": 0.75},
+    }
+    for plate in target_model.plates.values():
+        plate_idx = [node_to_idx[n] for n in plate.nodes]
+        group = plate_groups["opening" if plate.panel_type == "opening" else "steel"]
+        group["i"].extend([plate_idx[0], plate_idx[0]])
+        group["j"].extend([plate_idx[1], plate_idx[2]])
+        group["k"].extend([plate_idx[2], plate_idx[3]])
+
+    for group in plate_groups.values():
+        if not group["i"]:
+            continue
+        traces.append(
+            go.Mesh3d(
+                x=mesh_x,
+                y=mesh_y,
+                z=mesh_z,
+                i=group["i"],
+                j=group["j"],
+                k=group["k"],
+                opacity=group["opacity"],
+                color=group["color"],
+                alphahull=-1,
+                lighting=dict(ambient=0.5, diffuse=0.8),
+                name=group["name"],
+                hoverinfo="skip",
+            )
+        )
+
+    fig = go.Figure(
+        data=traces,
+        layout=go.Layout(
+            scene=dict(
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                zaxis=dict(visible=False),
+                aspectmode="data",
+                bgcolor="#ffffff",
+            ),
+            paper_bgcolor="#ffffff",
+            margin=dict(l=0, r=0, t=0, b=0),
+            height=650,
+            legend=dict(yanchor="top", y=0.95, xanchor="left", x=0.03, font=dict(color="black")),
+        ),
+    )
+    return fig
 
 # 检查是否有模型数据
 if "current_model" not in st.session_state or "current_params" not in st.session_state:
@@ -184,11 +279,19 @@ with col1:
 
     st.divider()
 
+    preview_model = st.session_state["meshed_model"] if st.session_state.get("meshed_model") is not None else model
+    preview_label = "网格模型" if st.session_state.get("meshed_model") is not None else "原始模型"
+    with st.expander(f"🧩 {preview_label}预览（高亮门窗封板）", expanded=False):
+        st.plotly_chart(build_model_preview_figure(preview_model), width="stretch")
+
 with col2:
     st.subheader("📊 模型统计")
     st.metric("梁单元", len([b for b in model.beams.values() if not b.is_virtual]))
     st.metric("板单元", len(model.plates))
     st.metric("总质量", f"{model.calculate_mass_kg():.1f} kg")
+    opening_plate_count = len([plate for plate in model.plates.values() if plate.panel_type == "opening"])
+    st.metric("封板数量", opening_plate_count)
+    st.caption("青色板为门窗封板（opening panel）")
 
 
 # 运行分析逻辑

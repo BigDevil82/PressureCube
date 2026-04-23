@@ -239,32 +239,37 @@ def build_plotly_figure(
         mesh_y = [target_model.points[nid].y for nid in all_node_ids]
         mesh_z = [target_model.points[nid].z for nid in all_node_ids]
 
-        i_indices = []
-        j_indices = []
-        k_indices = []
+        plate_groups = {
+            "steel": {"i": [], "j": [], "k": [], "color": "#A9A9A9", "name": "Steel Plate", "opacity": 0.42},
+            "opening": {"i": [], "j": [], "k": [], "color": "#00B7C2", "name": "Opening Panel", "opacity": 0.72},
+        }
         for plate in target_model.plates.values():
             plate_idx = [node_to_idx[n] for n in plate.nodes]
-            i_indices.extend([plate_idx[0], plate_idx[0]])
-            j_indices.extend([plate_idx[1], plate_idx[2]])
-            k_indices.extend([plate_idx[2], plate_idx[3]])
+            group = plate_groups["opening" if plate.panel_type == "opening" else "steel"]
+            group["i"].extend([plate_idx[0], plate_idx[0]])
+            group["j"].extend([plate_idx[1], plate_idx[2]])
+            group["k"].extend([plate_idx[2], plate_idx[3]])
 
-        traces.append(
-            go.Mesh3d(
-                x=mesh_x,
-                y=mesh_y,
-                z=mesh_z,
-                i=i_indices,
-                j=j_indices,
-                k=k_indices,
-                opacity=0.5,
-                color="#A9A9A9",
-                alphahull=-1,
-                lighting=dict(ambient=0.5, diffuse=0.8),
-                name="Plate",
-                showlegend=True,
-                hoverinfo="skip",
+        for group in plate_groups.values():
+            if not group["i"]:
+                continue
+            traces.append(
+                go.Mesh3d(
+                    x=mesh_x,
+                    y=mesh_y,
+                    z=mesh_z,
+                    i=group["i"],
+                    j=group["j"],
+                    k=group["k"],
+                    opacity=group["opacity"],
+                    color=group["color"],
+                    alphahull=-1,
+                    lighting=dict(ambient=0.5, diffuse=0.8),
+                    name=group["name"],
+                    showlegend=True,
+                    hoverinfo="skip",
+                )
             )
-        )
 
     if show_nodes:
         traces.append(
@@ -582,3 +587,6 @@ with col2:
     st.markdown("<span style='color:#1E90FF'>■</span> Main (主梁)", unsafe_allow_html=True)
     st.markdown("<span style='color:#FFA500'>■</span> Secondary (次梁)", unsafe_allow_html=True)
     st.markdown("<span style='color:#27C344'>■</span> Brace (支撑)", unsafe_allow_html=True)
+    if show_plates:
+        st.markdown("<span style='color:#A9A9A9'>■</span> Steel Plate (钢板)", unsafe_allow_html=True)
+        st.markdown("<span style='color:#00B7C2'>■</span> Opening Panel (门窗封板)", unsafe_allow_html=True)
