@@ -209,7 +209,23 @@ class Zone:
         return (on_x and on_y) or (on_x and on_z) or (on_y and on_z)
 
     def get_face(self, x, y, z, tol=1e-4) -> Optional[str]:
-        """返回面名称，用于后续荷载施加"""
+        """
+        返回面名称，用于后续荷载施加
+
+        约定：
+        结构为一三维立方体，全局坐标系定义如下：
+        - X轴：水平横向，正方向指向前方
+        - Y轴：水平纵向，正方向指向右侧
+        - Z轴：竖向，正方向向上
+
+        假定观察者站在结构外部，X轴正向一定距离处，基于观察者视角，将面按如下规则命名：
+        - top：z = max
+        - bottom：z = min
+        - front：x = max
+        - back：x = min
+        - left：y = min
+        - right：y = max
+        """
         if math.isclose(z, self.z_range[1], abs_tol=tol):
             return "top"
         if math.isclose(z, self.z_range[0], abs_tol=tol):
