@@ -1,4 +1,16 @@
 from dataclasses import dataclass, field
+from typing import Literal
+
+
+@dataclass
+class ExtensionParameters:
+    """侧面凸出部分参数"""
+
+    active: bool = True
+    length: float = 1.1  # Y负方向长度
+    width: float = 1.85  # X方向宽度
+    height: float = 0.0  # 自动计算
+    offset_x: float = 0.0  # 自动计算
 
 
 @dataclass
@@ -10,6 +22,7 @@ class DoorParameters:
     height: float = 2.21
     bottom_offset: float = 0.3
     face: str = "right"
+    center_x: float | None = None
 
 
 @dataclass
@@ -25,44 +38,14 @@ class WindowParameters:
 
 
 @dataclass
-class EngineeringLayoutParameters:
-    """工程版布局超参数"""
-
-    min_edge_remainder: float = 0.1
-    support_beam_max_spacing: float = 0.75
-    window: WindowParameters = field(default_factory=WindowParameters)
-    door: DoorParameters = field(default_factory=DoorParameters)
-
-
-# ==========================================
-# 1. 基础数据结构保持不变
-# ==========================================
-
-
-@dataclass
-class ExtensionParameters:
-    """侧面凸出部分参数"""
-
-    active: bool = True
-    length: float = 1.1  # Y负方向长度
-    width: float = 1.85  # X方向宽度
-    height: float = 0.0  # 自动计算
-    offset_x: float = 0.0  # 自动计算
-
-
-@dataclass
-class StructuralParameters:
-    """结构参数类"""
+class BaseLayoutParameters:
+    """两套布局方案共享的参数基类"""
 
     length: float
     width: float
     height: float
     main_beam_spacing: float
-    num_secondary_width: int
-    num_secondary_height: int
     add_support_beam: bool = True
-    layout_strategy: str = "research"
-    engineering: EngineeringLayoutParameters = field(default_factory=EngineeringLayoutParameters)
 
     # 截面索引
     frame_section_index: int = 0
@@ -75,8 +58,36 @@ class StructuralParameters:
     # 其他物理参数
     plate_thickness: float = 0.005
 
+    layout_strategy: str = field(init=False, default="base")
+
     def __post_init__(self):
         if self.extension.active:
             self.extension.width = self.width / 2
             self.extension.height = self.height
             self.extension.offset_x = self.width - self.extension.width
+
+
+@dataclass
+class ResearchLayoutParameters(BaseLayoutParameters):
+    """研究版布局参数"""
+
+    num_secondary_width: int = 3
+    num_secondary_height: int = 3
+    layout_strategy: Literal["research"] = field(init=False, default="research")
+
+
+@dataclass
+class EngineeringLayoutParameters(BaseLayoutParameters):
+    """工程版布局参数"""
+
+    min_edge_remainder: float = 0.1
+    support_beam_max_spacing: float = 0.75
+    window: WindowParameters = field(default_factory=WindowParameters)
+    door: DoorParameters = field(default_factory=DoorParameters)
+    layout_strategy: Literal["engineering"] = field(init=False, default="engineering")
+
+
+LayoutParameters = ResearchLayoutParameters | EngineeringLayoutParameters
+
+# 向后兼容旧名称。现有优化与分析代码默认仍使用研究版参数。
+StructuralParameters = ResearchLayoutParameters

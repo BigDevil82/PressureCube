@@ -5,13 +5,13 @@ import numpy as np
 
 from src.structure.enums import BeamType
 from src.structure.layout.base import Zone
-from src.structure.layout.params import StructuralParameters
+from src.structure.layout.params import ResearchLayoutParameters
 
 
 class ResearchLayoutEngine:
     """Current research-oriented layout engine (legacy behavior)."""
 
-    def __init__(self, params: StructuralParameters):
+    def __init__(self, params: ResearchLayoutParameters):
         self.p = params
         self.zones: list[Zone] = []
         self.main_zone = None

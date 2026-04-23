@@ -5,7 +5,7 @@ import numpy as np
 
 from src.structure.enums import BeamType
 from src.structure.layout import LayoutEngineProtocol, create_layout_engine
-from src.structure.layout.params import StructuralParameters
+from src.structure.layout.params import BaseLayoutParameters, StructuralParameters
 from src.structure.section_library import SectionLibrary, SectionProperties, SectionType
 
 
@@ -135,7 +135,7 @@ BEAM_TYPE_MAP = {
 
 
 class StructuralModel:
-    def __init__(self, params: StructuralParameters, section_lib: SectionLibrary):
+    def __init__(self, params: BaseLayoutParameters, section_lib: SectionLibrary):
         self.params = params
         self.section_lib = section_lib
         self.node_manager = NodeManager()
