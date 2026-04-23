@@ -1,11 +1,10 @@
-import bisect
-import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 
 from src.structure.enums import BeamType
+from src.structure.layout import LayoutEngineProtocol, create_layout_engine
 from src.structure.section_library import SectionLibrary, SectionProperties, SectionType
 
 # ==========================================
@@ -35,6 +34,7 @@ class StructuralParameters:
     num_secondary_width: int
     num_secondary_height: int
     add_support_beam: bool = True
+    layout_strategy: str = "research"
 
     # 截面索引
     frame_section_index: int = 0
@@ -168,330 +168,7 @@ class BeamManager:
 
 
 # ==========================================
-# 3. 核心：几何生成引擎 (The New Architecture)
-# ==========================================
-
-
-@dataclass
-class Zone:
-    name: str  # "main", "ext", "equip"
-    x_range: Tuple[float, float]
-    y_range: Tuple[float, float]
-    z_range: Tuple[float, float]
-    is_hollow: bool = False
-
-    def contains(self, x, y, z, tol=1e-4) -> bool:
-        """点是否在闭包围盒内"""
-        return (
-            self.x_range[0] - tol <= x <= self.x_range[1] + tol
-            and self.y_range[0] - tol <= y <= self.y_range[1] + tol
-            and self.z_range[0] - tol <= z <= self.z_range[1] + tol
-        )
-
-    def on_surface(self, x, y, z, tol=1e-4) -> bool:
-        """点是否在表面（包含棱边）"""
-        if not self.contains(x, y, z, tol):
-            return False
-        on_x = math.isclose(x, self.x_range[0], abs_tol=tol) or math.isclose(x, self.x_range[1], abs_tol=tol)
-        on_y = math.isclose(y, self.y_range[0], abs_tol=tol) or math.isclose(y, self.y_range[1], abs_tol=tol)
-        on_z = math.isclose(z, self.z_range[0], abs_tol=tol) or math.isclose(z, self.z_range[1], abs_tol=tol)
-        return on_x or on_y or on_z
-
-    def on_edge(self, x, y, z, tol=1e-4) -> bool:
-        """点是否在棱线上（即 FRAME 的位置）"""
-        if not self.contains(x, y, z, tol):
-            return False
-        on_x = math.isclose(x, self.x_range[0], abs_tol=tol) or math.isclose(x, self.x_range[1], abs_tol=tol)
-        on_y = math.isclose(y, self.y_range[0], abs_tol=tol) or math.isclose(y, self.y_range[1], abs_tol=tol)
-        on_z = math.isclose(z, self.z_range[0], abs_tol=tol) or math.isclose(z, self.z_range[1], abs_tol=tol)
-
-        # 只有满足至少两个面约束，才是在棱上
-        return (on_x and on_y) or (on_x and on_z) or (on_y and on_z)
-
-    def get_face(self, x, y, z, tol=1e-4) -> Optional[str]:
-        """
-        返回面名称，用于后续荷载施加
-
-        约定：
-        结构为一三维立方体，全局坐标系定义如下：
-        - X轴：水平横向，正方向指向前方
-        - Y轴：水平纵向，正方向指向右侧
-        - Z轴：竖向，正方向向上
-
-        假定观察者站在结构外部，X轴正向一定距离处，基于观察者视角，将面按如下规则命名：
-        - top：z = max
-        - bottom：z = min
-        - front：x = max
-        - back：x = min
-        - left：y = min
-        - right：y = max
-        """
-        if math.isclose(z, self.z_range[1], abs_tol=tol):
-            return "top"
-        if math.isclose(z, self.z_range[0], abs_tol=tol):
-            return "bottom"
-        if math.isclose(x, self.x_range[0], abs_tol=tol):
-            return "back"
-        if math.isclose(x, self.x_range[1], abs_tol=tol):
-            return "front"
-        if math.isclose(y, self.y_range[0], abs_tol=tol):
-            return "left"
-        if math.isclose(y, self.y_range[1], abs_tol=tol):
-            return "right"
-        return None
-
-
-class LayoutEngine:
-    def __init__(self, params: StructuralParameters):
-        self.p = params
-        self.zones: List[Zone] = []
-        self.main_zone = None
-
-        # 坐标网格集合
-        self.grids_x = set()
-        self.grids_y = set()
-        self.grids_z = set()
-
-        # 支撑梁位置标记 (X 和 Z 方向都需要)
-        self.secondary_x_locs = set()
-        self.brace_x_locs = set()
-        self.brace_z_locs = set()
-
-        self._init_geometry()
-
-    def _init_geometry(self):
-        L, W, H = self.p.length, self.p.width, self.p.height
-        ext = self.p.extension
-
-        # 1. 定义区域 (Zone)
-        self.main_zone = Zone("main", (0, W), (0, L), (0, H))
-        self.zones.append(self.main_zone)
-
-        if ext.active:
-            # 假设 extension 在 X 大值侧，向 Y 负方向生长
-            # Extension: [offset_x, W]
-            ext_x_start = ext.offset_x
-            ext_x_end = ext.offset_x + ext.width  # 其实就是 W
-            self.zones.append(Zone("ext", (ext_x_start, ext_x_end), (-ext.length, 0), (0, ext.height)))
-            self.zones.append(
-                Zone("equip", (0, ext_x_start), (-ext.length, 0), (0, ext.height), is_hollow=True)
-            )
-
-        # 2. 生成边界网格
-        for z in self.zones:
-            self.grids_x.update(z.x_range)
-            self.grids_y.update(z.y_range)
-            self.grids_z.update(z.z_range)
-
-        # 3. 填充内部细分网格
-        self._fill_main_beam_y_grids()  # Y轴: 主梁间距
-        self._fill_secondary_x_grids()  # X轴: 顶/底面次梁分布
-        self._fill_secondary_z_grids()  # Z轴: 前/后面次梁分布 (新增)
-
-        self.sorted_x = sorted(list(self.grids_x))
-        self.sorted_y = sorted(list(self.grids_y))
-        self.sorted_z = sorted(list(self.grids_z))
-
-    def _fill_main_beam_y_grids(self):
-        """Y方向切片：控制 Top/Bottom/Front/Back 面的竖向肋或主梁"""
-        curr = 0.0
-        # 主舱体长 L
-        while curr <= self.p.length + 1e-5:
-            self.grids_y.add(curr)
-            curr += self.p.main_beam_spacing
-        self.grids_y.add(self.p.length)
-
-        # Extension 区域 Y 方向 (通常比较短，只加头尾即可，暂不加密)
-        if self.p.extension.active:
-            self.grids_y.add(-self.p.extension.length)
-
-    def _fill_secondary_x_grids(self):
-        """X方向切片：控制 Top/Bottom 面的次梁"""
-        n_segs = self.p.num_secondary_width
-        step = self.p.width / n_segs
-
-        for i in range(1, n_segs):
-            pos = i * step
-            self.grids_x.add(pos)
-            self.secondary_x_locs.add(pos)
-            # 支撑梁 (次梁中间)
-            if self.p.add_support_beam:
-                brace_pos = pos - (step / 2)
-                self.grids_x.add(brace_pos)
-                self.brace_x_locs.add(brace_pos)
-
-        # 补齐最后一格的支撑
-        if self.p.add_support_beam:
-            self.grids_x.add(self.p.width - (step / 2))
-            self.brace_x_locs.add(self.p.width - (step / 2))
-
-    def _fill_secondary_z_grids(self):
-        """Z方向切片：控制 Front/Back 面的次梁 (沿高度分布)"""
-        # 假设高度方向分段逻辑与宽度一致
-        n_segs = self.p.num_secondary_height
-        step = self.p.height / n_segs
-
-        for i in range(1, n_segs):
-            pos = i * step
-            self.grids_z.add(pos)
-            # 支撑梁逻辑同上
-            if self.p.add_support_beam:
-                brace_pos = pos - (step / 2)
-                self.grids_z.add(brace_pos)
-                self.brace_z_locs.add(brace_pos)
-
-        if self.p.add_support_beam:
-            self.grids_z.add(self.p.height - (step / 2))
-            self.brace_z_locs.add(self.p.height - (step / 2))
-
-    def is_in_opening(self, x, y, z, tol=1e-4) -> bool:
-        """检查点是否位于 Ext 和 Main 的连通口 (y=0, x > offset_x)"""
-        # 连通口定义：平面 y=0, x区间 [offset_x, width], z区间 [0, height]
-        # 注意：这里我们放宽一点 z 的判定，只处理中间部分，保留上下边框梁(Frame)
-        ext = self.p.extension
-        if not ext.active:
-            return False
-
-        # 判定面：y=0
-        if not math.isclose(y, 0, abs_tol=tol):
-            return False
-
-        # 判定 X 范围 (严格在内部，保留两侧立柱)
-        # 如果 x == offset_x 或 x == width，那是立柱位置，不能是洞
-        in_x = (x > ext.offset_x + tol) and (x < self.p.width - tol)
-
-        # 判定 Z 范围 (严格在内部，保留上下主梁)
-        in_z = (z > 0 + tol) and (z < ext.height - tol)
-
-        return in_x and in_z
-
-    def determine_beam(
-        self, p_start: np.ndarray, p_end: np.ndarray, axis: str
-    ) -> Tuple[Optional[BeamType], str, bool]:
-        """
-        判断梁类型
-        Returns: (BeamType, face_name, is_virtual)
-        """
-        mid = (p_start + p_end) / 2
-        x, y, z = mid
-
-        # 1. 区域判定
-        active_zones = [zn for zn in self.zones if zn.contains(x, y, z)]
-        if not active_zones:
-            return None, "", False
-
-        # 开洞检查
-        if self.is_in_opening(x, y, z):
-            return None, "", False
-
-        # 2. 表面检查 (只生成表面的构件)
-        # 注意：虚拟梁(Split Line)通常位于主结构的表面(Top/Bottom)，所以也能通过此检查
-        is_on_any_surface = any(zn.on_surface(x, y, z) for zn in active_zones)
-        if not is_on_any_surface:
-            return None, "", False
-
-        # 3. 确定 Face 名称
-        face_name = active_zones[0].get_face(x, y, z)
-
-        # 4. FRAME (棱边) 判定 - 优先级最高
-        is_frame_edge = any(zn.on_edge(x, y, z) for zn in active_zones)
-
-        # Equip空心区域特殊处理
-        in_hollow = all(zn.is_hollow for zn in active_zones)
-        if in_hollow:
-            return (BeamType.FRAME, face_name, False) if is_frame_edge else (None, "", False)
-
-        if is_frame_edge:
-            return BeamType.FRAME, face_name, False
-
-        # ==========================================================
-        # 5. [重构] 梁类型判定 (包含虚拟梁逻辑)
-        # 策略：先按正常规则判定。如果判定为无梁，但又在 split_line 上，则设为虚拟梁。
-        # ==========================================================
-
-        # 预先检查：是否是 Extension 引入的分割线
-        is_split_line = False
-        if self.p.extension.active:
-            is_split_line = math.isclose(x, self.p.extension.offset_x, abs_tol=1e-4)
-
-        # 仅针对 Main 区域的主结构部分 (Y > 0) 启用虚拟梁逻辑
-        # Ext区域 (Y < 0) 的 offset_x 线是实墙，会在下面的常规逻辑中被捕获
-        check_virtual_necessity = is_split_line and (y > 1e-4)
-
-        proposed_type = None
-        is_virtual = False
-
-        # --- 常规规则判定 (复制自你原有的第6步，稍作整理) ---
-
-        # === Axis X (水平横向) ===
-        if axis == "x":
-            # Case A: Top/Bottom 面 -> 主梁 (Main)
-            if math.isclose(z, 0) or math.isclose(z, self.p.height):
-                proposed_type = BeamType.MAIN
-
-            # Case B: Front/Back 面 -> 次梁或支撑
-            else:
-                is_brace = any(math.isclose(z, bz) for bz in self.brace_z_locs)
-                if is_brace:
-                    proposed_type = BeamType.BRACE
-                else:
-                    proposed_type = BeamType.SECONDARY
-
-        # === Axis Y (水平纵向) ===
-        elif axis == "y":
-            # Case A: Top/Bottom 面 -> 次梁或支撑
-            if math.isclose(z, 0) or math.isclose(z, self.p.height):
-                is_brace = any(math.isclose(x, bx) for bx in self.brace_x_locs)
-                if is_brace:
-                    proposed_type = BeamType.BRACE
-                elif any(math.isclose(x, sx) for sx in self.secondary_x_locs):
-                    proposed_type = BeamType.SECONDARY
-
-            # Case B: Front/Back/Side 面 (包含 Ext 的侧墙) -> 次梁或支撑
-            else:
-                # 检查是否在垂直方向的支撑位置
-                is_brace = any(math.isclose(z, bz) for bz in self.brace_z_locs)
-                if is_brace:
-                    proposed_type = BeamType.BRACE
-                else:
-                    proposed_type = BeamType.SECONDARY
-
-        # === Axis Z (竖向) ===
-        elif axis == "z":
-            # 只要在表面且是竖向的，除非是Frame(已处理)，否则定义为主梁
-            if math.isclose(y, self.p.length):
-                if any(math.isclose(x, sx) for sx in self.secondary_x_locs):
-                    proposed_type = BeamType.FRAME
-                elif any(math.isclose(x, bx) for bx in self.brace_x_locs):
-                    proposed_type = BeamType.BRACE
-                else:
-                    proposed_type = BeamType.MAIN
-                    is_virtual = True
-                # is_virtual = not any(math.isclose(x, sx) for sx in self.secondary_x_locs)
-            else:
-                proposed_type = BeamType.MAIN
-
-        # ==========================================================
-        # 6. 最终裁决：实体梁 vs 虚拟梁 vs 无梁
-        # ==========================================================
-
-        if proposed_type is not None:
-            # 规则说这里有梁，那就是实梁 (即使它在 split_line 上，那也是恰好重合)
-            return proposed_type, face_name, is_virtual
-
-        elif check_virtual_necessity:
-            # 规则说这里没梁 (proposed_type is None)
-            # 但它位于分割线上，且在主结构区域 -> 必须生成虚拟梁以保证网格连接
-            # 默认类型设为 MAIN (刚度由 is_virtual=True 消除)
-            return BeamType.MAIN, face_name, True
-
-        else:
-            # 既没规则梁，也不是分割线 -> 空气
-            return None, "", False
-
-
-# ==========================================
-# 4. 主模型类 (入口)
+# 3. 主模型类 (入口)
 # ==========================================
 
 BEAM_TYPE_MAP = {
@@ -517,7 +194,7 @@ class StructuralModel:
         self.beams = self.beam_manager.beams
 
     def generate(self):
-        engine = LayoutEngine(self.params)
+        engine = create_layout_engine(self.params)
         xs, ys, zs = engine.sorted_x, engine.sorted_y, engine.sorted_z
 
         # --- 1. 生成 X 方向梁 ---
@@ -567,7 +244,7 @@ class StructuralModel:
         sec_prop = self._get_section(b_type)
         self.beam_manager.add_or_update_beam(n1, n2, b_type, sec_prop, is_virtual, face)
 
-    def _generate_plates_from_grid(self, engine: LayoutEngine):
+    def _generate_plates_from_grid(self, engine: LayoutEngineProtocol):
         """生成所有板单元"""
 
         # 定义通用扫描函数

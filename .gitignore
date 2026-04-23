@@ -4,6 +4,7 @@ paper_draft
 tests/
 deprecated/
 .opstool.output/
+.github
 
 # Python
 __pycache__/
