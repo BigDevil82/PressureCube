@@ -4,7 +4,8 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from src.analysis.opensees_analysis import AnalysisResults, OpenSeesSolver
+from src.analysis.opensees_analysis import OpenSeesSolver
+from src.analysis.results import AnalysisResults
 from src.analysis.unit import M2_TO_MM2, M4_TO_MM4, M_TO_MM
 from src.structure.layout.params import StructuralParameters
 from src.structure.section_library import SectionLibrary
@@ -163,20 +164,16 @@ class ResultProcessor:
         max_stress = 0.0
         crit_id = -1
 
-        t_mm = self.model.params.plate_thickness * M_TO_MM
-        t2 = t_mm**2
-
-        # 预计算常数以加速
-        # Sigma = N/t ± 6M/t^2
-        # Coeff_N = 1/t
-        # Coeff_M = 6/t^2
-        c_N = 1.0 / t_mm
-        c_M = 6.0 / t2
-
         for pid, stress_raw in res.plate_stresses.items():
             plate = self.model.plates.get(pid)
             if plate is None:
                 continue
+            thickness_mm = (
+                self.model.params.opening_panel.thickness if plate.panel_type == "opening" else self.model.params.plate_thickness
+            ) * M_TO_MM
+            t2 = thickness_mm**2
+            c_N = 1.0 / thickness_mm
+            c_M = 6.0 / t2
             design_strength = (
                 self.model.params.opening_panel.design_strength_mpa
                 if plate.panel_type == "opening"

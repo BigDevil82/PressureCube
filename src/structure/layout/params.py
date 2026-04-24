@@ -21,7 +21,7 @@ class DoorParameters:
     width: float = 0.91
     height: float = 2.21
     bottom_offset: float = 0.3
-    face: str = "right"
+    face: str = "left"
     center_x: float | None = None
 
 
@@ -34,17 +34,17 @@ class WindowParameters:
     height: float = 1.5
     front_spans: list[int] = field(default_factory=list)
     back_spans: list[int] = field(default_factory=list)
-    right_spans: list[int] = field(default_factory=list)
+    right_spans: list[int] = field(default_factory=lambda: [1, 2])
 
 
 @dataclass
 class OpeningPanelParameters:
     """门窗封板材料参数，默认采用玻璃钢近似。"""
 
-    elastic_modulus_mpa: float = 12000.0
-    poisson_ratio: float = 0.25
-    density_kg_m3: float = 1900.0
-    thickness: float | None = None
+    elastic_modulus_mpa: float = 70000.0
+    poisson_ratio: float = 0.23
+    density_kg_m3: float = 2500.0
+    thickness: float | None = 0.02
     design_strength_mpa: float = 180.0
 
 
@@ -99,6 +99,11 @@ class EngineeringLayoutParameters(BaseLayoutParameters):
     window: WindowParameters = field(default_factory=WindowParameters)
     door: DoorParameters = field(default_factory=DoorParameters)
     layout_strategy: Literal["engineering"] = field(init=False, default="engineering")
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.door.width = self.width / 2 - self.main_beam_spacing
 
 
 LayoutParameters = ResearchLayoutParameters | EngineeringLayoutParameters

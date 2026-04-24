@@ -1,11 +1,10 @@
-import json
 import math
-import os
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import openseespy.opensees as ops
 
+from src.analysis.results import AnalysisResults, ModalAnalysisResults
 from src.analysis.unit import (
     E_STEEL_MPA,
     G_M_S2,
@@ -25,67 +24,15 @@ from src.utils.constants import KPA_TO_MPA, LOAD_DEAD_BOTTOM_KPA, LOAD_LIVE_BOTT
 from src.utils.logger import logger
 
 
-class AnalysisResults:
-    """数据类，用于存储单次工况的原始结果"""
-
-    def __init__(self):
-        self.displacements: Dict[int, np.ndarray] = {}  # {node_id: [dx, dy, dz, rx, ry, rz]}
-        self.beam_forces: Dict[int, np.ndarray] = {}  # {beam_id: array}
-        self.plate_stresses: Dict[int, np.ndarray] = {}  # {plate_id: array}
-        self.reactions: Dict[int, np.ndarray] = {}  # {node_id, array}
-
-    def __add__(self, other):
-        """支持结果直接相加: res = res1 + res2"""
-        if not isinstance(other, AnalysisResults):
-            return None
-        new_res = AnalysisResults()
-        # 向量化相加逻辑
-        common_nodes = set(self.displacements.keys()) & set(other.displacements.keys())
-        for k in common_nodes:
-            new_res.displacements[k] = self.displacements[k] + other.displacements[k]
-
-        common_beams = set(self.beam_forces.keys()) & set(other.beam_forces.keys())
-        for k in common_beams:
-            new_res.beam_forces[k] = self.beam_forces[k] + other.beam_forces[k]
-
-        common_plates = set(self.plate_stresses.keys()) & set(other.plate_stresses.keys())
-        for k in common_plates:
-            v1 = self.plate_stresses.get(k)
-            v2 = other.plate_stresses.get(k)
-            if v1 is not None and v2 is not None:
-                new_res.plate_stresses[k] = v1 + v2
-
-        common_reactions = set(self.reactions.keys()) & set(other.reactions.keys())
-        for k in common_reactions:
-            new_res.reactions[k] = self.reactions[k] + other.reactions[k]
-        return new_res
-
-    def scale(self, factor: float):
-        """支持结果乘系数: res = res * 1.5"""
-        new_res = AnalysisResults()
-        for k, v in self.displacements.items():
-            new_res.displacements[k] = v * factor
-        for k, v in self.beam_forces.items():
-            new_res.beam_forces[k] = v * factor
-        for k, v in self.plate_stresses.items():
-            if v is not None:
-                new_res.plate_stresses[k] = v * factor
-        for k, v in self.reactions.items():
-            new_res.reactions[k] = v * factor
-        return new_res
-
-
 class OpenSeesSolver:
     """
     单一职责：负责将 StructuralModel 转换为 OpenSees 模型，
     施加指定工况的荷载，并返回原始结果。
     """
 
-    def __init__(self, model: StructuralModel, enable_odb: bool = False):
+    def __init__(self, model: StructuralModel):
         self.model = model
         self.node_map_mm: Dict[int, List[float]] = {}  # 缓存毫米单位坐标
-        self.enable_odb = enable_odb  # 是否启用 opstool ODB 记录
-        self.odb = None  # ODB 对象
 
         # 预计算：识别底部板 (用于施加 5kN/m2 和 2kN/m2)
         self.bottom_plate_ids = self._identify_bottom_plates()
@@ -189,12 +136,7 @@ class OpenSeesSolver:
         for plate_id, plate_obj in self.model.plates.items():
             # Calculate plate mass
             plate_area_m2 = plate_obj.area
-            if plate_obj.panel_type == "opening":
-                plate_thickness_m = self.model.params.opening_panel.thickness
-                plate_density_kg_m3 = self.model.params.opening_panel.density_kg_m3
-            else:
-                plate_thickness_m = self.model.params.plate_thickness
-                plate_density_kg_m3 = RHO_STEEL_KG_M3
+            plate_thickness_m, plate_density_kg_m3 = self._get_plate_mass_properties(plate_obj.panel_type)
             plate_volume_m3 = plate_area_m2 * plate_thickness_m
             plate_mass_kg = plate_volume_m3 * plate_density_kg_m3
             plate_mass_tonne = plate_mass_kg / 1000.0
@@ -206,24 +148,19 @@ class OpenSeesSolver:
 
         return nodal_masses_tonne
 
-    def _setup_model_geometry(self):
-        """建立几何模型：节点、材料、截面、单元"""
-        ops.wipe()
-        ops.model("basic", "-ndm", 3, "-ndf", 6)
+    def _get_plate_mass_properties(self, panel_type: str) -> tuple[float, float]:
+        if panel_type == "opening":
+            return self.model.params.opening_panel.thickness, self.model.params.opening_panel.density_kg_m3
+        return self.model.params.plate_thickness, RHO_STEEL_KG_M3
 
-        # 1. Nodes
-        for nid, point in self.model.points.items():
-            coords = point.coordinates() * M_TO_MM
-            ops.node(nid, *coords)
-            self.node_map_mm[nid] = coords
+    def _get_plate_section_tag(self, panel_type: str) -> int:
+        return 2001 if panel_type == "opening" else 2000
 
-        # 2. Materials & Sections
-        # Steel Material
+    def _define_plate_sections(self):
         ops.nDMaterial("ElasticIsotropic", 1000, E_STEEL_MPA, NU_STEEL, RHO_STEEL_TONNE_MM3)
-        # Plate Section
         plate_thk_mm = self.model.params.plate_thickness * M_TO_MM
         ops.section("ElasticMembranePlateSection", 2000, E_STEEL_MPA, NU_STEEL, plate_thk_mm)
-        # Opening panel material/section (FRP placeholder defaults, configurable in params)
+
         opening_density_tonne_mm3 = self.model.params.opening_panel.density_kg_m3 / 1e12
         ops.nDMaterial(
             "ElasticIsotropic",
@@ -240,6 +177,20 @@ class OpenSeesSolver:
             self.model.params.opening_panel.poisson_ratio,
             opening_plate_thk_mm,
         )
+
+    def _setup_model_geometry(self):
+        """建立几何模型：节点、材料、截面、单元"""
+        ops.wipe()
+        ops.model("basic", "-ndm", 3, "-ndf", 6)
+
+        # 1. Nodes
+        for nid, point in self.model.points.items():
+            coords = point.coordinates() * M_TO_MM
+            ops.node(nid, *coords)
+            self.node_map_mm[nid] = coords
+
+        # 2. Materials & Sections
+        self._define_plate_sections()
 
         # 3. Elements - Beams
         transf_tag = 1
@@ -274,8 +225,7 @@ class OpenSeesSolver:
 
         # 4. Elements - Plates (ShellDKGQ)
         for pid, plate in self.model.plates.items():
-            section_tag = 2001 if plate.panel_type == "opening" else 2000
-            ops.element("ShellDKGQ", int(pid), *plate.nodes, section_tag)
+            ops.element("ShellDKGQ", int(pid), *plate.nodes, self._get_plate_section_tag(plate.panel_type))
 
         # 5. Boundary Conditions (Pin 底部节点)
         for nid in self.support_node_ids:
@@ -365,12 +315,7 @@ class OpenSeesSolver:
 
         # B. 结构自重 (板) - 分配到节点
         for pid, plate in self.model.plates.items():
-            if plate.panel_type == "opening":
-                plate_thk_m = self.model.params.opening_panel.thickness
-                plate_density_kg_m3 = self.model.params.opening_panel.density_kg_m3
-            else:
-                plate_thk_m = self.model.params.plate_thickness
-                plate_density_kg_m3 = RHO_STEEL_KG_M3
+            plate_thk_m, plate_density_kg_m3 = self._get_plate_mass_properties(plate.panel_type)
             mass_kg = plate.area * plate_thk_m * plate_density_kg_m3
             force_n = mass_kg * G_M_S2
             fz = -force_n / len(plate.nodes)
@@ -439,17 +384,7 @@ class OpenSeesSolver:
         ops.algorithm("Linear")
         ops.analysis("Static")
 
-        # ... ODB 处理 ...
-        if self.enable_odb:
-            import opstool as opst
-
-            self.odb = opst.post.CreateODB(odb_tag=odb_tag, project_gauss_to_nodes="average")
-            ok = ops.analyze(1)  # 分析一步，时间从 0 -> 1
-            if ok == 0:
-                self.odb.fetch_response_step()
-                self.odb.save_response()
-        else:
-            ok = ops.analyze(1)
+        ok = ops.analyze(1)
 
         if ok != 0:
             logger.error(f"Analysis Failed for load combination {combo_name}")
@@ -460,9 +395,17 @@ class OpenSeesSolver:
     def _extract_results(self) -> AnalysisResults:
         """从 OpenSees 模型中提取结果"""
         res = AnalysisResults()
+
+        # 先触发支座反力计算。ShellDKGQ 的应力响应在此之后才会被正确更新。
+        ops.reactions()
+
         # (1) 提取位移
         for nid in self.node_map_mm:
             res.displacements[nid] = np.array(ops.nodeDisp(nid))
+
+        for nid in self.support_node_ids:
+            res.reactions[nid] = np.array(ops.nodeReaction(nid))
+
         # (2) 提取梁单元内力
         for bid in self.model.beams:
             try:
@@ -471,98 +414,20 @@ class OpenSeesSolver:
                     res.beam_forces[bid] = np.array(f)
             except:
                 pass
-        # (3) 提取板单元内力
+
+        # (4) 提取板单元内力
         for pid in self.model.plates:
             try:
+                _ = ops.eleResponse(pid, "force")  # 先调用一次 force 来确保内部状态更新
                 s = ops.eleResponse(pid, "stresses")
                 if s:
                     res.plate_stresses[pid] = np.array(s)
             except:
                 pass
-        # (4) 提取支座反力
-        ops.reactions()
-        for nid in self.support_node_ids:
-            res.reactions[nid] = np.array(ops.nodeReaction(nid))
+
         return res
 
-    def run_static_case(
-        self, case_type: Literal["DL", "LL", "PL"], pressure_pa: float = 0, odb_tag: int = 1
-    ) -> AnalysisResults:
-        """
-        核心对外接口：运行指定工况
-        """
-        logger.info(f"Running Analysis Case: {case_type} (odb_tag={odb_tag})")
-
-        # 1. 重建模型 (确保纯净)
-        self._setup_model_geometry()
-
-        # 2. 定义荷载模式
-        ops.timeSeries("Linear", 1)
-        ops.pattern("Plain", 1, 1)
-
-        # 3. 施加荷载
-        if case_type == "DL":
-            # A. 结构自重 (梁)
-            for bid, beam in self.model.beams.items():
-                if beam.is_virtual:
-                    continue
-                sec = beam.section
-                # w = A * rho * g (N/mm)
-                w = (sec.area * RHO_STEEL_KG_M3 * G_M_S2) * N_M_TO_N_MM
-                ops.eleLoad("-ele", bid, "-type", "-beamUniform", 0, 0, -w)  # Global Z down
-
-            # B. 结构自重 (板) - 分配到节点
-            for pid, plate in self.model.plates.items():
-                if plate.panel_type == "opening":
-                    plate_thk_m = self.model.params.opening_panel.thickness
-                    plate_density_kg_m3 = self.model.params.opening_panel.density_kg_m3
-                else:
-                    plate_thk_m = self.model.params.plate_thickness
-                    plate_density_kg_m3 = RHO_STEEL_KG_M3
-                mass_kg = plate.area * plate_thk_m * plate_density_kg_m3
-                force_n = mass_kg * G_M_S2
-                fz = -force_n / len(plate.nodes)
-                for nid in plate.nodes:
-                    ops.load(nid, 0, 0, fz, 0, 0, 0)
-
-            # C. 底部恒载 (5 kN/m2)
-            self._apply_distributed_plate_load(self.bottom_plate_ids, LOAD_DEAD_BOTTOM_KPA * KPA_TO_MPA)
-
-        elif case_type == "LL":
-            # 底部活载 (2 kN/m2)
-            self._apply_distributed_plate_load(self.bottom_plate_ids, LOAD_LIVE_BOTTOM_KPA * KPA_TO_MPA)
-
-        elif case_type == "PL":
-            # 内压荷载
-            self._apply_pressure_load_by_face(pressure_pa / 1e6)  # Pa -> MPa
-
-        # 4. 分析求解
-        ops.system("BandSPD")
-        ops.numberer("RCM")
-        ops.constraints("Plain")
-        ops.integrator("LoadControl", 1)
-        ops.algorithm("Linear")
-        ops.analysis("Static")
-
-        # 如果启用 ODB，则分步记录
-        if self.enable_odb:
-            import opstool as opst
-
-            self.odb = opst.post.CreateODB(odb_tag=odb_tag, project_gauss_to_nodes="average")
-            ok = ops.analyze(1)
-            self.odb.fetch_response_step()
-            self.odb.save_response()
-        else:
-            ok = ops.analyze(1)
-
-        if ok != 0:
-            logger.error(f"Analysis Failed for case {case_type}")
-            return None
-
-        # 5. 提取结果
-        return self._extract_results()
-
-    def run_modal_case(self, num_modes: int, odb_tag: int = 1) -> Optional[List[float]]:
+    def run_modal_case(self, num_modes: int, odb_tag: int = 1) -> Optional[ModalAnalysisResults]:
         """Performs modal analysis."""
         logger.info(f"Running Modal Analysis for {num_modes} modes (odb_tag={odb_tag})")
         self._setup_model_geometry()
@@ -572,69 +437,80 @@ class OpenSeesSolver:
 
         eigenvalues_omega_sq = ops.eigen(num_modes)
 
-        # 如果启用 ODB，记录模态结果
-        if self.enable_odb:
-            import opstool as opst
-
-            opst.post.save_eigen_data(odb_tag, num_modes)
-
         frequencies_hz = [np.sqrt(val) / (2 * np.pi) for val in eigenvalues_omega_sq]
         periods_s = [1 / f for f in frequencies_hz if f > 0]
-        return frequencies_hz, periods_s
-
-
-class ResultCombiner:
-    """负责结果的线性组合"""
-
-    @staticmethod
-    def get_max_displacement_combo(res_dl: AnalysisResults, res_ll: AnalysisResults, res_pl: AnalysisResults):
-        """组合: 1.0 DL + 1.0 LL + 1.0 PL"""
-        # 注意：AnalysisResults 类需要实现 __add__ 和 scale
-        # 这里用一种更 Pythonic 的写法
-        return res_dl.scale(1.0) + res_ll.scale(1.0) + res_pl.scale(1.0)
-
-    @staticmethod
-    def get_max_stress_combo(res_dl: AnalysisResults, res_ll: AnalysisResults, res_pl: AnalysisResults):
-        """组合: 1.3 DL + 1.5 LL + 1.25 PL"""
-        return res_dl.scale(1.3) + res_ll.scale(1.5) + res_pl.scale(1.25)
+        mode_shapes = {}
+        for mode in range(1, len(frequencies_hz) + 1):
+            mode_shapes[mode] = {}
+            for node_id in self.model.points:
+                try:
+                    mode_shapes[mode][node_id] = np.array(ops.nodeEigenvector(node_id, mode))
+                except Exception:
+                    continue
+        return ModalAnalysisResults(
+            frequencies_hz=frequencies_hz, periods_s=periods_s, mode_shapes=mode_shapes
+        )
 
 
 # ================= 主流程调用 =================
 if __name__ == "__main__":
     from src.analysis.post_processor import ResultProcessor
+    from src.structure.layout.params import EngineeringLayoutParameters, WindowParameters
     from src.structure.mesh_generator import MeshGenerator
     from src.utils.util import Timer
 
+    pressure = 30_000  # 内压 30kPa
+    # # 配置参数
+    # params = StructuralParameters(
+    #     length=9.2,  # 10米长
+    #     width=3.7,  # 3米宽
+    #     height=3.3,  # 3米高
+    #     main_beam_spacing=0.7,  # 主梁每1.5米一道
+    #     num_secondary_width=5,  # 宽度方向分3段 (2条中间次梁)
+    #     num_secondary_height=4,  # 高度方向分3段
+    #     add_support_beam=False,  # 添加支撑梁
+    #     frame_section_index=0,
+    #     main_beam_section_index=16,
+    #     secondary_beam_section_index=6,
+    #     brace_section_index=17,
+    # )
+    # model = StructuralModel(params, SectionLibrary("src/data/steel_sections_large.json"))
+    # model.generate()
     # 配置参数
-    params = StructuralParameters(
-        length=9.2,  # 10米长
-        width=3.7,  # 3米宽
-        height=3.3,  # 3米高
-        main_beam_spacing=0.7,  # 主梁每1.5米一道
-        num_secondary_width=5,  # 宽度方向分3段 (2条中间次梁)
-        num_secondary_height=4,  # 高度方向分3段
-        add_support_beam=False,  # 添加支撑梁
-        frame_section_index=0,
-        main_beam_section_index=16,
-        secondary_beam_section_index=6,
-        brace_section_index=17,
+    windows = WindowParameters(
+        front_spans=[],  # 前墙第1段有窗
+        back_spans=[],
+        right_spans=[1, 2],  # 右墙第2段有窗
     )
-    pressure = 23912  # 内压 30kPa
+    params = EngineeringLayoutParameters(
+        length=8.9,  # 10米长
+        width=3.6,  # 3米宽
+        height=3.3,  # 3米高
+        main_beam_spacing=0.95,  # 主梁每1.5米一道
+        add_support_beam=True,  # 添加支撑梁
+        support_beam_max_spacing=0.75,
+        frame_section_index=2,
+        main_beam_section_index=8,
+        secondary_beam_section_index=7,
+        brace_section_index=14,
+        window=windows,
+    )
 
-    model = StructuralModel(params, SectionLibrary("src/data/steel_sections_large.json"))
+    model = StructuralModel(params, SectionLibrary())
     model.generate()
+
     print("Total mass：", model.calculate_mass_kg(), "kg")
 
-    mesh_generator = MeshGenerator(model, 0.5)
+    mesh_generator = MeshGenerator(model, 0.3)
     model = mesh_generator.generate()
 
     with Timer("OpenSees Analysis Cost: "):
         solver = OpenSeesSolver(model)
         combo_strength = {"DL": 1.3, "LL": 1.5, "PL": 1.25}
         combo_service = {"DL": 1.0, "LL": 1.0, "PL": 1.0}
-        res_strength = solver.run_load_combination(combo_strength, pressure_pa=pressure)
+        res_strength = solver.run_load_combination(combo_strength, pressure_pa=pressure, odb_tag=91)
         strength_check = ResultProcessor(model).run_gb50017_check(res_strength)
-        res_service = solver.run_load_combination(combo_service, pressure_pa=pressure)
+        res_service = solver.run_load_combination(combo_service, pressure_pa=pressure, odb_tag=52)
         disp_check = ResultProcessor(model).run_gb50017_check(res_service)
 
     print(f"Max Stress Ratio: {strength_check.max_stress_ratio:.3f}")

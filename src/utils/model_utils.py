@@ -125,9 +125,9 @@ class StructureVisualizer:
         W = self.model.params.length
         H = self.model.params.height
 
-        ax.set_xlim([0, L])
-        ax.set_ylim([0, W])
-        ax.set_zlim([0, H])
+        # ax.set_xlim([0, L])
+        # ax.set_ylim([0, W])
+        # ax.set_zlim([0, H])
         ax.set_box_aspect((L, W, H))
 
         # 设置视角
@@ -224,7 +224,7 @@ class StructureVisualizer:
         self._plot_nodes(ax, face_type)  # 最后绘制节点（在顶层）
         self._add_legend(ax)
         ax.grid(grid)
-        plt.tight_layout(pad=1.2)
+        # plt.tight_layout(pad=1.5)
         plt.show()
         return fig, ax
 
