@@ -102,7 +102,7 @@ class StructuralEvaluator:
         # Detect model type
         if "strategy" in data:
             # AdvancedSurrogateModel format
-            from src.analysis.surrogate_advanced import AdvancedSurrogateModel
+            from analysis.surrogate_model import AdvancedSurrogateModel
 
             self.surrogate = AdvancedSurrogateModel.load(path)
 
@@ -230,7 +230,7 @@ class StructuralEvaluator:
         sections: List[int],
     ) -> EvalResult:
         """Fast surrogate model evaluation."""
-        from src.analysis.surrogate import DesignConfig, compute_mass_fast
+        from analysis.surrogate_data import DesignConfig, compute_mass_fast
 
         # Create config
         config = DesignConfig(

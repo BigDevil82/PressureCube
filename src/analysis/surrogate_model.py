@@ -397,8 +397,7 @@ class AdvancedSurrogateModel:
         print(f"Detected feature format: {feature_format} ({X.shape[1]} dimensions)")
 
         if use_physics_features and feature_format == "index":
-            print("Converting to physics features...")
-            X = convert_index_to_physics_features(X)
+            raise ValueError("Index format is deprecated. Please convert to physics features first.")
 
         self.use_physics_features = use_physics_features
 

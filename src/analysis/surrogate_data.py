@@ -83,27 +83,9 @@ class DesignConfig:
         if use_physics:
             return self._to_physics_features()
         else:
-            return self._to_index_features()
-
-    def _to_index_features(self) -> np.ndarray:
-        """Original index-based features."""
-        return np.array(
-            [
-                self.L,
-                self.W,
-                self.H,
-                self.pressure / 1000.0,  # 保存时用的kPa
-                self.main_beam_spacing,
-                float(self.num_secondary_width),
-                float(self.num_secondary_height),
-                float(self.add_support_beam),
-                float(self.frame_section_index),
-                float(self.main_beam_section_index),
-                float(self.secondary_beam_section_index),
-                float(self.brace_section_index),
-            ],
-            dtype=np.float32,
-        )
+            raise NotImplementedError(
+                "Index-based features are deprecated. Use physics-based features instead."
+            )
 
     def _to_physics_features(self) -> np.ndarray:
         """
@@ -205,61 +187,12 @@ class DesignConfig:
     @staticmethod
     def feature_names(use_physics: bool = True) -> List[str]:
         if use_physics:
-            return [
-                # Geometry
-                "L",
-                "W",
-                "H",
-                "volume",
-                "floor_area",
-                "aspect_ratio",
-                # Load
-                "pressure_kPa",
-                "total_load_MN",
-                # Topology
-                "main_beam_spacing",
-                "num_secondary_width",
-                "num_secondary_height",
-                "add_support_beam",
-                "n_main_beams",
-                # Section areas
-                "frame_area",
-                "main_area",
-                "sec_area",
-                "brace_area",
-                # Section Ix
-                "frame_Ix",
-                "main_Ix",
-                "sec_Ix",
-                "brace_Ix",
-                # Section Iy
-                "frame_Iy",
-                "main_Iy",
-                "sec_Iy",
-                "brace_Iy",
-                # Derived
-                "total_area",
-                "avg_Ix",
-                "min_Ix",
-                "Ix_ratio",
-                "stiffness_load_ratio",
-                "strength_load_ratio",
-            ]
+            return ["L", "W", "H", "volume", "floor_area", "aspect_ratio", "pressure_kPa", "total_load_MN", "main_beam_spacing", "num_secondary_width", "num_secondary_height", "add_support_beam", "n_main_beams",  "frame_area", "main_area", "sec_area", "brace_area", "frame_Ix", "main_Ix", "sec_Ix", "brace_Ix","frame_Iy", "main_Iy", "sec_Iy", "brace_Iy", "total_area", "avg_Ix", "min_Ix", "Ix_ratio", "stiffness_load_ratio", "strength_load_ratio",
+            ] # fmt: skip
         else:
-            return [
-                "L",
-                "W",
-                "H",
-                "pressure_kPa",
-                "main_beam_spacing",
-                "num_secondary_width",
-                "num_secondary_height",
-                "add_support_beam",
-                "frame_idx",
-                "main_beam_idx",
-                "secondary_beam_idx",
-                "brace_idx",
-            ]
+            raise NotImplementedError(
+                "Index-based features are deprecated. Use physics-based features instead."
+            )
 
 
 def compute_mass_fast(config: DesignConfig, section_lib: SectionLibrary) -> float:
@@ -285,66 +218,6 @@ def compute_mass_fast(config: DesignConfig, section_lib: SectionLibrary) -> floa
     return model.calculate_mass_kg()
 
 
-def convert_index_to_physics_features(X_index: np.ndarray) -> np.ndarray:
-    """
-    Convert old index-based features (12-dim) to new physics-based features (31-dim).
-
-    This allows reusing existing datasets collected with the old feature format.
-
-    Input format (12-dim):
-        [L, W, H, pressure_kPa, main_beam_spacing, num_secondary_width,
-         num_secondary_height, add_support_beam, frame_idx, main_idx, sec_idx, brace_idx]
-
-    Output format (31-dim):
-        Physics-based features with section properties instead of indices.
-
-    Args:
-        X_index: Array of shape (n_samples, 12) with index-based features
-
-    Returns:
-        Array of shape (n_samples, 31) with physics-based features
-    """
-    n_samples = X_index.shape[0]
-    X_physics = []
-
-    for i in range(n_samples):
-        x = X_index[i]
-
-        # Parse old features
-        L = float(x[0])
-        W = float(x[1])
-        H = float(x[2])
-        pressure_kPa = float(x[3])
-        main_beam_spacing = float(x[4])
-        num_secondary_width = int(x[5])
-        num_secondary_height = int(x[6])
-        add_support_beam = bool(x[7])
-        frame_idx = int(x[8])
-        main_idx = int(x[9])
-        sec_idx = int(x[10])
-        brace_idx = int(x[11])
-
-        # Create DesignConfig and convert to physics features
-        cfg = DesignConfig(
-            L=L,
-            W=W,
-            H=H,
-            pressure=pressure_kPa * 1000.0,  # Convert back to Pa
-            main_beam_spacing=main_beam_spacing,
-            num_secondary_width=num_secondary_width,
-            num_secondary_height=num_secondary_height,
-            add_support_beam=add_support_beam,
-            frame_section_index=frame_idx,
-            main_beam_section_index=main_idx,
-            secondary_beam_section_index=sec_idx,
-            brace_section_index=brace_idx,
-        )
-
-        X_physics.append(cfg._to_physics_features())
-
-    return np.array(X_physics, dtype=np.float32)
-
-
 def detect_feature_format(X: np.ndarray) -> str:
     """
     Detect whether features are in old index format (12-dim) or new physics format (31-dim).
@@ -353,6 +226,9 @@ def detect_feature_format(X: np.ndarray) -> str:
     """
     n_features = X.shape[1]
     if n_features == 12:
+        print(
+            "Detected index-based features (12 dimensions). This format is deprecated. Please use physics-based features instead."
+        )
         return "index"
     elif n_features == 31:
         return "physics"
