@@ -106,11 +106,6 @@ class StructuralEvaluator:
 
             self.surrogate = AdvancedSurrogateModel.load(path)
 
-        elif "model_type" in data:
-            # SurrogateModel format
-            from src.analysis.surrogate import SurrogateModel
-
-            self.surrogate = SurrogateModel.load(path)
         else:
             raise ValueError(f"Unknown surrogate model format in {path}")
 
