@@ -1,16 +1,9 @@
 """
-Advanced Surrogate Model Training Techniques.
-
-Includes:
-1. K-Fold Cross Validation for robust evaluation
-2. Ensemble methods (averaging multiple models)
-3. Multi-task learning (joint prediction of sigma and delta)
-4. Residual network architecture
-5. Hyperparameter search
+Advanced surrogate model training with a single strategy: K-Fold + ResNet.
 """
 
 import pickle
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -27,10 +20,6 @@ from src.analysis.surrogate import (
     convert_index_to_physics_features,
     detect_feature_format,
 )
-
-# ============================================================================
-# Advanced Network Architectures
-# ============================================================================
 
 
 class ResidualBlock(nn.Module):
@@ -64,17 +53,12 @@ class ResNetRegressor(nn.Module):
     ):
         super().__init__()
 
-        # Input projection
         self.input_proj = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
             nn.ReLU(),
         )
-
-        # Residual blocks
         self.blocks = nn.Sequential(*[ResidualBlock(hidden_dim, dropout) for _ in range(n_blocks)])
-
-        # Output
         self.output = nn.Linear(hidden_dim, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -83,82 +67,22 @@ class ResNetRegressor(nn.Module):
         return self.output(x).squeeze(-1)
 
 
-class MultiTaskRegressor(nn.Module):
-    """
-    Multi-task network that predicts both sigma and delta.
-    Shared backbone with task-specific heads.
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dims: List[int] = [256, 128, 128, 64],
-        head_dim: int = 64,
-        dropout: float = 0.1,
-    ):
-        super().__init__()
-
-        # Shared backbone
-        layers = []
-        prev_dim = input_dim
-        for hidden_dim in hidden_dims:
-            layers.extend(
-                [
-                    nn.Linear(prev_dim, hidden_dim),
-                    nn.BatchNorm1d(hidden_dim),
-                    nn.ReLU(),
-                    nn.Dropout(dropout),
-                ]
-            )
-            prev_dim = hidden_dim
-
-        self.backbone = nn.Sequential(*layers)
-
-        # Task-specific heads
-        self.sigma_head = nn.Sequential(
-            nn.Linear(prev_dim, head_dim),
-            nn.ReLU(),
-            nn.Linear(head_dim, 1),
-        )
-
-        self.delta_head = nn.Sequential(
-            nn.Linear(prev_dim, head_dim),
-            nn.ReLU(),
-            nn.Linear(head_dim, 1),
-        )
-
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        features = self.backbone(x)
-        sigma = self.sigma_head(features).squeeze(-1)
-        delta = self.delta_head(features).squeeze(-1)
-        return sigma, delta
-
-
-# ============================================================================
-# K-Fold Training
-# ============================================================================
-
-
 @dataclass
 class KFoldConfig:
-    """Configuration for K-Fold training."""
+    """Configuration for K-Fold + ResNet training."""
 
     n_folds: int = 5
-    hidden_dims: List[int] = field(default_factory=lambda: [256, 128, 64])
+    hidden_dim: int = 256
     dropout: float = 0.1
     lr: float = 1e-3
     batch_size: int = 256
     max_epochs: int = 200
     patience: int = 20
-    use_resnet: bool = False
     resnet_blocks: int = 3
 
 
 class KFoldTrainer:
-    """
-    K-Fold cross validation trainer for surrogate models.
-    Trains multiple models and ensembles them for prediction.
-    """
+    """K-Fold trainer with ResNet ensemble prediction."""
 
     def __init__(self, config: KFoldConfig, device: str = "auto"):
         self.config = config
@@ -171,7 +95,6 @@ class KFoldTrainer:
         self.models_sigma: List[nn.Module] = []
         self.models_delta: List[nn.Module] = []
 
-        # Normalization
         self.X_mean: Optional[np.ndarray] = None
         self.X_std: Optional[np.ndarray] = None
         self.y_sigma_mean: float = 0.0
@@ -182,19 +105,12 @@ class KFoldTrainer:
         self.fold_metrics: List[Dict] = []
 
     def _create_model(self, input_dim: int) -> nn.Module:
-        """Create a model based on config."""
-        if self.config.use_resnet:
-            return ResNetRegressor(
-                input_dim,
-                hidden_dim=self.config.hidden_dims[0],
-                n_blocks=self.config.resnet_blocks,
-                dropout=self.config.dropout,
-            )
-        else:
-            # Standard MLP
-            from src.analysis.surrogate import MLPRegressor
-
-            return MLPRegressor(input_dim, self.config.hidden_dims, self.config.dropout)
+        return ResNetRegressor(
+            input_dim,
+            hidden_dim=self.config.hidden_dim,
+            n_blocks=self.config.resnet_blocks,
+            dropout=self.config.dropout,
+        )
 
     def _normalize_X(self, X: np.ndarray, fit: bool = False) -> np.ndarray:
         if fit:
@@ -213,14 +129,12 @@ class KFoldTrainer:
 
         if target == "sigma":
             return (y - self.y_sigma_mean) / self.y_sigma_std
-        else:
-            return (y - self.y_delta_mean) / self.y_delta_std
+        return (y - self.y_delta_mean) / self.y_delta_std
 
     def _denormalize_y(self, y: np.ndarray, target: str) -> np.ndarray:
         if target == "sigma":
             return y * self.y_sigma_std + self.y_sigma_mean
-        else:
-            return y * self.y_delta_std + self.y_delta_mean
+        return y * self.y_delta_std + self.y_delta_mean
 
     def _train_single_fold(
         self,
@@ -228,37 +142,31 @@ class KFoldTrainer:
         y_train: np.ndarray,
         X_val: np.ndarray,
         y_val: np.ndarray,
-        target: str,
-        fold_idx: int,
     ) -> nn.Module:
-        """Train model for a single fold."""
         input_dim = X_train.shape[1]
         model = self._create_model(input_dim).to(self.device)
 
         optimizer = optim.AdamW(model.parameters(), lr=self.config.lr, weight_decay=1e-4)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=10)
-        criterion = nn.SmoothL1Loss()  # Huber loss, more robust than MSE
+        criterion = nn.SmoothL1Loss()
 
-        # Normalize (use global stats computed earlier)
         X_train_norm = self._normalize_X(X_train)
-        y_train_norm = self._normalize_y(y_train, target)
         X_val_norm = self._normalize_X(X_val)
-        y_val_norm = self._normalize_y(y_val, target)
 
         train_dataset = TensorDataset(
             torch.FloatTensor(X_train_norm),
-            torch.FloatTensor(y_train_norm),
+            torch.FloatTensor(y_train),
         )
         train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True)
 
         X_val_t = torch.FloatTensor(X_val_norm).to(self.device)
-        y_val_t = torch.FloatTensor(y_val_norm).to(self.device)
+        y_val_t = torch.FloatTensor(y_val).to(self.device)
 
         best_val_loss = float("inf")
         best_state = None
         patience_counter = 0
 
-        for epoch in range(self.config.max_epochs):
+        for _ in range(self.config.max_epochs):
             model.train()
             for X_batch, y_batch in train_loader:
                 X_batch = X_batch.to(self.device)
@@ -292,9 +200,8 @@ class KFoldTrainer:
 
     def fit(self, X: np.ndarray, y_sigma: np.ndarray, y_delta: np.ndarray):
         """Train with K-Fold cross validation."""
-        print(f"Training with {self.config.n_folds}-Fold CV on {self.device}...")
+        print(f"Training with {self.config.n_folds}-Fold ResNet CV on {self.device}...")
 
-        # Compute global normalization stats
         self._normalize_X(X, fit=True)
         self._normalize_y(y_sigma, "sigma", fit=True)
         self._normalize_y(y_delta, "delta", fit=True)
@@ -312,21 +219,18 @@ class KFoldTrainer:
             y_sigma_train, y_sigma_val = y_sigma[train_idx], y_sigma[val_idx]
             y_delta_train, y_delta_val = y_delta[train_idx], y_delta[val_idx]
 
-            # Train sigma model
-            print(f"  Training u_sigma...")
-            model_sigma = self._train_single_fold(
-                X_train, y_sigma_train, X_val, y_sigma_val, "sigma", fold_idx
-            )
+            print("  Training u_sigma...")
+            y_sigma_train_norm = self._normalize_y(y_sigma_train, "sigma")
+            y_sigma_val_norm = self._normalize_y(y_sigma_val, "sigma")
+            model_sigma = self._train_single_fold(X_train, y_sigma_train_norm, X_val, y_sigma_val_norm)
             self.models_sigma.append(model_sigma)
 
-            # Train delta model
-            print(f"  Training u_delta...")
-            model_delta = self._train_single_fold(
-                X_train, y_delta_train, X_val, y_delta_val, "delta", fold_idx
-            )
+            print("  Training u_delta...")
+            y_delta_train_norm = self._normalize_y(y_delta_train, "delta")
+            y_delta_val_norm = self._normalize_y(y_delta_val, "delta")
+            model_delta = self._train_single_fold(X_train, y_delta_train_norm, X_val, y_delta_val_norm)
             self.models_delta.append(model_delta)
 
-            # Evaluate fold
             pred_sigma, pred_delta = self._predict_single_fold(X_val, fold_idx)
             fold_metrics = self._compute_metrics(y_sigma_val, pred_sigma, y_delta_val, pred_delta)
             self.fold_metrics.append(fold_metrics)
@@ -336,7 +240,6 @@ class KFoldTrainer:
                 f"delta MAE: {fold_metrics['delta_mae']:.4f}"
             )
 
-        # Print average metrics
         avg_sigma_mae = np.mean([m["sigma_mae"] for m in self.fold_metrics])
         avg_delta_mae = np.mean([m["delta_mae"] for m in self.fold_metrics])
         std_sigma_mae = np.std([m["sigma_mae"] for m in self.fold_metrics])
@@ -347,7 +250,6 @@ class KFoldTrainer:
         print(f"  u_delta MAE: {avg_delta_mae:.4f} ± {std_delta_mae:.4f}")
 
     def _predict_single_fold(self, X: np.ndarray, fold_idx: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Predict using a single fold's models."""
         X_norm = self._normalize_X(X)
         X_t = torch.FloatTensor(X_norm).to(self.device)
 
@@ -360,7 +262,6 @@ class KFoldTrainer:
 
         pred_sigma = self._denormalize_y(pred_sigma, "sigma")
         pred_delta = self._denormalize_y(pred_delta, "delta")
-
         return pred_sigma, pred_delta
 
     def predict(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -382,13 +283,11 @@ class KFoldTrainer:
             all_sigma.append(pred_sigma)
             all_delta.append(pred_delta)
 
-        # Ensemble by averaging
         ensemble_sigma = np.mean(all_sigma, axis=0)
         ensemble_delta = np.mean(all_delta, axis=0)
 
         ensemble_sigma = self._denormalize_y(ensemble_sigma, "sigma")
         ensemble_delta = self._denormalize_y(ensemble_delta, "delta")
-
         return ensemble_sigma, ensemble_delta
 
     def _compute_metrics(
@@ -398,7 +297,6 @@ class KFoldTrainer:
         y_delta_true: np.ndarray,
         y_delta_pred: np.ndarray,
     ) -> Dict:
-        """Compute evaluation metrics."""
         from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
         return {
@@ -415,9 +313,8 @@ class KFoldTrainer:
         return {
             "config": {
                 "n_folds": self.config.n_folds,
-                "hidden_dims": self.config.hidden_dims,
+                "hidden_dim": self.config.hidden_dim,
                 "dropout": self.config.dropout,
-                "use_resnet": self.config.use_resnet,
                 "resnet_blocks": self.config.resnet_blocks,
             },
             "models_sigma_state": [m.state_dict() for m in self.models_sigma],
@@ -428,22 +325,22 @@ class KFoldTrainer:
             "y_sigma_std": self.y_sigma_std,
             "y_delta_mean": self.y_delta_mean,
             "y_delta_std": self.y_delta_std,
-            "input_dim": (
-                self.models_sigma[0].network[0].in_features
-                if hasattr(self.models_sigma[0], "network")
-                else self.models_sigma[0].input_proj[0].in_features
-            ),
+            "input_dim": self.models_sigma[0].input_proj[0].in_features,
             "fold_metrics": self.fold_metrics,
         }
 
     def load_state(self, state: Dict):
         """Load from serialized state."""
         cfg = state["config"]
+        hidden_dim = cfg.get("hidden_dim")
+        if hidden_dim is None:
+            hidden_dims = cfg.get("hidden_dims", [256])
+            hidden_dim = hidden_dims[0]
+
         self.config = KFoldConfig(
             n_folds=cfg["n_folds"],
-            hidden_dims=cfg["hidden_dims"],
+            hidden_dim=hidden_dim,
             dropout=cfg["dropout"],
-            use_resnet=cfg["use_resnet"],
             resnet_blocks=cfg["resnet_blocks"],
         )
 
@@ -471,237 +368,12 @@ class KFoldTrainer:
             self.models_delta.append(model_delta)
 
 
-# ============================================================================
-# Multi-Task Training
-# ============================================================================
-
-
-class MultiTaskTrainer:
-    """
-    Multi-task learning: jointly predicts sigma and delta.
-    Shared representation may help both tasks.
-    """
-
-    def __init__(
-        self,
-        hidden_dims: List[int] = [256, 128, 128, 64],
-        head_dim: int = 64,
-        dropout: float = 0.1,
-        lr: float = 1e-3,
-        batch_size: int = 256,
-        max_epochs: int = 200,
-        patience: int = 20,
-        sigma_weight: float = 1.0,
-        delta_weight: float = 1.0,
-        device: str = "auto",
-    ):
-        self.hidden_dims = hidden_dims
-        self.head_dim = head_dim
-        self.dropout = dropout
-        self.lr = lr
-        self.batch_size = batch_size
-        self.max_epochs = max_epochs
-        self.patience = patience
-        self.sigma_weight = sigma_weight
-        self.delta_weight = delta_weight
-
-        if device == "auto":
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = torch.device(device)
-
-        self.model: Optional[MultiTaskRegressor] = None
-
-        # Normalization
-        self.X_mean: Optional[np.ndarray] = None
-        self.X_std: Optional[np.ndarray] = None
-        self.y_sigma_mean: float = 0.0
-        self.y_sigma_std: float = 1.0
-        self.y_delta_mean: float = 0.0
-        self.y_delta_std: float = 1.0
-
-    def _normalize_X(self, X: np.ndarray, fit: bool = False) -> np.ndarray:
-        if fit:
-            self.X_mean = X.mean(axis=0)
-            self.X_std = X.std(axis=0) + 1e-8
-        return (X - self.X_mean) / self.X_std
-
-    def _normalize_y(self, y_sigma: np.ndarray, y_delta: np.ndarray, fit: bool = False):
-        if fit:
-            self.y_sigma_mean = float(y_sigma.mean())
-            self.y_sigma_std = float(y_sigma.std()) + 1e-8
-            self.y_delta_mean = float(y_delta.mean())
-            self.y_delta_std = float(y_delta.std()) + 1e-8
-
-        y_sigma_norm = (y_sigma - self.y_sigma_mean) / self.y_sigma_std
-        y_delta_norm = (y_delta - self.y_delta_mean) / self.y_delta_std
-
-        return y_sigma_norm, y_delta_norm
-
-    def _denormalize_y(self, y_sigma: np.ndarray, y_delta: np.ndarray):
-        y_sigma = y_sigma * self.y_sigma_std + self.y_sigma_mean
-        y_delta = y_delta * self.y_delta_std + self.y_delta_mean
-        return y_sigma, y_delta
-
-    def fit(
-        self,
-        X_train: np.ndarray,
-        y_sigma_train: np.ndarray,
-        y_delta_train: np.ndarray,
-        X_val: np.ndarray,
-        y_sigma_val: np.ndarray,
-        y_delta_val: np.ndarray,
-    ):
-        """Train multi-task model."""
-        print(f"Training Multi-Task model on {self.device}...")
-
-        input_dim = X_train.shape[1]
-        self.model = MultiTaskRegressor(input_dim, self.hidden_dims, self.head_dim, self.dropout).to(
-            self.device
-        )
-
-        optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=10)
-        criterion = nn.SmoothL1Loss()
-
-        # Normalize
-        X_train_norm = self._normalize_X(X_train, fit=True)
-        y_sigma_train_norm, y_delta_train_norm = self._normalize_y(y_sigma_train, y_delta_train, fit=True)
-        X_val_norm = self._normalize_X(X_val)
-        y_sigma_val_norm, y_delta_val_norm = self._normalize_y(y_sigma_val, y_delta_val)
-
-        train_dataset = TensorDataset(
-            torch.FloatTensor(X_train_norm),
-            torch.FloatTensor(y_sigma_train_norm),
-            torch.FloatTensor(y_delta_train_norm),
-        )
-        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
-
-        X_val_t = torch.FloatTensor(X_val_norm).to(self.device)
-        y_sigma_val_t = torch.FloatTensor(y_sigma_val_norm).to(self.device)
-        y_delta_val_t = torch.FloatTensor(y_delta_val_norm).to(self.device)
-
-        best_val_loss = float("inf")
-        best_state = None
-        patience_counter = 0
-
-        for epoch in range(self.max_epochs):
-            self.model.train()
-            train_loss = 0.0
-
-            for X_batch, y_sigma_batch, y_delta_batch in train_loader:
-                X_batch = X_batch.to(self.device)
-                y_sigma_batch = y_sigma_batch.to(self.device)
-                y_delta_batch = y_delta_batch.to(self.device)
-
-                optimizer.zero_grad()
-                pred_sigma, pred_delta = self.model(X_batch)
-
-                loss_sigma = criterion(pred_sigma, y_sigma_batch)
-                loss_delta = criterion(pred_delta, y_delta_batch)
-                loss = self.sigma_weight * loss_sigma + self.delta_weight * loss_delta
-
-                loss.backward()
-                optimizer.step()
-
-                train_loss += loss.item() * len(X_batch)
-
-            train_loss /= len(train_dataset)
-
-            # Validation
-            self.model.eval()
-            with torch.no_grad():
-                val_sigma, val_delta = self.model(X_val_t)
-                val_loss_sigma = criterion(val_sigma, y_sigma_val_t).item()
-                val_loss_delta = criterion(val_delta, y_delta_val_t).item()
-                val_loss = self.sigma_weight * val_loss_sigma + self.delta_weight * val_loss_delta
-
-            scheduler.step(val_loss)
-
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
-                patience_counter = 0
-            else:
-                patience_counter += 1
-
-            if (epoch + 1) % 20 == 0:
-                print(f"  Epoch {epoch+1}: train={train_loss:.6f}, val={val_loss:.6f}")
-
-            if patience_counter >= self.patience:
-                print(f"  Early stopping at epoch {epoch+1}")
-                break
-
-        self.model.load_state_dict(best_state)
-
-    def predict(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Predict sigma and delta."""
-        X_norm = self._normalize_X(X)
-        X_t = torch.FloatTensor(X_norm).to(self.device)
-
-        self.model.eval()
-        with torch.no_grad():
-            pred_sigma, pred_delta = self.model(X_t)
-            pred_sigma = pred_sigma.cpu().numpy()
-            pred_delta = pred_delta.cpu().numpy()
-
-        return self._denormalize_y(pred_sigma, pred_delta)
-
-    def get_state(self) -> Dict:
-        return {
-            "hidden_dims": self.hidden_dims,
-            "head_dim": self.head_dim,
-            "dropout": self.dropout,
-            "sigma_weight": self.sigma_weight,
-            "delta_weight": self.delta_weight,
-            "model_state": self.model.state_dict() if self.model else None,
-            "X_mean": self.X_mean,
-            "X_std": self.X_std,
-            "y_sigma_mean": self.y_sigma_mean,
-            "y_sigma_std": self.y_sigma_std,
-            "y_delta_mean": self.y_delta_mean,
-            "y_delta_std": self.y_delta_std,
-            "input_dim": self.model.backbone[0].in_features if self.model else None,
-        }
-
-    def load_state(self, state: Dict):
-        self.hidden_dims = state["hidden_dims"]
-        self.head_dim = state["head_dim"]
-        self.dropout = state["dropout"]
-        self.sigma_weight = state["sigma_weight"]
-        self.delta_weight = state["delta_weight"]
-        self.X_mean = state["X_mean"]
-        self.X_std = state["X_std"]
-        self.y_sigma_mean = state["y_sigma_mean"]
-        self.y_sigma_std = state["y_sigma_std"]
-        self.y_delta_mean = state["y_delta_mean"]
-        self.y_delta_std = state["y_delta_std"]
-
-        input_dim = state["input_dim"]
-        self.model = MultiTaskRegressor(input_dim, self.hidden_dims, self.head_dim, self.dropout).to(
-            self.device
-        )
-        self.model.load_state_dict(state["model_state"])
-
-
-# ============================================================================
-# Unified Advanced Surrogate Model
-# ============================================================================
-
-
 class AdvancedSurrogateModel:
-    """
-    Advanced surrogate model with multiple training strategies.
+    """Advanced surrogate model using only K-Fold + ResNet strategy."""
 
-    Strategies:
-    - "kfold": K-Fold cross validation with ensemble
-    - "kfold_resnet": K-Fold with ResNet architecture
-    - "multitask": Multi-task learning
-    """
-
-    def __init__(self, strategy: str = "kfold"):
-        self.strategy = strategy
-        self.trainer = None
+    def __init__(self):
+        self.strategy = "kfold_resnet"
+        self.trainer: Optional[KFoldTrainer] = None
         self.is_trained = False
         self.use_physics_features = True
         self.section_lib = SectionLibrary("src/data/steel_sections_large.json")
@@ -714,7 +386,6 @@ class AdvancedSurrogateModel:
         **kwargs,
     ) -> Dict:
         """Train the model."""
-        # Load data
         with open(dataset_path, "rb") as f:
             data = pickle.load(f)
 
@@ -722,7 +393,6 @@ class AdvancedSurrogateModel:
         y_sigma = data["y_sigma"]
         y_delta = data["y_delta"]
 
-        # Convert features if needed
         feature_format = detect_feature_format(X)
         print(f"Detected feature format: {feature_format} ({X.shape[1]} dimensions)")
 
@@ -732,7 +402,6 @@ class AdvancedSurrogateModel:
 
         self.use_physics_features = use_physics_features
 
-        # Split for final evaluation
         n = len(X)
         n_test = int(n * test_ratio)
         indices = np.random.permutation(n)
@@ -745,30 +414,14 @@ class AdvancedSurrogateModel:
 
         print(f"Training on {len(X_train)} samples, holdout test: {len(X_test)} samples")
 
-        # Train based on strategy
-        if self.strategy == "kfold":
-            config = KFoldConfig(**{k: v for k, v in kwargs.items() if hasattr(KFoldConfig, k)})
-            self.trainer = KFoldTrainer(config)
-            self.trainer.fit(X_train, y_sigma_train, y_delta_train)
+        valid_keys = {f.name for f in fields(KFoldConfig)}
+        cfg_kwargs = {k: v for k, v in kwargs.items() if k in valid_keys}
+        config = KFoldConfig(**cfg_kwargs)
 
-        elif self.strategy == "kfold_resnet":
-            config = KFoldConfig(
-                use_resnet=True, **{k: v for k, v in kwargs.items() if hasattr(KFoldConfig, k)}
-            )
-            self.trainer = KFoldTrainer(config)
-            self.trainer.fit(X_train, y_sigma_train, y_delta_train)
-
-        elif self.strategy == "multitask":
-            kwargs.pop("n_folds", None)  # Not applicable
-            self.trainer = MultiTaskTrainer(**kwargs)
-            self.trainer.fit(X_train, y_sigma_train, y_delta_train, X_test, y_sigma_test, y_delta_test)
-
-        else:
-            raise ValueError(f"Unknown strategy: {self.strategy}")
-
+        self.trainer = KFoldTrainer(config)
+        self.trainer.fit(X_train, y_sigma_train, y_delta_train)
         self.is_trained = True
 
-        # Final evaluation on held-out test set
         pred_sigma, pred_delta = self.trainer.predict(X_test)
 
         from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -824,47 +477,38 @@ class AdvancedSurrogateModel:
         with open(path, "rb") as f:
             data = pickle.load(f)
 
-        model = cls(strategy=data["strategy"])
-        model.use_physics_features = data["use_physics_features"]
+        strategy = data.get("strategy", "kfold_resnet")
+        if strategy != "kfold_resnet":
+            raise ValueError(f"Unsupported model strategy: {strategy}. Only 'kfold_resnet' is supported.")
 
-        if data["strategy"] in ["kfold", "kfold_resnet"]:
-            model.trainer = KFoldTrainer(KFoldConfig())
-            model.trainer.load_state(data["trainer_state"])
-        elif data["strategy"] == "multitask":
-            model.trainer = MultiTaskTrainer()
-            model.trainer.load_state(data["trainer_state"])
+        model = cls()
+        model.use_physics_features = data["use_physics_features"]
+        model.trainer = KFoldTrainer(KFoldConfig())
+        model.trainer.load_state(data["trainer_state"])
 
         model.is_trained = True
-        print(f"Model loaded: strategy={data['strategy']}")
+        print("Model loaded: strategy=kfold_resnet")
         return model
-
-
-# ============================================================================
-# CLI
-# ============================================================================
 
 
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Advanced Surrogate Model Training")
+    parser = argparse.ArgumentParser(description="Advanced Surrogate Model Training (KFold + ResNet only)")
     parser.add_argument("--dataset", type=str, default="results/surrogate_data/dataset.pkl")
-    parser.add_argument(
-        "--strategy", type=str, default="kfold", choices=["kfold", "kfold_resnet", "multitask"]
-    )
     parser.add_argument("--output", type=str, default="results/surrogate_data/model_advanced.pkl")
     parser.add_argument("--n_folds", type=int, default=5)
-    parser.add_argument("--hidden_dims", type=str, default="256,128,64", help="Comma-separated hidden dims")
+    parser.add_argument("--hidden_dim", type=int, default=256)
+    parser.add_argument("--resnet_blocks", type=int, default=3)
 
     args = parser.parse_args()
 
-    hidden_dims = [int(x) for x in args.hidden_dims.split(",")]
-
-    model = AdvancedSurrogateModel(strategy=args.strategy)
+    model = AdvancedSurrogateModel()
     model.train(
         args.dataset,
         n_folds=args.n_folds,
-        hidden_dims=hidden_dims,
+        hidden_dim=args.hidden_dim,
+        resnet_blocks=args.resnet_blocks,
     )
     model.save(args.output)
 
