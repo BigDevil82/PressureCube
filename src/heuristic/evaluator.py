@@ -24,13 +24,21 @@ Returns:
 
 import pickle
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
-from src.structure.layout.params import StructuralParameters
+from src.analysis.surrogate_data import DesignConfig, compute_mass_fast
+from src.analysis.surrogate_model import AdvancedSurrogateModel
+from src.optimization.design_space import (
+    EngineeringDesignConfig,
+    ResearchDesignConfig,
+    build_params_from_config,
+    design_config_from_params,
+)
+from src.structure.layout.params import BaseLayoutParameters, StructuralParameters
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import StructuralModel
@@ -101,69 +109,40 @@ class StructuralEvaluator:
 
         # Detect model type
         if "strategy" in data:
-            # AdvancedSurrogateModel format
-            from analysis.surrogate_model import AdvancedSurrogateModel
-
             self.surrogate = AdvancedSurrogateModel.load(path)
-
         else:
             raise ValueError(f"Unknown surrogate model format in {path}")
 
         print(f"Loaded surrogate model from: {path}")
 
-    def evaluate(
-        self,
-        L: float,
-        W: float,
-        H: float,
-        pressure: float,
-        main_beam_spacing: float,
-        num_secondary_width: int,
-        num_secondary_height: int,
-        add_support_beam: bool,
-        sections: List[int],
-    ) -> EvalResult:
+    def evaluate(self, *args, **kwargs) -> EvalResult:
         """
         Evaluate a structural design.
-
-        Args:
-            L, W, H: Geometry dimensions (meters)
-            pressure: Internal pressure (Pa)
-            main_beam_spacing: Spacing between main beams (meters)
-            num_secondary_width: Number of secondary beams in width direction
-            num_secondary_height: Number of secondary beams in height direction
-            add_support_beam: Whether to add support beams
-            sections: List of 4 section indices [frame, main, secondary, brace]
-
-        Returns:
-            EvalResult with mass, u_sigma, u_delta, feasible
         """
-        if self.mode == "surrogate":
-            return self._evaluate_surrogate(
-                L,
-                W,
-                H,
-                pressure,
-                main_beam_spacing,
-                num_secondary_width,
-                num_secondary_height,
-                add_support_beam,
-                sections,
-            )
+        if args and isinstance(args[0], DesignConfig):
+            config = args[0]
+        elif "config" in kwargs and isinstance(kwargs["config"], DesignConfig):
+            config = kwargs["config"]
         else:
-            return self._evaluate_fea(
-                L,
-                W,
-                H,
-                pressure,
-                main_beam_spacing,
-                num_secondary_width,
-                num_secondary_height,
-                add_support_beam,
-                sections,
+            config = ResearchDesignConfig(
+                L=kwargs["L"],
+                W=kwargs["W"],
+                H=kwargs["H"],
+                pressure=kwargs["pressure"],
+                main_beam_spacing=kwargs["main_beam_spacing"],
+                num_secondary_width=kwargs["num_secondary_width"],
+                num_secondary_height=kwargs["num_secondary_height"],
+                add_support_beam=kwargs["add_support_beam"],
+                frame_section_index=kwargs["sections"][0],
+                main_beam_section_index=kwargs["sections"][1],
+                secondary_beam_section_index=kwargs["sections"][2],
+                brace_section_index=kwargs["sections"][3],
             )
+        if self.mode == "surrogate":
+            return self._evaluate_surrogate(config)
+        return self._evaluate_fea(config)
 
-    def _evaluate_fea(
+    def evaluate_legacy(
         self,
         L: float,
         W: float,
@@ -175,65 +154,7 @@ class StructuralEvaluator:
         add_support_beam: bool,
         sections: List[int],
     ) -> EvalResult:
-        """Real FEA evaluation using OpenSeesSolver."""
-        # Create structural parameters
-        params = StructuralParameters(
-            length=L,
-            width=W,
-            height=H,
-            main_beam_spacing=main_beam_spacing,
-            num_secondary_width=num_secondary_width,
-            num_secondary_height=num_secondary_height,
-            add_support_beam=add_support_beam,
-            frame_section_index=sections[0],
-            main_beam_section_index=sections[1],
-            secondary_beam_section_index=sections[2],
-            brace_section_index=sections[3],
-        )
-
-        # Build model
-        model = StructuralModel(params, self.section_lib)
-        model.generate()
-        mass = model.calculate_mass_kg()
-
-        # Mesh
-        mesh_gen = MeshGenerator(model, self.mesh_size)
-        model = mesh_gen.generate()
-
-        # Run FEA
-        solver = OpenSeesSolver(model)
-        res_strength = solver.run_load_combination(self.COMBO_STRENGTH, pressure_pa=pressure)
-        res_service = solver.run_load_combination(self.COMBO_SERVICE, pressure_pa=pressure)
-
-        # Check results
-        processor = ResultProcessor(model)
-        strength_check = processor.run_gb50017_check(res_strength)
-        disp_check = processor.run_gb50017_check(res_service)
-
-        u_sigma = strength_check.max_stress_ratio
-        u_delta = disp_check.max_deflection_ratio
-
-        feasible = u_sigma <= 1.0 and u_delta <= 1.0
-
-        return EvalResult(mass=mass, u_sigma=u_sigma, u_delta=u_delta, feasible=feasible)
-
-    def _evaluate_surrogate(
-        self,
-        L: float,
-        W: float,
-        H: float,
-        pressure: float,
-        main_beam_spacing: float,
-        num_secondary_width: int,
-        num_secondary_height: int,
-        add_support_beam: bool,
-        sections: List[int],
-    ) -> EvalResult:
-        """Fast surrogate model evaluation."""
-        from analysis.surrogate_data import DesignConfig, compute_mass_fast
-
-        # Create config
-        config = DesignConfig(
+        config = ResearchDesignConfig(
             L=L,
             W=W,
             H=H,
@@ -247,7 +168,40 @@ class StructuralEvaluator:
             secondary_beam_section_index=sections[2],
             brace_section_index=sections[3],
         )
+        return self.evaluate(config)
 
+    def _evaluate_fea(self, config: DesignConfig) -> EvalResult:
+        """Real FEA evaluation using OpenSeesSolver."""
+        params = build_params_from_config(config)
+
+        # Build model
+        model = StructuralModel(params, self.section_lib)
+        model.generate()
+        mass = model.calculate_mass_kg()
+
+        # Mesh
+        mesh_gen = MeshGenerator(model, self.mesh_size)
+        model = mesh_gen.generate()
+
+        # Run FEA
+        solver = OpenSeesSolver(model)
+        res_strength = solver.run_load_combination(self.COMBO_STRENGTH, pressure_pa=config.pressure)
+        res_service = solver.run_load_combination(self.COMBO_SERVICE, pressure_pa=config.pressure)
+
+        # Check results
+        processor = ResultProcessor(model)
+        strength_check = processor.run_gb50017_check(res_strength)
+        disp_check = processor.run_gb50017_check(res_service)
+
+        u_sigma = strength_check.max_stress_ratio
+        u_delta = disp_check.max_deflection_ratio
+
+        feasible = u_sigma <= 1.0 and u_delta <= 1.0
+
+        return EvalResult(mass=mass, u_sigma=u_sigma, u_delta=u_delta, feasible=feasible)
+
+    def _evaluate_surrogate(self, config: DesignConfig) -> EvalResult:
+        """Fast surrogate model evaluation."""
         # Compute mass (fast, no FEA)
         mass = compute_mass_fast(config, self.section_lib)
 
@@ -258,58 +212,21 @@ class StructuralEvaluator:
 
         return EvalResult(mass=mass, u_sigma=u_sigma, u_delta=u_delta, feasible=feasible)
 
-    def evaluate_params(self, params: StructuralParameters, pressure: float) -> EvalResult:
+    def evaluate_params(self, params: BaseLayoutParameters, pressure: float) -> EvalResult:
         """
-        Evaluate using StructuralParameters directly.
+        Evaluate using layout parameters directly.
 
         Convenience method for integration with existing code.
         """
-        return self.evaluate(
-            L=params.length,
-            W=params.width,
-            H=params.height,
-            pressure=pressure,
-            main_beam_spacing=params.main_beam_spacing,
-            num_secondary_width=params.num_secondary_width,
-            num_secondary_height=params.num_secondary_height,
-            add_support_beam=params.add_support_beam,
-            sections=[
-                params.frame_section_index,
-                params.main_beam_section_index,
-                params.secondary_beam_section_index,
-                params.brace_section_index,
-            ],
-        )
+        return self.evaluate(design_config_from_params(params, pressure))
 
-    def get_mass_only(
-        self,
-        L: float,
-        W: float,
-        H: float,
-        main_beam_spacing: float,
-        num_secondary_width: int,
-        num_secondary_height: int,
-        add_support_beam: bool,
-        sections: List[int],
-    ) -> float:
+    def get_mass_only(self, config: DesignConfig) -> float:
         """
         Fast mass calculation without any analysis.
 
         Useful for quick filtering before full evaluation.
         """
-        params = StructuralParameters(
-            length=L,
-            width=W,
-            height=H,
-            main_beam_spacing=main_beam_spacing,
-            num_secondary_width=num_secondary_width,
-            num_secondary_height=num_secondary_height,
-            add_support_beam=add_support_beam,
-            frame_section_index=sections[0],
-            main_beam_section_index=sections[1],
-            secondary_beam_section_index=sections[2],
-            brace_section_index=sections[3],
-        )
+        params = build_params_from_config(config)
         model = StructuralModel(params, self.section_lib)
         model.generate()
         return model.calculate_mass_kg()
@@ -349,17 +266,10 @@ def get_evaluator(
 
 # Standalone function for parallel processing
 def evaluate_design(
-    L: float,
-    W: float,
-    H: float,
-    pressure: float,
-    main_beam_spacing: float,
-    num_secondary_width: int,
-    num_secondary_height: int,
-    add_support_beam: bool,
-    sections: List[int],
+    config: Optional[DesignConfig] = None,
     mode: str = "fea",
     surrogate_path: Optional[str] = None,
+    **legacy_kwargs,
 ) -> Tuple[float, float, float, bool]:
     """
     Standalone evaluation function for parallel processing.
@@ -372,17 +282,23 @@ def evaluate_design(
     """
     evaluator = get_evaluator(mode=mode, surrogate_path=surrogate_path)
     try:
-        result = evaluator.evaluate(
-            L=L,
-            W=W,
-            H=H,
-            pressure=pressure,
-            main_beam_spacing=main_beam_spacing,
-            num_secondary_width=num_secondary_width,
-            num_secondary_height=num_secondary_height,
-            add_support_beam=add_support_beam,
-            sections=sections,
-        )
+        if config is None:
+            config = ResearchDesignConfig(
+                L=legacy_kwargs["L"],
+                W=legacy_kwargs["W"],
+                H=legacy_kwargs["H"],
+                pressure=legacy_kwargs["pressure"],
+                main_beam_spacing=legacy_kwargs["main_beam_spacing"],
+                num_secondary_width=legacy_kwargs["num_secondary_width"],
+                num_secondary_height=legacy_kwargs["num_secondary_height"],
+                add_support_beam=legacy_kwargs["add_support_beam"],
+                frame_section_index=legacy_kwargs["sections"][0],
+                main_beam_section_index=legacy_kwargs["sections"][1],
+                secondary_beam_section_index=legacy_kwargs["sections"][2],
+                brace_section_index=legacy_kwargs["sections"][3],
+            )
+        result = evaluator.evaluate(config)
         return result.mass, result.u_sigma, result.u_delta, result.feasible
-    except Exception:
+    except Exception as e:
+        print(f"Error occurred while evaluating design: {e}")
         return 1e9, 10.0, 10.0, False

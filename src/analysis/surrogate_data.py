@@ -15,7 +15,6 @@ import json
 import os
 import pickle
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -30,7 +29,16 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
-from src.structure.layout.params import StructuralParameters
+from src.optimization.design_space import (
+    DesignConfig,
+    EngineeringDesignConfig,
+    ResearchDesignConfig,
+    build_params_from_config,
+    compute_mass_fast,
+    get_layout_adapter,
+    get_section_lib,
+    sample_spec_from_unit,
+)
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary, SectionType
 from src.structure.structural_model import StructuralModel
@@ -38,185 +46,6 @@ from src.structure.structural_model import StructuralModel
 # ============================================================================
 # Feature Engineering
 # ============================================================================
-
-# Global section library for feature extraction
-_SECTION_LIB: Optional[SectionLibrary] = None
-
-
-def get_section_lib() -> SectionLibrary:
-    """Get or create singleton section library."""
-    global _SECTION_LIB
-    if _SECTION_LIB is None:
-        _SECTION_LIB = SectionLibrary("src/data/steel_sections_large.json")
-    return _SECTION_LIB
-
-
-@dataclass
-class DesignConfig:
-    """A complete design configuration for surrogate model."""
-
-    # Geometry
-    L: float
-    W: float
-    H: float
-    pressure: float  # in Pa
-
-    # Topology
-    main_beam_spacing: float
-    num_secondary_width: int
-    num_secondary_height: int
-    add_support_beam: bool
-
-    # Sections (indices)
-    frame_section_index: int
-    main_beam_section_index: int
-    secondary_beam_section_index: int
-    brace_section_index: int
-
-    def to_feature_vector(self, use_physics: bool = True) -> np.ndarray:
-        """
-        Convert to feature vector for ML model.
-
-        Args:
-            use_physics: If True, use physical section properties instead of indices
-        """
-        if use_physics:
-            return self._to_physics_features()
-        else:
-            raise NotImplementedError(
-                "Index-based features are deprecated. Use physics-based features instead."
-            )
-
-    def _to_physics_features(self) -> np.ndarray:
-        """
-        Physics-based features using section properties.
-
-        Features:
-        - Geometry: L, W, H, volume (L*W*H)
-        - Load: pressure, total_load (pressure * L * W)
-        - Topology: spacing, n_sec_w, n_sec_h, add_support, n_main_beams, n_sec_beams
-        - Section properties (for each of 4 types): area, Ix, Iy
-        - Derived: total_area, avg_Ix, stiffness_ratio
-        """
-        lib = get_section_lib()
-        sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
-        indices = [
-            self.frame_section_index,
-            self.main_beam_section_index,
-            self.secondary_beam_section_index,
-            self.brace_section_index,
-        ]
-
-        # Get section properties
-        sections = [lib.get_section(st, idx) for st, idx in zip(sec_types, indices)]
-
-        # Geometry features
-        volume = self.L * self.W * self.H
-        floor_area = self.L * self.W
-        aspect_ratio = self.L / self.W if self.W > 0 else 1.0
-
-        # Load features
-        pressure_kPa = self.pressure / 1000.0  # Pa -> kPa
-        total_load = self.pressure * floor_area  # Total pressure force (N)
-
-        # Topology features
-        n_main_beams = int(self.L / self.main_beam_spacing) + 1
-
-        # Section physical properties (scaled for numerical stability)
-        # area in cm², Ix in cm⁴ for better numerical range
-        areas = [s.area * 1e4 for s in sections]  # m² -> cm²
-        Ixs = [s.Ix * 1e8 for s in sections]  # m⁴ -> cm⁴
-        Iys = [s.Iy * 1e8 for s in sections]
-
-        # Derived features
-        total_area = sum(areas)
-        avg_Ix = np.mean(Ixs)
-        min_Ix = min(Ixs)
-        max_Ix = max(Ixs)
-        Ix_ratio = min_Ix / (max_Ix + 1e-10)  # Stiffness balance
-
-        # Stiffness-to-load ratio (proxy for displacement)
-        stiffness_load_ratio = avg_Ix / (total_load / 1e6 + 1e-10)
-
-        # Strength proxy: area / load
-        strength_load_ratio = total_area / (total_load / 1e6 + 1e-10)
-
-        features = [
-            # Geometry (6)
-            self.L,
-            self.W,
-            self.H,
-            volume,
-            floor_area,
-            aspect_ratio,
-            # Load (2)
-            pressure_kPa,
-            total_load / 1e6,  # Scale to MN
-            # Topology (5)
-            self.main_beam_spacing,
-            float(self.num_secondary_width),
-            float(self.num_secondary_height),
-            float(self.add_support_beam),
-            float(n_main_beams),
-            # Section areas (4)
-            areas[0],
-            areas[1],
-            areas[2],
-            areas[3],
-            # Section Ix (4)
-            Ixs[0],
-            Ixs[1],
-            Ixs[2],
-            Ixs[3],
-            # Section Iy (4)
-            Iys[0],
-            Iys[1],
-            Iys[2],
-            Iys[3],
-            # Derived (6)
-            total_area,
-            avg_Ix,
-            min_Ix,
-            Ix_ratio,
-            stiffness_load_ratio,
-            strength_load_ratio,
-        ]
-
-        return np.array(features, dtype=np.float32)
-
-    @staticmethod
-    def feature_names(use_physics: bool = True) -> List[str]:
-        if use_physics:
-            return ["L", "W", "H", "volume", "floor_area", "aspect_ratio", "pressure_kPa", "total_load_MN", "main_beam_spacing", "num_secondary_width", "num_secondary_height", "add_support_beam", "n_main_beams",  "frame_area", "main_area", "sec_area", "brace_area", "frame_Ix", "main_Ix", "sec_Ix", "brace_Ix","frame_Iy", "main_Iy", "sec_Iy", "brace_Iy", "total_area", "avg_Ix", "min_Ix", "Ix_ratio", "stiffness_load_ratio", "strength_load_ratio",
-            ] # fmt: skip
-        else:
-            raise NotImplementedError(
-                "Index-based features are deprecated. Use physics-based features instead."
-            )
-
-
-def compute_mass_fast(config: DesignConfig, section_lib: SectionLibrary) -> float:
-    """
-    Fast mass calculation without FEA.
-    Only builds the structural model and computes mass.
-    """
-    params = StructuralParameters(
-        length=config.L,
-        width=config.W,
-        height=config.H,
-        main_beam_spacing=config.main_beam_spacing,
-        num_secondary_width=config.num_secondary_width,
-        num_secondary_height=config.num_secondary_height,
-        add_support_beam=config.add_support_beam,
-        frame_section_index=config.frame_section_index,
-        main_beam_section_index=config.main_beam_section_index,
-        secondary_beam_section_index=config.secondary_beam_section_index,
-        brace_section_index=config.brace_section_index,
-    )
-    model = StructuralModel(params, section_lib)
-    model.generate()
-    return model.calculate_mass_kg()
-
 
 def detect_feature_format(X: np.ndarray) -> str:
     """
@@ -230,10 +59,10 @@ def detect_feature_format(X: np.ndarray) -> str:
             "Detected index-based features (12 dimensions). This format is deprecated. Please use physics-based features instead."
         )
         return "index"
-    elif n_features == 31:
+    elif n_features >= 30:
         return "physics"
     else:
-        raise ValueError(f"Unknown feature format with {n_features} dimensions. Expected 12 or 31.")
+        raise ValueError(f"Unknown feature format with {n_features} dimensions. Expected 12 or >=30.")
 
 
 # ============================================================================
@@ -282,13 +111,6 @@ class DataCollector:
         "H": (3.0, 4.5),
     }
 
-    TOPOLOGY_OPTIONS = {
-        "main_beam_spacing": [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
-        "num_secondary_width": [2, 3, 4, 5, 6],
-        "num_secondary_height": [2, 3, 4, 5, 6],
-        "add_support_beam": [True, False],
-    }
-
     LOAD_OPTIONS = {
         "pressure_range": (20.0, 40.0),  # in kPa
     }
@@ -298,10 +120,13 @@ class DataCollector:
         n_samples: int = 2000,
         n_jobs: int = 4,
         seed: int = 42,
+        layout_strategy: str = "research",
     ):
         self.n_samples = n_samples
         self.n_jobs = n_jobs
         self.seed = seed
+        self.layout_strategy = layout_strategy
+        self.adapter = get_layout_adapter(layout_strategy)
 
         # Get section counts
         self.section_lib = SectionLibrary("src/data/steel_sections_large.json")
@@ -311,8 +136,9 @@ class DataCollector:
     def _generate_lhs_samples(self) -> List[DesignConfig]:
         """Generate samples using Latin Hypercube Sampling."""
 
-        # Dimensions: L, W, H, spacing_idx, sec_w_idx, sec_h_idx, support_idx, 4 section indices, pressure
-        n_dims = 12
+        topology_specs = self.adapter.topology_specs()
+        # Dimensions: geometry(3) + topology + sections(4) + pressure
+        n_dims = 3 + len(topology_specs) + 4 + 1
 
         sampler = qmc.LatinHypercube(d=n_dims, seed=self.seed)
         samples = sampler.random(n=self.n_samples)  # [0, 1] range
@@ -332,49 +158,33 @@ class DataCollector:
                 self.GEOMETRY_RANGES["H"][1] - self.GEOMETRY_RANGES["H"][0]
             )
 
-            # Topology (discrete)
-            spacing_idx = int(s[3] * len(self.TOPOLOGY_OPTIONS["main_beam_spacing"]))
-            spacing_idx = min(spacing_idx, len(self.TOPOLOGY_OPTIONS["main_beam_spacing"]) - 1)
-            spacing = self.TOPOLOGY_OPTIONS["main_beam_spacing"][spacing_idx]
-
-            sec_w_idx = int(s[4] * len(self.TOPOLOGY_OPTIONS["num_secondary_width"]))
-            sec_w_idx = min(sec_w_idx, len(self.TOPOLOGY_OPTIONS["num_secondary_width"]) - 1)
-            sec_w = self.TOPOLOGY_OPTIONS["num_secondary_width"][sec_w_idx]
-
-            sec_h_idx = int(s[5] * len(self.TOPOLOGY_OPTIONS["num_secondary_height"]))
-            sec_h_idx = min(sec_h_idx, len(self.TOPOLOGY_OPTIONS["num_secondary_height"]) - 1)
-            sec_h = self.TOPOLOGY_OPTIONS["num_secondary_height"][sec_h_idx]
-
-            add_support = s[6] > 0.5
+            offset = 3
+            topology = {
+                spec.name: sample_spec_from_unit(spec, s[offset + idx]) for idx, spec in enumerate(topology_specs)
+            }
+            offset += len(topology_specs)
 
             # Section indices
             sections = [
-                int(s[7] * self.sec_counts[0]),
-                int(s[8] * self.sec_counts[1]),
-                int(s[9] * self.sec_counts[2]),
-                int(s[10] * self.sec_counts[3]),
+                int(s[offset + 0] * self.sec_counts[0]),
+                int(s[offset + 1] * self.sec_counts[1]),
+                int(s[offset + 2] * self.sec_counts[2]),
+                int(s[offset + 3] * self.sec_counts[3]),
             ]
             # Clamp to valid range
             sections = [min(sec, cnt - 1) for sec, cnt in zip(sections, self.sec_counts)]
+            offset += 4
 
-            pressure = self.LOAD_OPTIONS["pressure_range"][0] + s[11] * (
+            pressure = self.LOAD_OPTIONS["pressure_range"][0] + s[offset] * (
                 self.LOAD_OPTIONS["pressure_range"][1] - self.LOAD_OPTIONS["pressure_range"][0]
             )
 
             configs.append(
-                DesignConfig(
-                    L=round(L, 2),
-                    W=round(W, 2),
-                    H=round(H, 2),
-                    pressure=float(round(pressure, 2)) * 1000.0,  # convert to Pa
-                    main_beam_spacing=spacing,
-                    num_secondary_width=sec_w,
-                    num_secondary_height=sec_h,
-                    add_support_beam=add_support,
-                    frame_section_index=sections[0],
-                    main_beam_section_index=sections[1],
-                    secondary_beam_section_index=sections[2],
-                    brace_section_index=sections[3],
+                self.adapter.build_config(
+                    geometry={"L": round(L, 2), "W": round(W, 2), "H": round(H, 2)},
+                    pressure=float(round(pressure, 2)) * 1000.0,
+                    topology=topology,
+                    sections=sections,
                 )
             )
 
@@ -410,22 +220,7 @@ class DataCollector:
 
             models = []
             for cfg in batch_configs:
-                model = StructuralModel(
-                    StructuralParameters(
-                        length=cfg.L,
-                        width=cfg.W,
-                        height=cfg.H,
-                        main_beam_spacing=cfg.main_beam_spacing,
-                        num_secondary_width=cfg.num_secondary_width,
-                        num_secondary_height=cfg.num_secondary_height,
-                        add_support_beam=cfg.add_support_beam,
-                        frame_section_index=cfg.frame_section_index,
-                        main_beam_section_index=cfg.main_beam_section_index,
-                        secondary_beam_section_index=cfg.secondary_beam_section_index,
-                        brace_section_index=cfg.brace_section_index,
-                    ),
-                    self.section_lib,
-                )
+                model = StructuralModel(build_params_from_config(cfg), self.section_lib)
                 model.generate()
                 models.append(model)
 
@@ -477,7 +272,8 @@ class DataCollector:
             "y_sigma": y_sigma,
             "y_delta": y_delta,
             "masses": masses,
-            "feature_names": DesignConfig.feature_names(),
+            "feature_names": DesignConfig.feature_names(self.layout_strategy),
+            "layout_strategy": self.layout_strategy,
             "n_samples": valid_count,
             "collection_time": elapsed,
         }
@@ -490,7 +286,8 @@ class DataCollector:
         json_data = {
             "n_samples": valid_count,
             "collection_time": elapsed,
-            "feature_names": DesignConfig.feature_names(),
+            "feature_names": DesignConfig.feature_names(self.layout_strategy),
+            "layout_strategy": self.layout_strategy,
             "y_sigma_stats": {
                 "min": float(y_sigma.min()),
                 "max": float(y_sigma.max()),

@@ -33,6 +33,7 @@ import optuna
 from optuna.samplers import TPESampler
 
 from src.heuristic.evaluator import StructuralEvaluator
+from src.optimization.design_space import get_layout_adapter, suggest_spec_with_optuna
 from src.structure.section_library import SectionLibrary, SectionType
 
 
@@ -41,13 +42,11 @@ class ExtendedOptResult:
     """Result of extended optimization."""
 
     structure_id: str
+    layout_strategy: str
     geometry: dict
 
     # Optimal topology
-    main_beam_spacing: float
-    num_secondary_width: int
-    num_secondary_height: int
-    add_support_beam: bool
+    optimal_topology: dict
 
     # Optimal sections
     optimal_sections: list[int]
@@ -83,11 +82,6 @@ class JointBayesianOptimizer:
     - May waste trials on bad topologies
     """
 
-    # Topology variable definitions
-    SPACING_VALUES = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
-    SEC_WIDTH_VALUES = [2, 3, 4, 5, 6]
-    SEC_HEIGHT_VALUES = [2, 3, 4, 5, 6]
-
     def __init__(
         self,
         n_trials: int = 300,
@@ -95,12 +89,15 @@ class JointBayesianOptimizer:
         seed: Optional[int] = None,
         eval_mode: str = "fea",
         surrogate_path: Optional[str] = None,
+        layout_strategy: str = "research",
     ):
         self.n_trials = n_trials
         self.constraint_penalty = constraint_penalty
         self.seed = seed
         self.eval_mode = eval_mode
         self.surrogate_path = surrogate_path
+        self.layout_strategy = layout_strategy
+        self.adapter = get_layout_adapter(layout_strategy)
 
         # Get section counts from library
         section_lib = SectionLibrary("src/data/steel_sections_large.json")
@@ -115,28 +112,22 @@ class JointBayesianOptimizer:
         """Create objective function for joint optimization."""
 
         def objective(trial: optuna.Trial) -> float:
-            # Sample topology variables
-            spacing = trial.suggest_categorical("main_beam_spacing", self.SPACING_VALUES)
-            sec_w = trial.suggest_int("num_secondary_width", 2, 6)
-            sec_h = trial.suggest_int("num_secondary_height", 2, 6)
-            add_support = trial.suggest_categorical("add_support_beam", [True, False])
+            topology = {
+                spec.name: suggest_spec_with_optuna(trial, spec) for spec in self.adapter.topology_specs()
+            }
 
             # Sample section indices
             sections = [trial.suggest_int(f"section_{i}", 0, self.sec_counts[i] - 1) for i in range(4)]
 
             # Run evaluation
             try:
-                result = self.evaluator.evaluate(
-                    L=L,
-                    W=W,
-                    H=H,
+                config = self.adapter.build_config(
+                    geometry={"L": L, "W": W, "H": H},
                     pressure=pressure,
-                    main_beam_spacing=spacing,
-                    num_secondary_width=sec_w,
-                    num_secondary_height=sec_h,
-                    add_support_beam=add_support,
+                    topology=topology,
                     sections=sections,
                 )
+                result = self.evaluator.evaluate(config)
             except Exception as e:
                 # Evaluation failed - heavily penalize
                 trial.set_user_attr("error", str(e))
@@ -173,15 +164,12 @@ class JointBayesianOptimizer:
 
         # Get initial mass (max sections, default topology)
         initial_result = self.evaluator.evaluate(
-            L=L,
-            W=W,
-            H=H,
-            pressure=pressure,
-            main_beam_spacing=0.7,
-            num_secondary_width=4,
-            num_secondary_height=4,
-            add_support_beam=True,
-            sections=self.max_indices,
+            self.adapter.build_config(
+                geometry={"L": L, "W": W, "H": H},
+                pressure=pressure,
+                topology=self.adapter.default_topology(),
+                sections=self.max_indices,
+            )
         )
         initial_mass = initial_result.mass
 
@@ -212,11 +200,9 @@ class JointBayesianOptimizer:
 
         return ExtendedOptResult(
             structure_id=parameters.get("structure_id", "unknown"),
+            layout_strategy=self.layout_strategy,
             geometry={"L": L, "W": W, "H": H},
-            main_beam_spacing=best.params["main_beam_spacing"],
-            num_secondary_width=best.params["num_secondary_width"],
-            num_secondary_height=best.params["num_secondary_height"],
-            add_support_beam=best.params["add_support_beam"],
+            optimal_topology={spec.name: best.params[spec.name] for spec in self.adapter.topology_specs()},
             optimal_sections=[best.params[f"section_{i}"] for i in range(4)],
             initial_mass=initial_mass,
             optimal_mass=best.user_attrs["mass"],
@@ -239,25 +225,28 @@ if __name__ == "__main__":
     parser.add_argument("--pressure", type=float, default=30000.0)
     parser.add_argument("--mode", type=str, default="fea", choices=["fea", "surrogate"])
     parser.add_argument("--surrogate", type=str, default=None, help="Path to surrogate model")
+    parser.add_argument("--layout-strategy", type=str, default="research", choices=["research", "engineering"])
     args = parser.parse_args()
 
     parameter = {"L": args.L, "W": args.W, "H": args.H, "pressure": args.pressure}
 
-    opt = JointBayesianOptimizer(n_trials=200, seed=42, eval_mode=args.mode, surrogate_path=args.surrogate)
+    opt = JointBayesianOptimizer(
+        n_trials=200,
+        seed=42,
+        eval_mode=args.mode,
+        surrogate_path=args.surrogate,
+        layout_strategy=args.layout_strategy,
+    )
     result = opt.optimize(parameter)
     print(f"Mass: {result.optimal_mass:.0f}kg, Reduction: {result.mass_reduction_pct:.1f}%")
-    from src.heuristic.evaluator import evaluate_design
+    from src.heuristic.evaluator import get_evaluator
 
-    eval_result = evaluate_design(
-        L=args.L,
-        W=args.W,
-        H=args.H,
+    evaluator = get_evaluator(mode="fea")
+    config = opt.adapter.build_config(
+        geometry={"L": args.L, "W": args.W, "H": args.H},
         pressure=args.pressure,
-        main_beam_spacing=result.main_beam_spacing,
-        num_secondary_width=result.num_secondary_width,
-        num_secondary_height=result.num_secondary_height,
-        add_support_beam=result.add_support_beam,
+        topology=result.optimal_topology,
         sections=result.optimal_sections,
-        mode="fea",
     )
-    print("FEA Check - u_sigma: {:.3f}, u_delta: {:.3f}".format(eval_result[1], eval_result[2]))
+    check = evaluator.evaluate(config)
+    print("FEA Check - u_sigma: {:.3f}, u_delta: {:.3f}".format(check.u_sigma, check.u_delta))
