@@ -51,12 +51,16 @@ class DesignConfig:
 
     def to_feature_vector(self, use_physics: bool = True) -> np.ndarray:
         if not use_physics:
-            raise NotImplementedError("Index-based features are deprecated. Use physics-based features instead.")
+            raise NotImplementedError(
+                "Index-based features are deprecated. Use physics-based features instead."
+            )
 
         lib = get_section_lib(self.layout_strategy)
         adapter = get_layout_adapter(self.layout_strategy)
         sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
-        sections = [lib.get_section(sec_type, idx) for sec_type, idx in zip(sec_types, self.section_indices())]
+        sections = [
+            lib.get_section(sec_type, idx) for sec_type, idx in zip(sec_types, self.section_indices())
+        ]
 
         volume = self.L * self.W * self.H
         floor_area = self.L * self.W
@@ -104,7 +108,9 @@ class DesignConfig:
     @classmethod
     def feature_names(cls, layout_strategy: str, use_physics: bool = True) -> list[str]:
         if not use_physics:
-            raise NotImplementedError("Index-based features are deprecated. Use physics-based features instead.")
+            raise NotImplementedError(
+                "Index-based features are deprecated. Use physics-based features instead."
+            )
 
         adapter = get_layout_adapter(layout_strategy)
         return [
@@ -186,7 +192,9 @@ class LayoutDesignAdapter:
     def default_topology(self) -> dict[str, Any]:
         return {spec.name: spec.default for spec in self.topology_specs()}
 
-    def build_config(self, *, geometry: dict[str, float], pressure: float, topology: dict[str, Any], sections: list[int]) -> DesignConfig:
+    def build_config(
+        self, *, geometry: dict[str, float], pressure: float, topology: dict[str, Any], sections: list[int]
+    ) -> DesignConfig:
         return self.config_cls(
             L=geometry["L"],
             W=geometry["W"],
@@ -225,7 +233,12 @@ class ResearchLayoutAdapter(LayoutDesignAdapter):
 
     def topology_specs(self) -> list[VariableSpec]:
         return [
-            VariableSpec("main_beam_spacing", "categorical", choices=[0.7, 0.8, 0.9, 1.0, 1.1, 1.2], default=0.7),
+            VariableSpec(
+                "main_beam_spacing",
+                "categorical",
+                choices=[0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.30],
+                default=0.75,
+            ),
             VariableSpec("num_secondary_width", "int", low=2, high=6, default=4),
             VariableSpec("num_secondary_height", "int", low=2, high=6, default=4),
             VariableSpec("add_support_beam", "bool", choices=[True, False], default=True),
@@ -236,7 +249,11 @@ class ResearchLayoutAdapter(LayoutDesignAdapter):
 
     def topology_feature_values(self, config: DesignConfig) -> list[float]:
         assert isinstance(config, ResearchDesignConfig)
-        return [float(config.num_secondary_width), float(config.num_secondary_height), float(config.add_support_beam)]
+        return [
+            float(config.num_secondary_width),
+            float(config.num_secondary_height),
+            float(config.add_support_beam),
+        ]
 
     def _extra_param_kwargs(self, config: DesignConfig) -> dict[str, Any]:
         assert isinstance(config, ResearchDesignConfig)
@@ -254,8 +271,18 @@ class EngineeringLayoutAdapter(LayoutDesignAdapter):
 
     def topology_specs(self) -> list[VariableSpec]:
         return [
-            VariableSpec("main_beam_spacing", "categorical", choices=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5], default=0.95),
-            VariableSpec("support_beam_max_spacing", "categorical", choices=[0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.05], default=0.75),
+            VariableSpec(
+                "main_beam_spacing",
+                "categorical",
+                choices=[0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.30],
+                default=0.95,
+            ),
+            VariableSpec(
+                "support_beam_max_spacing",
+                "categorical",
+                choices=[0.3, 0.35, 0.40, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75],
+                default=0.5,
+            ),
             VariableSpec("add_support_beam", "bool", choices=[True, False], default=True),
         ]
 

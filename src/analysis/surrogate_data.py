@@ -34,8 +34,8 @@ from src.optimization.design_space import (
     build_params_from_config,
     compute_mass_fast,
     get_layout_adapter,
-    sample_spec_from_unit,
     get_section_lib,
+    sample_spec_from_unit,
 )
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary, SectionType
@@ -44,6 +44,7 @@ from src.structure.structural_model import StructuralModel
 # ============================================================================
 # Feature Engineering
 # ============================================================================
+
 
 def detect_feature_format(X: np.ndarray) -> str:
     """
@@ -105,8 +106,8 @@ class DataCollector:
     # Default parameter ranges
     GEOMETRY_RANGES = {
         "L": (6.0, 12.0),
-        "W": (3.0, 4.5),
-        "H": (3.0, 4.5),
+        "W": (3.4, 4.0),
+        "H": (3.0, 3.6),
     }
 
     LOAD_OPTIONS = {
@@ -139,51 +140,83 @@ class DataCollector:
         n_dims = 3 + len(topology_specs) + 4 + 1
 
         sampler = qmc.LatinHypercube(d=n_dims, seed=self.seed)
-        samples = sampler.random(n=self.n_samples)  # [0, 1] range
 
         configs = []
-        for i in range(self.n_samples):
-            s = samples[i]
+        seen_configs = set()
+        oversample_factor = 3
+        max_attempts = 5
+        attempts = 0
 
-            # Map to actual values
-            L = self.GEOMETRY_RANGES["L"][0] + s[0] * (
-                self.GEOMETRY_RANGES["L"][1] - self.GEOMETRY_RANGES["L"][0]
-            )
-            W = self.GEOMETRY_RANGES["W"][0] + s[1] * (
-                self.GEOMETRY_RANGES["W"][1] - self.GEOMETRY_RANGES["W"][0]
-            )
-            H = self.GEOMETRY_RANGES["H"][0] + s[2] * (
-                self.GEOMETRY_RANGES["H"][1] - self.GEOMETRY_RANGES["H"][0]
-            )
+        while len(configs) < self.n_samples and attempts < max_attempts:
+            remaining = self.n_samples - len(configs)
+            batch_size = max(remaining * oversample_factor, remaining)
+            samples = sampler.random(n=batch_size)  # [0, 1] range
+            attempts += 1
 
-            offset = 3
-            topology = {
-                spec.name: sample_spec_from_unit(spec, s[offset + idx]) for idx, spec in enumerate(topology_specs)
-            }
-            offset += len(topology_specs)
+            for i in range(batch_size):
+                s = samples[i]
 
-            # Section indices
-            sections = [
-                int(s[offset + 0] * self.sec_counts[0]),
-                int(s[offset + 1] * self.sec_counts[1]),
-                int(s[offset + 2] * self.sec_counts[2]),
-                int(s[offset + 3] * self.sec_counts[3]),
-            ]
-            # Clamp to valid range
-            sections = [min(sec, cnt - 1) for sec, cnt in zip(sections, self.sec_counts)]
-            offset += 4
-
-            pressure = self.LOAD_OPTIONS["pressure_range"][0] + s[offset] * (
-                self.LOAD_OPTIONS["pressure_range"][1] - self.LOAD_OPTIONS["pressure_range"][0]
-            )
-
-            configs.append(
-                self.adapter.build_config(
-                    geometry={"L": round(L, 2), "W": round(W, 2), "H": round(H, 2)},
-                    pressure=float(round(pressure, 2)) * 1000.0,
-                    topology=topology,
-                    sections=sections,
+                # Map to actual values
+                L = self.GEOMETRY_RANGES["L"][0] + s[0] * (
+                    self.GEOMETRY_RANGES["L"][1] - self.GEOMETRY_RANGES["L"][0]
                 )
+                W = self.GEOMETRY_RANGES["W"][0] + s[1] * (
+                    self.GEOMETRY_RANGES["W"][1] - self.GEOMETRY_RANGES["W"][0]
+                )
+                H = self.GEOMETRY_RANGES["H"][0] + s[2] * (
+                    self.GEOMETRY_RANGES["H"][1] - self.GEOMETRY_RANGES["H"][0]
+                )
+
+                offset = 3
+                topology = {
+                    spec.name: sample_spec_from_unit(spec, s[offset + idx])
+                    for idx, spec in enumerate(topology_specs)
+                }
+                offset += len(topology_specs)
+
+                sections = [
+                    int(s[offset + 0] * self.sec_counts[0]),
+                    int(s[offset + 1] * self.sec_counts[1]),
+                    int(s[offset + 2] * self.sec_counts[2]),
+                    int(s[offset + 3] * self.sec_counts[3]),
+                ]
+                sections = [min(sec, cnt - 1) for sec, cnt in zip(sections, self.sec_counts)]
+                offset += 4
+
+                pressure = self.LOAD_OPTIONS["pressure_range"][0] + s[offset] * (
+                    self.LOAD_OPTIONS["pressure_range"][1] - self.LOAD_OPTIONS["pressure_range"][0]
+                )
+
+                geometry = {"L": round(L, 2), "W": round(W, 2), "H": round(H, 2)}
+                pressure_pa = float(round(pressure, 2)) * 1000.0
+                config_key = (
+                    geometry["L"],
+                    geometry["W"],
+                    geometry["H"],
+                    pressure_pa,
+                    tuple(sorted(topology.items())),
+                    tuple(sections),
+                )
+                if config_key in seen_configs:
+                    continue
+
+                seen_configs.add(config_key)
+                configs.append(
+                    self.adapter.build_config(
+                        geometry=geometry,
+                        pressure=pressure_pa,
+                        topology=topology,
+                        sections=sections,
+                    )
+                )
+
+                if len(configs) >= self.n_samples:
+                    break
+
+        if len(configs) < self.n_samples:
+            print(
+                f"Warning: only generated {len(configs)} unique configs out of requested {self.n_samples}. "
+                "Parameter space may be too small or too discretized."
             )
 
         return configs
@@ -284,6 +317,10 @@ class DataCollector:
         json_data = {
             "n_samples": valid_count,
             "collection_time": elapsed,
+            "config": {
+                "geometry_ranges": self.GEOMETRY_RANGES,
+                "load_options": self.LOAD_OPTIONS,
+            },
             "feature_names": DesignConfig.feature_names(self.layout_strategy),
             "layout_strategy": self.layout_strategy,
             "y_sigma_stats": {
@@ -316,6 +353,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # Data collection
+    # python -m src.analysis.surrogate_data collect --n_samples 200000 --n_jobs 12 --output_dir results\surrogate_data\engineering_200k
     collect_parser = subparsers.add_parser("collect", help="Collect training data")
     collect_parser.add_argument("--n_samples", type=int, default=2000, help="Number of samples")
     collect_parser.add_argument("--n_jobs", type=int, default=4, help="Parallel workers")
