@@ -387,78 +387,11 @@ def run_single_optimization(
     return result
 
 
-def compare_with_greedy():
-    """
-    Compare Bayesian optimization with Greedy baseline.
-    """
-    from heuristic.baseline import GreedyShrinkBaseline
-
-    print("=" * 70)
-    print("COMPARISON: Bayesian Optimization vs Greedy Shrink")
-    print("=" * 70)
-
-    # Test structures
-    test_geometries = [
-        {"L": 8.0, "W": 3.6, "H": 3.6, "structure_id": "test_1"},
-        {"L": 10.0, "W": 4.0, "H": 4.0, "structure_id": "test_2"},
-        {"L": 6.0, "W": 3.0, "H": 3.0, "structure_id": "test_3"},
-    ]
-
-    # Run Greedy
-    print("\n--- Greedy Shrink ---")
-    greedy = GreedyShrinkBaseline()
-    greedy_results = []
-    for geom in test_geometries:
-        result = greedy.optimize(geom)
-        greedy_results.append(result)
-        print(
-            f"{geom['structure_id']}: mass={result['final_mass']:.0f}kg, "
-            f"reduction={result['mass_reduction_pct']:.1f}%, "
-            f"sims={result['num_simulations']}, time={result['time_seconds']:.1f}s"
-        )
-
-    # Run Bayesian
-    print("\n--- Bayesian Optimization (100 trials) ---")
-    bayesian = BayesianSectionOptimizer(n_trials=100, seed=42)
-    bayesian_results: List[OptimizationResult] = []
-    for geom in test_geometries:
-        result = bayesian.optimize(geom)
-        bayesian_results.append(result)
-        print(
-            f"{result.structure_id}: mass={result.optimal_mass:.0f}kg, "
-            f"reduction={result.mass_reduction_pct:.1f}%, "
-            f"sims={result.n_trials}, time={result.time_seconds:.1f}s"
-        )
-
-    # Summary comparison
-    print("\n" + "=" * 70)
-    print("SUMMARY COMPARISON")
-    print("=" * 70)
-    print(f"{'Method':<20} {'Avg Reduction':<15} {'Avg Sims':<12} {'Avg Time':<10}")
-    print("-" * 60)
-
-    greedy_reductions = [r["mass_reduction_pct"] for r in greedy_results]
-    greedy_sims = [r["num_simulations"] for r in greedy_results]
-    greedy_times = [r["time_seconds"] for r in greedy_results]
-    print(
-        f"{'Greedy':<20} {np.mean(greedy_reductions):.1f}% ± {np.std(greedy_reductions):.1f}%"
-        f"   {np.mean(greedy_sims):.0f}          {np.mean(greedy_times):.1f}s"
-    )
-
-    bayesian_reductions = [r.mass_reduction_pct for r in bayesian_results]
-    bayesian_sims = [r.n_trials for r in bayesian_results]
-    bayesian_times = [r.time_seconds for r in bayesian_results]
-    print(
-        f"{'Bayesian (100)':<20} {np.mean(bayesian_reductions):.1f}% ± {np.std(bayesian_reductions):.1f}%"
-        f"   {np.mean(bayesian_sims):.0f}         {np.mean(bayesian_times):.1f}s"
-    )
-
-
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Bayesian Optimization for Steel Section Selection")
-    parser.add_argument("--mode", type=str, default="single", choices=["single", "compare", "batch"])
+    parser.add_argument("--mode", type=str, default="single", choices=["single", "batch"])
     parser.add_argument("--trials", type=int, default=100, help="Number of optimization trials")
     parser.add_argument("--L", type=float, default=9.6, help="Structure length")
     parser.add_argument("--W", type=float, default=3.7, help="Structure width")
@@ -469,8 +402,6 @@ if __name__ == "__main__":
 
     if args.mode == "single":
         run_single_optimization(L=args.L, W=args.W, H=args.H, n_trials=args.trials, seed=args.seed)
-    elif args.mode == "compare":
-        compare_with_greedy()
     elif args.mode == "batch":
         # Load test structures if available
         test_file = "results/test_structures.json"
