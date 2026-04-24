@@ -14,7 +14,7 @@ def default_ui_state() -> dict:
     return {
         "layout_mode": "research",
         "L": 8.9,
-        "W": 3.6,
+        "W": 3.7,
         "H": 3.3,
         "beam_spacing": 0.95,
         "num_sec_w": 3,

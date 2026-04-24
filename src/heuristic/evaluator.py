@@ -227,10 +227,7 @@ class StructuralEvaluator:
 
         Useful for quick filtering before full evaluation.
         """
-        params = build_params_from_config(config)
-        model = StructuralModel(params, get_section_lib(config.layout_strategy, self.section_lib_path))
-        model.generate()
-        return model.calculate_mass_kg()
+        return compute_mass_fast(config, get_section_lib(config.layout_strategy, self.section_lib_path))
 
 
 # Module-level cache for parallel processing

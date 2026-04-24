@@ -60,7 +60,7 @@ with st.sidebar:
     st.header("⚙️ 几何参数控制")
     if layout_mode == "engineering":
         length = st.slider("舱体长度 (Length)", 7.2, 12.0, float(defaults["L"]), 0.1, key="L")
-        width = st.number_input("舱体宽度 (Width)", value=3.6, step=0.1, key="W", disabled=True)
+        width = st.number_input("舱体宽度 (Width)", value=3.7, step=0.1, key="W", disabled=True)
         height = st.number_input("舱体高度 (Height)", value=3.3, step=0.1, key="H", disabled=True)
         section_library = SectionLibrary("src/data/steel_sections.json")
     else:
