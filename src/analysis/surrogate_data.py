@@ -31,13 +31,11 @@ from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
 from src.optimization.design_space import (
     DesignConfig,
-    EngineeringDesignConfig,
-    ResearchDesignConfig,
     build_params_from_config,
     compute_mass_fast,
     get_layout_adapter,
-    get_section_lib,
     sample_spec_from_unit,
+    get_section_lib,
 )
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary, SectionType
@@ -129,7 +127,7 @@ class DataCollector:
         self.adapter = get_layout_adapter(layout_strategy)
 
         # Get section counts
-        self.section_lib = SectionLibrary("src/data/steel_sections_large.json")
+        self.section_lib = get_section_lib(layout_strategy)
         self.sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
         self.sec_counts = [self.section_lib.section_counts[t] for t in self.sec_types]
 

@@ -53,7 +53,7 @@ class DesignConfig:
         if not use_physics:
             raise NotImplementedError("Index-based features are deprecated. Use physics-based features instead.")
 
-        lib = get_section_lib()
+        lib = get_section_lib(self.layout_strategy)
         adapter = get_layout_adapter(self.layout_strategy)
         sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
         sections = [lib.get_section(sec_type, idx) for sec_type, idx in zip(sec_types, self.section_indices())]
@@ -172,6 +172,7 @@ class LayoutDesignAdapter:
     layout_strategy: str
     config_cls: type[DesignConfig]
     params_cls: type[BaseLayoutParameters]
+    default_section_lib_path: str
 
     def topology_specs(self) -> list[VariableSpec]:
         raise NotImplementedError
@@ -220,6 +221,7 @@ class ResearchLayoutAdapter(LayoutDesignAdapter):
     layout_strategy = "research"
     config_cls = ResearchDesignConfig
     params_cls = ResearchLayoutParameters
+    default_section_lib_path = "src/data/steel_sections_large.json"
 
     def topology_specs(self) -> list[VariableSpec]:
         return [
@@ -248,6 +250,7 @@ class EngineeringLayoutAdapter(LayoutDesignAdapter):
     layout_strategy = "engineering"
     config_cls = EngineeringDesignConfig
     params_cls = EngineeringLayoutParameters
+    default_section_lib_path = "src/data/steel_sections.json"
 
     def topology_specs(self) -> list[VariableSpec]:
         return [
@@ -273,14 +276,18 @@ _ADAPTERS: dict[str, LayoutDesignAdapter] = {
     "engineering": EngineeringLayoutAdapter(),
 }
 
-_SECTION_LIB: SectionLibrary | None = None
+_SECTION_LIB_CACHE: dict[str, SectionLibrary] = {}
 
 
-def get_section_lib() -> SectionLibrary:
-    global _SECTION_LIB
-    if _SECTION_LIB is None:
-        _SECTION_LIB = SectionLibrary("src/data/steel_sections_large.json")
-    return _SECTION_LIB
+def get_default_section_lib_path(layout_strategy: str) -> str:
+    return get_layout_adapter(layout_strategy).default_section_lib_path
+
+
+def get_section_lib(layout_strategy: str = "research", file_path: str | None = None) -> SectionLibrary:
+    resolved_path = file_path or get_default_section_lib_path(layout_strategy)
+    if resolved_path not in _SECTION_LIB_CACHE:
+        _SECTION_LIB_CACHE[resolved_path] = SectionLibrary(resolved_path)
+    return _SECTION_LIB_CACHE[resolved_path]
 
 
 def get_layout_adapter(layout_strategy: str) -> LayoutDesignAdapter:

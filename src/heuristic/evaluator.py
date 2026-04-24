@@ -37,10 +37,10 @@ from src.optimization.design_space import (
     ResearchDesignConfig,
     build_params_from_config,
     design_config_from_params,
+    get_section_lib,
 )
 from src.structure.layout.params import BaseLayoutParameters, StructuralParameters
 from src.structure.mesh_generator import MeshGenerator
-from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import StructuralModel
 
 
@@ -79,7 +79,7 @@ class StructuralEvaluator:
         self,
         mode: str = "fea",
         surrogate_path: Optional[str] = None,
-        section_lib_path: str = "src/data/steel_sections_large.json",
+        section_lib_path: Optional[str] = None,
         mesh_size: float = 0.5,
     ):
         """
@@ -93,7 +93,7 @@ class StructuralEvaluator:
         """
         self.mode = mode
         self.mesh_size = mesh_size
-        self.section_lib = SectionLibrary(section_lib_path)
+        self.section_lib_path = section_lib_path
 
         # Load surrogate model if needed
         self.surrogate = None
@@ -173,9 +173,10 @@ class StructuralEvaluator:
     def _evaluate_fea(self, config: DesignConfig) -> EvalResult:
         """Real FEA evaluation using OpenSeesSolver."""
         params = build_params_from_config(config)
+        section_lib = get_section_lib(config.layout_strategy, self.section_lib_path)
 
         # Build model
-        model = StructuralModel(params, self.section_lib)
+        model = StructuralModel(params, section_lib)
         model.generate()
         mass = model.calculate_mass_kg()
 
@@ -203,7 +204,7 @@ class StructuralEvaluator:
     def _evaluate_surrogate(self, config: DesignConfig) -> EvalResult:
         """Fast surrogate model evaluation."""
         # Compute mass (fast, no FEA)
-        mass = compute_mass_fast(config, self.section_lib)
+        mass = compute_mass_fast(config, get_section_lib(config.layout_strategy, self.section_lib_path))
 
         # Predict u_sigma and u_delta
         u_sigma, u_delta = self.surrogate.predict(config)
@@ -227,7 +228,7 @@ class StructuralEvaluator:
         Useful for quick filtering before full evaluation.
         """
         params = build_params_from_config(config)
-        model = StructuralModel(params, self.section_lib)
+        model = StructuralModel(params, get_section_lib(config.layout_strategy, self.section_lib_path))
         model.generate()
         return model.calculate_mass_kg()
 

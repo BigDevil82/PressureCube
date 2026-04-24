@@ -44,7 +44,7 @@ st.title("🏗️ 模块化舱体结构参数化生成")
 
 session = AppSession()
 defaults = hydrate_defaults()
-section_library = SectionLibrary()
+
 
 with st.sidebar:
     st.header("⚙️ 布局策略")
@@ -62,10 +62,12 @@ with st.sidebar:
         length = st.slider("舱体长度 (Length)", 7.2, 12.0, float(defaults["L"]), 0.1, key="L")
         width = st.number_input("舱体宽度 (Width)", value=3.6, step=0.1, key="W", disabled=True)
         height = st.number_input("舱体高度 (Height)", value=3.3, step=0.1, key="H", disabled=True)
+        section_library = SectionLibrary("src/data/steel_sections.json")
     else:
         length = st.slider("舱体长度 (Length)", 5.0, 15.0, float(defaults["L"]), 0.2, key="L")
         width = st.slider("舱体宽度 (Width)", 2.0, 5.0, float(defaults["W"]), 0.1, key="W")
         height = st.slider("舱体高度 (Height)", 2.0, 4.0, float(defaults["H"]), 0.1, key="H")
+        section_library = SectionLibrary("src/data/steel_sections_large.json")
 
     st.divider()
     st.header("📐 拓扑与截面")

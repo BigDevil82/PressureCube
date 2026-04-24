@@ -17,8 +17,9 @@ from src.optimization.design_space import (
     DesignConfig,
     VariableSpec,
     get_layout_adapter,
+    get_section_lib,
 )
-from src.structure.section_library import SectionLibrary, SectionType
+from src.structure.section_library import SectionType
 
 
 @dataclass
@@ -250,7 +251,7 @@ class ParallelGAOptimizer:
         self.adapter = get_layout_adapter(layout_strategy)
         self.topology_specs = self.adapter.topology_specs()
 
-        section_lib = SectionLibrary("src/data/steel_sections_large.json")
+        section_lib = get_section_lib(layout_strategy)
         sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
         self.sec_counts = [section_lib.section_counts[t] for t in sec_types]
         self.max_indices = [count - 1 for count in self.sec_counts]

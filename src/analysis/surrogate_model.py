@@ -13,7 +13,8 @@ import torch.optim as optim
 from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.analysis.surrogate_data import DesignConfig, SectionLibrary, compute_mass_fast, detect_feature_format
+from src.analysis.surrogate_data import DesignConfig, compute_mass_fast, detect_feature_format
+from src.optimization.design_space import get_section_lib
 
 
 class ResidualBlock(nn.Module):
@@ -370,7 +371,7 @@ class AdvancedSurrogateModel:
         self.trainer: Optional[KFoldTrainer] = None
         self.is_trained = False
         self.use_physics_features = True
-        self.section_lib = SectionLibrary("src/data/steel_sections_large.json")
+        self.section_lib = None
 
     def train(
         self,
@@ -451,7 +452,7 @@ class AdvancedSurrogateModel:
 
     def get_mass(self, config: DesignConfig) -> float:
         """Fast mass calculation."""
-        return compute_mass_fast(config, self.section_lib)
+        return compute_mass_fast(config, get_section_lib(config.layout_strategy))
 
     def save(self, path: str):
         """Save model."""
