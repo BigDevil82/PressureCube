@@ -13,7 +13,7 @@ import torch.optim as optim
 from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.analysis.surrogate import (
+from analysis.surrogate_data import (
     DesignConfig,
     SectionLibrary,
     compute_mass_fast,
