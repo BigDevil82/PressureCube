@@ -358,6 +358,13 @@ def main():
     collect_parser.add_argument("--n_samples", type=int, default=2000, help="Number of samples")
     collect_parser.add_argument("--n_jobs", type=int, default=4, help="Parallel workers")
     collect_parser.add_argument("--output_dir", type=str, default="results/surrogate_data")
+    collect_parser.add_argument(
+        "--layout_strategy",
+        type=str,
+        default="research",
+        choices=["research", "engineering"],
+        help="Layout strategy to use for data collection",
+    )
     collect_parser.add_argument("--seed", type=int, default=42)
 
     # Train model
@@ -373,6 +380,7 @@ def main():
             n_samples=args.n_samples,
             n_jobs=args.n_jobs,
             seed=args.seed,
+            layout_strategy=args.layout_strategy,
         )
         collector.collect(output_dir=args.output_dir)
 
