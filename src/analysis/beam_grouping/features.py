@@ -24,6 +24,17 @@ def extract_beam_features(
     mirror_z: bool,
     symmetry_round_decimals: int,
 ) -> Dict[int, BeamFeature]:
+    """提取单根梁的分组特征。
+
+    特征分为三类：
+    1. 受力特征：强度组合下的最大应力比和最大应力。
+    2. 变形特征：正常使用组合下梁两端节点位移的最大值、平均值和相对位移。
+    3. 空间特征：梁中点的归一化坐标、梁长和主方向。
+
+    注意 beam_id 只用于索引返回结果，不作为聚类特征。这样即使建模过程改变
+    了编号顺序，也不会直接改变特征空间。
+    """
+
     bounds_min, bounds_max = _model_bounds(model)
     span = np.maximum(bounds_max - bounds_min, 1e-9)
     length_ref = float(np.linalg.norm(span))
@@ -72,6 +83,12 @@ def extract_beam_features(
 
 
 def group_features_by_symmetry(features: Dict[int, BeamFeature]) -> Dict[tuple, list[BeamFeature]]:
+    """按 symmetry_key 合并梁。
+
+    每个分组称为一个 symmetry orbit。后续聚类的基本对象是 orbit，而不是
+    单根梁，因此同一个 orbit 内的梁会被强制分配到同一截面组。
+    """
+
     grouped = defaultdict(list)
     for feature in features.values():
         grouped[feature.symmetry_key].append(feature)
@@ -81,6 +98,12 @@ def group_features_by_symmetry(features: Dict[int, BeamFeature]) -> Dict[tuple, 
 def compute_beam_stress_metrics(
     model: StructuralModel, beam_id: int, forces: np.ndarray | None
 ) -> tuple[float, float]:
+    """计算梁的控制应力比和应力值。
+
+    这里复用与后处理校核一致的简化组合应力思想：轴力、双向弯矩和剪力分别
+    形成正应力/剪应力指标，取梁两端截面的最大控制值。
+    """
+
     beam = model.beams[beam_id]
     if forces is None or len(forces) < 12:
         return 0.0, 0.0
@@ -146,6 +169,13 @@ def _symmetry_key(
     mirror_z: bool,
     decimals: int,
 ) -> tuple:
+    """生成对称性键。
+
+    例如 mirror_x=True 时，x=0.2 和 x=0.8 会被折叠到同一个位置 0.2。
+    face 会先转换为较粗的 face_family，避免 front/back、top/bottom 这类
+    对称面因为字符串不同而天然分离。
+    """
+
     x, y, z = normalized_midpoint
     if mirror_x:
         x = min(x, 1.0 - x)
