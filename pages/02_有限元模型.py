@@ -118,8 +118,8 @@ analysis.num_modes = num_modes
 col1, col2 = st.columns([3, 1])
 with col1:
     params = session.params
-    with st.expander("🧾 当前参数摘要", expanded=True):
-        summary_col1, summary_col2, summary_col3 = st.columns(3)
+    with st.expander("🧾 当前参数摘要（按列查看）", expanded=True):
+        summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
         with summary_col1:
             st.write(f"布局模式: {'工程版' if isinstance(params, EngineeringLayoutParameters) else '研究版'}")
             st.write(f"尺寸: {params.length:.2f} × {params.width:.2f} × {params.height:.2f} m")
@@ -136,6 +136,7 @@ with col1:
             )
             st.write(f"Brace: {lib.get_section(SectionType.CHANNEL, params.brace_section_index).name}")
         with summary_col3:
+            st.write(f"截面库: {'研究版' if 'large' in getattr(lib, 'file_path', '') else '工程版'}")
             if isinstance(params, ResearchLayoutParameters):
                 st.write(f"宽向次梁分段: {params.num_secondary_width}")
                 st.write(f"高向次梁分段: {params.num_secondary_height}")
@@ -144,19 +145,29 @@ with col1:
                 st.write(f"后窗 spans: {params.window.back_spans}")
                 st.write(f"右窗 spans: {params.window.right_spans}")
                 st.write(f"门洞: {params.door.width:.2f}m × {params.door.height:.2f}m")
+        with summary_col4:
+            st.write(f"长：{params.length:.2f} m")
+            st.write(f"宽：{params.width:.2f} m")
+            st.write(f"高：{params.height:.2f} m")
 
-    preview_model = analysis.meshed_model if analysis.meshed_model is not None else model
-    preview_label = "网格模型" if analysis.meshed_model is not None else "原始模型"
-    with st.expander(f"🧩 {preview_label}预览（高亮门窗封板）", expanded=False):
-        st.plotly_chart(build_structure_figure(preview_model), width="stretch")
+    # preview_model = analysis.meshed_model if analysis.meshed_model is not None else model
+    # preview_label = "网格模型" if analysis.meshed_model is not None else "原始模型"
+    # with st.expander(f"🧩 {preview_label}预览（高亮门窗封板）", expanded=False):
+    #     st.plotly_chart(build_structure_figure(preview_model), width="stretch")
 
 with col2:
     st.subheader("📊 模型统计")
-    st.metric("梁单元", len([beam for beam in model.beams.values() if not beam.is_virtual]))
-    st.metric("板单元", len(model.plates))
-    st.metric("总质量", f"{model.calculate_mass_kg():.1f} kg")
-    st.metric("封板数量", len([plate for plate in model.plates.values() if plate.panel_type == "opening"]))
-    st.caption("青色板为门窗封板（opening panel）")
+    stat_col1, stat_col2 = st.columns(2)
+
+    with stat_col1:
+        st.metric("梁单元", len([beam for beam in model.beams.values() if not beam.is_virtual]))
+        st.metric("板单元", len(model.plates))
+
+    with stat_col2:
+        st.metric(
+            "封板数量", len([plate for plate in model.plates.values() if plate.panel_type == "opening"])
+        )
+        st.metric("总质量", f"{model.calculate_mass_kg():.1f} kg")
 
 if run_analysis:
     try:
@@ -260,7 +271,7 @@ if analysis.analysis_done and analysis.analysis_type == "静力分析" and analy
     st.plotly_chart(figure, width="stretch")
 
     st.divider()
-    with st.expander("稳定截面分组", expanded=True):
+    with st.expander("截面分组", expanded=True):
         st.caption(
             "这里使用当前静力分析结果作为一个代表样本发现稳定分组规则。"
             "更严谨的优化规则建议离线选取多个代表模型，并分别使用强度组合和位移组合结果。"

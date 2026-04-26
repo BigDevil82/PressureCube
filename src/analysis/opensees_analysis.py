@@ -460,44 +460,46 @@ if __name__ == "__main__":
     from src.utils.util import Timer
 
     pressure = 30_000  # 内压 30kPa
-    # # 配置参数
-    # params = StructuralParameters(
-    #     length=9.2,  # 10米长
-    #     width=3.7,  # 3米宽
-    #     height=3.3,  # 3米高
-    #     main_beam_spacing=0.7,  # 主梁每1.5米一道
-    #     num_secondary_width=5,  # 宽度方向分3段 (2条中间次梁)
-    #     num_secondary_height=4,  # 高度方向分3段
-    #     add_support_beam=False,  # 添加支撑梁
-    #     frame_section_index=0,
-    #     main_beam_section_index=16,
-    #     secondary_beam_section_index=6,
-    #     brace_section_index=17,
-    # )
-    # model = StructuralModel(params, SectionLibrary("src/data/steel_sections_large.json"))
-    # model.generate()
-    # 配置参数
-    windows = WindowParameters(
-        front_spans=[],  # 前墙第1段有窗
-        back_spans=[],
-        right_spans=[1, 2],  # 右墙第2段有窗
-    )
-    params = EngineeringLayoutParameters(
-        length=8.9,  # 10米长
-        width=3.6,  # 3米宽
-        height=3.3,  # 3米高
-        main_beam_spacing=0.95,  # 主梁每1.5米一道
-        add_support_beam=True,  # 添加支撑梁
-        support_beam_max_spacing=0.75,
-        frame_section_index=2,
-        main_beam_section_index=8,
-        secondary_beam_section_index=7,
-        brace_section_index=14,
-        window=windows,
-    )
-
-    model = StructuralModel(params, SectionLibrary())
-    model.generate()
+    layout = 1
+    if layout == 1:
+        # 配置参数
+        params = StructuralParameters(
+            length=8.9,  # 10米长
+            width=3.7,  # 3米宽
+            height=3.3,  # 3米高
+            main_beam_spacing=0.95,  # 主梁每1.5米一道
+            num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
+            num_secondary_height=3,  # 高度方向分3段
+            add_support_beam=True,  # 添加支撑梁
+            frame_section_index=2,
+            main_beam_section_index=8,
+            secondary_beam_section_index=7,
+            brace_section_index=14,
+        )
+        model = StructuralModel(params, SectionLibrary("src/data/steel_sections_large.json"))
+        model.generate()
+    else:
+        # 配置参数
+        windows = WindowParameters(
+            front_spans=[],  # 前墙第1段有窗
+            back_spans=[],
+            right_spans=[1, 2],  # 右墙第2段有窗
+        )
+        params = EngineeringLayoutParameters(
+            length=8.9,  # 10米长
+            width=3.7,  # 3米宽
+            height=3.3,  # 3米高
+            main_beam_spacing=0.95,  # 主梁每1.5米一道
+            add_support_beam=True,  # 添加支撑梁
+            support_beam_max_spacing=0.75,
+            frame_section_index=2,
+            main_beam_section_index=8,
+            secondary_beam_section_index=7,
+            brace_section_index=14,
+            window=windows,
+        )
+        model = StructuralModel(params, SectionLibrary())
+        model.generate()
 
     print("Total mass：", model.calculate_mass_kg(), "kg")
 

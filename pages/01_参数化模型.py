@@ -67,7 +67,13 @@ with st.sidebar:
         length = st.slider("舱体长度 (Length)", 5.0, 15.0, float(defaults["L"]), 0.2, key="L")
         width = st.slider("舱体宽度 (Width)", 2.0, 5.0, float(defaults["W"]), 0.1, key="W")
         height = st.slider("舱体高度 (Height)", 2.0, 4.0, float(defaults["H"]), 0.1, key="H")
-        section_library = SectionLibrary("src/data/steel_sections_large.json")
+        research_section_lib_path = st.selectbox(
+            "截面库",
+            options=["src/data/steel_sections_large.json", "src/data/steel_sections.json"],
+            format_func=lambda value: "研究版截面库" if value.endswith("large.json") else "标准版截面库",
+            key="research_section_lib_path",
+        )
+        section_library = SectionLibrary(research_section_lib_path)
 
     st.divider()
     st.header("📐 拓扑与截面")
@@ -228,6 +234,7 @@ with col1:
 with col2:
     st.subheader("📊 结构统计")
     st.metric("布局模式", "工程版" if layout_mode == "engineering" else "研究版")
+    st.caption(f"截面库: {section_library.file_path}")
     st.metric("当前视图", display_label)
     st.metric("总质量 (估算)", f"{display_model.calculate_mass_kg():.2f} kg")
     st.metric("节点数量", len(display_model.points))

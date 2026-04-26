@@ -53,6 +53,7 @@ class SectionLibrary:
     """重构后的截面库"""
 
     def __init__(self, file_path: str = "src/data/steel_sections.json"):
+        self.file_path = file_path
         self._sections: Dict[SectionType, List[SectionProperties]] = {t: [] for t in SectionType}
         self._load_from_json(file_path)
 

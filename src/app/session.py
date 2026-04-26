@@ -55,7 +55,7 @@ class AppSession:
     def set_model_bundle(
         self, params: BaseLayoutParameters, model: StructuralModel, section_library: SectionLibrary
     ):
-        signature = repr(params)
+        signature = f"{repr(params)}|section_lib={getattr(section_library, 'file_path', '')}"
         previous_signature = self.model_bundle.get("signature")
         self._state[self._MODEL_BUNDLE_KEY] = {
             "params": params,
