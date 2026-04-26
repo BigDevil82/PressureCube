@@ -1,15 +1,21 @@
+import json
+
 import streamlit as st
 
-from src.analysis.beam_grouping import BeamGroupClusterer, BeamGroupConfig
 from src.analysis.post_processor import DesignCheckResult
-from src.analysis.viewer import build_modal_result_figure, build_static_result_figure
-from src.analysis.viewer.grouping_plot import build_beam_grouping_figure
 from src.analysis.workflows import run_modal_workflow, run_static_workflow
 from src.app.model_visualization import build_structure_figure
+from src.app.result_visualization import build_modal_result_figure, build_static_result_figure
+from src.app.section_grouping_visualization import build_section_grouping_figure
 from src.app.session import AppSession
+from src.optimization.section_grouping import (
+    RepresentativeAnalysis,
+    SectionGroupingDiscoveryConfig,
+    discover_section_group_rules_with_assignments,
+)
+from src.structure.enums import BeamType
 from src.structure.layout.params import EngineeringLayoutParameters, ResearchLayoutParameters
 from src.structure.section_library import SectionType
-from src.structure.enums import BeamType
 from src.structure.structural_model import StructuralModel
 
 st.set_page_config(layout="wide", page_title="有限元模型")
@@ -70,8 +76,31 @@ with st.sidebar:
     if analysis_type == "静力分析":
         load_case = st.selectbox(
             "荷载工况",
-            ["恒载 (DL)", "活载 (LL)", "内压 (PL)", "应力校核(1.3DL + 1.5LL + 1.25PL)", "位移校核(1.0DL + 1.0LL + 1.0PL)"],
-            index=["恒载 (DL)", "活载 (LL)", "内压 (PL)", "应力校核(1.3DL + 1.5LL + 1.25PL)", "位移校核(1.0DL + 1.0LL + 1.0PL)"].index(analysis.load_case if analysis.load_case in ["恒载 (DL)", "活载 (LL)", "内压 (PL)", "应力校核(1.3DL + 1.5LL + 1.25PL)", "位移校核(1.0DL + 1.0LL + 1.0PL)"] else "内压 (PL)"),
+            [
+                "恒载 (DL)",
+                "活载 (LL)",
+                "内压 (PL)",
+                "应力校核(1.3DL + 1.5LL + 1.25PL)",
+                "位移校核(1.0DL + 1.0LL + 1.0PL)",
+            ],
+            index=[
+                "恒载 (DL)",
+                "活载 (LL)",
+                "内压 (PL)",
+                "应力校核(1.3DL + 1.5LL + 1.25PL)",
+                "位移校核(1.0DL + 1.0LL + 1.0PL)",
+            ].index(
+                analysis.load_case
+                if analysis.load_case
+                in [
+                    "恒载 (DL)",
+                    "活载 (LL)",
+                    "内压 (PL)",
+                    "应力校核(1.3DL + 1.5LL + 1.25PL)",
+                    "位移校核(1.0DL + 1.0LL + 1.0PL)",
+                ]
+                else "内压 (PL)"
+            ),
             key="load_case",
         )
         num_modes = analysis.num_modes
@@ -102,7 +131,9 @@ with col1:
             lib = session.section_library
             st.write(f"Frame: {lib.get_section(SectionType.BOX, params.frame_section_index).name}")
             st.write(f"Main: {lib.get_section(SectionType.H_MAIN, params.main_beam_section_index).name}")
-            st.write(f"Secondary: {lib.get_section(SectionType.H_SEC, params.secondary_beam_section_index).name}")
+            st.write(
+                f"Secondary: {lib.get_section(SectionType.H_SEC, params.secondary_beam_section_index).name}"
+            )
             st.write(f"Brace: {lib.get_section(SectionType.CHANNEL, params.brace_section_index).name}")
         with summary_col3:
             if isinstance(params, ResearchLayoutParameters):
@@ -170,7 +201,8 @@ if analysis.analysis_done and analysis.analysis_type == "静力分析" and analy
     if stats.max_stress_pos[0] == "Beam":
         beam = meshed_model.beams[stats.max_stress_pos[1]]
         stress_pos = (
-            meshed_model.points[beam.start_node].coordinates() + meshed_model.points[beam.end_node].coordinates()
+            meshed_model.points[beam.start_node].coordinates()
+            + meshed_model.points[beam.end_node].coordinates()
         ) / 2.0
     else:
         plate = meshed_model.plates[stats.max_stress_pos[1]]
@@ -181,7 +213,9 @@ if analysis.analysis_done and analysis.analysis_type == "静力分析" and analy
         st.metric("最大应力", f"{stats.max_stress:.2f} MPa", delta=f"应力比: {stats.max_stress_ratio:.3f}")
         st.caption(f"位置: {stats.max_stress_pos[0]} {stats.max_stress_pos[1]}")
     with metrics_col2:
-        st.metric("最大位移", f"{stats.max_deflection:.2f} mm", delta=f"挠度比: {stats.max_deflection_ratio:.3f}")
+        st.metric(
+            "最大位移", f"{stats.max_deflection:.2f} mm", delta=f"挠度比: {stats.max_deflection_ratio:.3f}"
+        )
         st.caption(f"位置: 节点 {stats.max_deflection_pos}")
     with metrics_col3:
         max_disp_node = meshed_model.points[stats.max_deflection_pos]
@@ -226,7 +260,11 @@ if analysis.analysis_done and analysis.analysis_type == "静力分析" and analy
     st.plotly_chart(figure, width="stretch")
 
     st.divider()
-    with st.expander("梁分组分析", expanded=False):
+    with st.expander("稳定截面分组", expanded=True):
+        st.caption(
+            "这里使用当前静力分析结果作为一个代表样本发现稳定分组规则。"
+            "更严谨的优化规则建议离线选取多个代表模型，并分别使用强度组合和位移组合结果。"
+        )
         group_cols = st.columns(4)
         with group_cols[0]:
             frame_groups = st.slider("框架梁组数", 1, 6, 2)
@@ -245,7 +283,7 @@ if analysis.analysis_done and analysis.analysis_type == "静力分析" and analy
         with option_cols[2]:
             spatial_weight = st.slider("空间权重", 0.0, 1.0, 0.35, 0.05)
 
-        grouping_config = BeamGroupConfig(
+        discovery_config = SectionGroupingDiscoveryConfig(
             n_groups_by_type={
                 BeamType.FRAME: frame_groups,
                 BeamType.MAIN: main_groups,
@@ -255,31 +293,54 @@ if analysis.analysis_done and analysis.analysis_type == "静力分析" and analy
             stress_weight=stress_weight,
             displacement_weight=displacement_weight,
             spatial_weight=spatial_weight,
+            description=f"Streamlit discovery from current case: {analysis.case_name}",
         )
-        grouping = BeamGroupClusterer(grouping_config).fit_predict(
-            meshed_model,
-            analysis.analysis_results,
-            analysis.analysis_results,
+
+        discovery = discover_section_group_rules_with_assignments(
+            [
+                RepresentativeAnalysis(
+                    model=meshed_model,
+                    strength_results=analysis.analysis_results,
+                    service_results=analysis.analysis_results,
+                )
+            ],
+            discovery_config,
+            layout_strategy=getattr(session.params, "layout_strategy", "research"),
         )
-        st.plotly_chart(build_beam_grouping_figure(meshed_model, grouping), width="stretch")
+        ruleset = discovery.ruleset
+        st.plotly_chart(
+            build_section_grouping_figure(
+                meshed_model,
+                ruleset,
+                beam_to_group=discovery.sample_beam_to_group[0],
+            ),
+            width="stretch",
+        )
         st.dataframe(
             [
                 {
-                    "组": item.group_id,
-                    "类型": item.beam_type.name,
-                    "梁数": item.beam_count,
-                    "对称等价类": item.symmetry_orbit_count,
-                    "应力比均值": f"{item.stress_ratio_mean:.3f}",
-                    "应力比P90": f"{item.stress_ratio_p90:.3f}",
-                    "应力比最大": f"{item.stress_ratio_max:.3f}",
-                    "位移均值(mm)": f"{item.displacement_mean_mm:.3f}",
-                    "位移P90(mm)": f"{item.displacement_p90_mm:.3f}",
-                    "位移最大(mm)": f"{item.displacement_max_mm:.3f}",
-                    "控制因素": item.control_factor,
+                    "组": prototype.group_id,
+                    "类型": prototype.beam_type.name,
+                    "发现样本梁数": prototype.member_count,
+                    "应力比均值": f"{prototype.stress_ratio_mean:.3f}",
+                    "应力比P90": f"{prototype.stress_ratio_p90:.3f}",
+                    "应力比最大": f"{prototype.stress_ratio_max:.3f}",
+                    "位移均值(mm)": f"{prototype.displacement_mean_mm:.3f}",
+                    "位移P90(mm)": f"{prototype.displacement_p90_mm:.3f}",
+                    "位移最大(mm)": f"{prototype.displacement_max_mm:.3f}",
+                    "代表中心": "({:.2f}, {:.2f}, {:.2f})".format(*prototype.representative_center),
+                    "控制因素": prototype.control_factor,
                 }
-                for item in grouping.group_summaries
+                for prototype in ruleset.prototypes
             ],
             width="stretch",
+        )
+        st.download_button(
+            "下载当前分组规则 JSON",
+            data=json.dumps(ruleset.to_dict(), ensure_ascii=False, indent=2),
+            file_name=f"{ruleset.layout_strategy}_section_group_rules.json",
+            mime="application/json",
+            use_container_width=True,
         )
 
 elif analysis.analysis_done and analysis.analysis_type == "模态分析" and analysis.modal_results is not None:

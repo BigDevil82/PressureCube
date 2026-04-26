@@ -34,6 +34,7 @@ from optuna.samplers import TPESampler
 
 from src.heuristic.evaluator import StructuralEvaluator
 from src.optimization.design_space import get_layout_adapter, get_section_lib, suggest_spec_with_optuna
+from src.optimization.section_grouping import SectionGroupingRuleset, section_counts_for_groups
 from src.structure.section_library import SectionType
 
 
@@ -50,6 +51,7 @@ class ExtendedOptResult:
 
     # Optimal sections
     optimal_sections: list[int]
+    optimal_group_sections: dict[str, int]
 
     # Metrics
     initial_mass: float  # With max sections and default topology
@@ -90,6 +92,7 @@ class JointBayesianOptimizer:
         eval_mode: str = "fea",
         surrogate_path: Optional[str] = None,
         layout_strategy: str = "research",
+        section_group_rules: SectionGroupingRuleset | str | None = None,
     ):
         self.n_trials = n_trials
         self.constraint_penalty = constraint_penalty
@@ -98,15 +101,26 @@ class JointBayesianOptimizer:
         self.surrogate_path = surrogate_path
         self.layout_strategy = layout_strategy
         self.adapter = get_layout_adapter(layout_strategy)
+        self.section_group_rules = (
+            SectionGroupingRuleset.load_json(section_group_rules)
+            if isinstance(section_group_rules, str)
+            else section_group_rules
+        ) or SectionGroupingRuleset.by_beam_type(layout_strategy)
 
         # Get section counts from library
         section_lib = get_section_lib(layout_strategy)
         sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
         self.sec_counts = [section_lib.section_counts[t] for t in sec_types]
         self.max_indices = [count - 1 for count in self.sec_counts]
+        self.group_ids = self.section_group_rules.group_ids()
+        self.group_sec_counts = section_counts_for_groups(self.section_group_rules, section_lib)
 
         # Create evaluator
-        self.evaluator = StructuralEvaluator(mode=eval_mode, surrogate_path=surrogate_path)
+        self.evaluator = StructuralEvaluator(
+            mode=eval_mode,
+            surrogate_path=surrogate_path,
+            section_group_rules=self.section_group_rules,
+        )
 
     def _create_objective(self, L: float, W: float, H: float, pressure: float):
         """Create objective function for joint optimization."""
@@ -116,8 +130,13 @@ class JointBayesianOptimizer:
                 spec.name: suggest_spec_with_optuna(trial, spec) for spec in self.adapter.topology_specs()
             }
 
-            # Sample section indices
-            sections = [trial.suggest_int(f"section_{i}", 0, self.sec_counts[i] - 1) for i in range(4)]
+            # Every section variable is a group section. The default ruleset has
+            # four groups, one for each BeamType.
+            sections = self.max_indices
+            group_sections = {
+                group_id: trial.suggest_int(f"group_section_{group_id}", 0, self.group_sec_counts[i] - 1)
+                for i, group_id in enumerate(self.group_ids)
+            }
 
             # Run evaluation
             try:
@@ -127,6 +146,7 @@ class JointBayesianOptimizer:
                     topology=topology,
                     sections=sections,
                 )
+                self.evaluator.grouped_section_indices = group_sections
                 result = self.evaluator.evaluate(config)
             except Exception as e:
                 # Evaluation failed - heavily penalize
@@ -163,6 +183,9 @@ class JointBayesianOptimizer:
         pressure = parameters.get("pressure", 30000.0)
 
         # Get initial mass (max sections, default topology)
+        self.evaluator.grouped_section_indices = {
+            group_id: count - 1 for group_id, count in zip(self.group_ids, self.group_sec_counts)
+        }
         initial_result = self.evaluator.evaluate(
             self.adapter.build_config(
                 geometry={"L": L, "W": W, "H": H},
@@ -203,7 +226,10 @@ class JointBayesianOptimizer:
             layout_strategy=self.layout_strategy,
             geometry={"L": L, "W": W, "H": H},
             optimal_topology={spec.name: best.params[spec.name] for spec in self.adapter.topology_specs()},
-            optimal_sections=[best.params[f"section_{i}"] for i in range(4)],
+            optimal_sections=self.max_indices,
+            optimal_group_sections={
+                group_id: best.params[f"group_section_{group_id}"] for group_id in self.group_ids
+            },
             initial_mass=initial_mass,
             optimal_mass=best.user_attrs["mass"],
             mass_reduction_pct=(initial_mass - best.user_attrs["mass"]) / initial_mass * 100,
@@ -226,6 +252,7 @@ if __name__ == "__main__":
     parser.add_argument("--mode", type=str, default="fea", choices=["fea", "surrogate"])
     parser.add_argument("--surrogate", type=str, default=None, help="Path to surrogate model")
     parser.add_argument("--layout-strategy", type=str, default="research", choices=["research", "engineering"])
+    parser.add_argument("--section-group-rules", type=str, default=None, help="Path to section grouping ruleset JSON")
     args = parser.parse_args()
 
     parameter = {"L": args.L, "W": args.W, "H": args.H, "pressure": args.pressure}
@@ -236,17 +263,20 @@ if __name__ == "__main__":
         eval_mode=args.mode,
         surrogate_path=args.surrogate,
         layout_strategy=args.layout_strategy,
+        section_group_rules=args.section_group_rules,
     )
     result = opt.optimize(parameter)
     print(f"Mass: {result.optimal_mass:.0f}kg, Reduction: {result.mass_reduction_pct:.1f}%")
-    from src.heuristic.evaluator import get_evaluator
-
-    evaluator = get_evaluator(mode="fea")
     config = opt.adapter.build_config(
         geometry={"L": args.L, "W": args.W, "H": args.H},
         pressure=args.pressure,
         topology=result.optimal_topology,
         sections=result.optimal_sections,
+    )
+    evaluator = StructuralEvaluator(
+        mode="fea",
+        section_group_rules=opt.section_group_rules,
+        grouped_section_indices=result.optimal_group_sections,
     )
     check = evaluator.evaluate(config)
     print("FEA Check - u_sigma: {:.3f}, u_delta: {:.3f}".format(check.u_sigma, check.u_delta))

@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from plotly.colors import sample_colorscale
 
 from src.analysis.results import AnalysisResults, ModalAnalysisResults
-from src.analysis.viewer.fields import (
+from src.app.result_fields import (
     ScalarField,
     get_beam_force_field,
     get_displacement_field,

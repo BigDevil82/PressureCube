@@ -39,6 +39,7 @@ from src.optimization.design_space import (
     design_config_from_params,
     get_section_lib,
 )
+from src.optimization.section_grouping import SectionGroupingRuleset, apply_group_sections
 from src.structure.layout.params import BaseLayoutParameters, StructuralParameters
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.structural_model import StructuralModel
@@ -81,6 +82,8 @@ class StructuralEvaluator:
         surrogate_path: Optional[str] = None,
         section_lib_path: Optional[str] = None,
         mesh_size: float = 0.5,
+        section_group_rules: SectionGroupingRuleset | str | None = None,
+        grouped_section_indices: dict[str, int] | None = None,
     ):
         """
         Initialize evaluator.
@@ -94,6 +97,8 @@ class StructuralEvaluator:
         self.mode = mode
         self.mesh_size = mesh_size
         self.section_lib_path = section_lib_path
+        self.section_group_rules = self._load_section_group_rules(section_group_rules)
+        self.grouped_section_indices = grouped_section_indices or {}
 
         # Load surrogate model if needed
         self.surrogate = None
@@ -101,6 +106,15 @@ class StructuralEvaluator:
             if surrogate_path is None:
                 raise ValueError("surrogate_path required for surrogate mode")
             self._load_surrogate(surrogate_path)
+
+    def _load_section_group_rules(
+        self, rules: SectionGroupingRuleset | str | None
+    ) -> SectionGroupingRuleset | None:
+        if rules is None:
+            return None
+        if isinstance(rules, SectionGroupingRuleset):
+            return rules
+        return SectionGroupingRuleset.load_json(rules)
 
     def _load_surrogate(self, path: str):
         """Load surrogate model from file."""
@@ -178,6 +192,7 @@ class StructuralEvaluator:
         # Build model
         model = StructuralModel(params, section_lib)
         model.generate()
+        self._apply_grouped_sections(model, section_lib)
         mass = model.calculate_mass_kg()
 
         # Mesh
@@ -204,7 +219,15 @@ class StructuralEvaluator:
     def _evaluate_surrogate(self, config: DesignConfig) -> EvalResult:
         """Fast surrogate model evaluation."""
         # Compute mass (fast, no FEA)
-        mass = compute_mass_fast(config, get_section_lib(config.layout_strategy, self.section_lib_path))
+        section_lib = get_section_lib(config.layout_strategy, self.section_lib_path)
+        if self.section_group_rules and self.grouped_section_indices:
+            params = build_params_from_config(config)
+            model = StructuralModel(params, section_lib)
+            model.generate()
+            self._apply_grouped_sections(model, section_lib)
+            mass = model.calculate_mass_kg()
+        else:
+            mass = compute_mass_fast(config, section_lib)
 
         # Predict u_sigma and u_delta
         u_sigma, u_delta = self.surrogate.predict(config)
@@ -212,6 +235,16 @@ class StructuralEvaluator:
         feasible = u_sigma <= 1.0 and u_delta <= 1.0
 
         return EvalResult(mass=mass, u_sigma=u_sigma, u_delta=u_delta, feasible=feasible)
+
+    def _apply_grouped_sections(self, model: StructuralModel, section_lib) -> None:
+        if not self.section_group_rules or not self.grouped_section_indices:
+            return
+        apply_group_sections(
+            model,
+            section_lib,
+            self.section_group_rules,
+            self.grouped_section_indices,
+        )
 
     def evaluate_params(self, params: BaseLayoutParameters, pressure: float) -> EvalResult:
         """
@@ -239,6 +272,8 @@ def get_evaluator(
     mode: str = "fea",
     surrogate_path: Optional[str] = None,
     force_new: bool = False,
+    section_group_rules: SectionGroupingRuleset | str | None = None,
+    grouped_section_indices: dict[str, int] | None = None,
 ) -> StructuralEvaluator:
     """
     Get or create cached evaluator.
@@ -254,6 +289,14 @@ def get_evaluator(
     Returns:
         StructuralEvaluator instance
     """
+    if section_group_rules is not None or grouped_section_indices is not None:
+        return StructuralEvaluator(
+            mode=mode,
+            surrogate_path=surrogate_path,
+            section_group_rules=section_group_rules,
+            grouped_section_indices=grouped_section_indices,
+        )
+
     cache_key = f"{mode}:{surrogate_path or 'none'}"
 
     if force_new or cache_key not in _EVALUATOR_CACHE:
@@ -267,6 +310,8 @@ def evaluate_design(
     config: Optional[DesignConfig] = None,
     mode: str = "fea",
     surrogate_path: Optional[str] = None,
+    section_group_rules: SectionGroupingRuleset | str | None = None,
+    grouped_section_indices: dict[str, int] | None = None,
     **legacy_kwargs,
 ) -> Tuple[float, float, float, bool]:
     """
@@ -278,7 +323,12 @@ def evaluate_design(
     Returns:
         (mass, u_sigma, u_delta, feasible)
     """
-    evaluator = get_evaluator(mode=mode, surrogate_path=surrogate_path)
+    evaluator = get_evaluator(
+        mode=mode,
+        surrogate_path=surrogate_path,
+        section_group_rules=section_group_rules,
+        grouped_section_indices=grouped_section_indices,
+    )
     try:
         if config is None:
             config = ResearchDesignConfig(
