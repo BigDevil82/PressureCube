@@ -22,25 +22,21 @@ Returns:
     {"mass": float, "u_sigma": float, "u_delta": float, "feasible": bool}
 """
 
-import pickle
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
-from src.analysis.surrogate_data import DesignConfig, compute_mass_fast
+from src.analysis.surrogate_data import compute_mass_fast
 from src.analysis.surrogate_model import AdvancedSurrogateModel
 from src.optimization.design_space import (
-    EngineeringDesignConfig,
-    ResearchDesignConfig,
+    DesignConfig,
     build_params_from_config,
     design_config_from_params,
     get_section_lib,
 )
 from src.optimization.section_grouping import SectionGroupingRuleset, apply_group_sections
-from src.structure.layout.params import BaseLayoutParameters, StructuralParameters
+from src.structure.layout.params import BaseLayoutParameters
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.structural_model import StructuralModel
 
@@ -83,7 +79,6 @@ class StructuralEvaluator:
         section_lib_path: Optional[str] = None,
         mesh_size: float = 0.5,
         section_group_rules: SectionGroupingRuleset | str | None = None,
-        grouped_section_indices: dict[str, int] | None = None,
     ):
         """
         Initialize evaluator.
@@ -97,14 +92,10 @@ class StructuralEvaluator:
         self.mode = mode
         self.mesh_size = mesh_size
         self.section_lib_path = section_lib_path
-        self.section_group_rules = self._load_section_group_rules(section_group_rules)
-        self.grouped_section_indices = grouped_section_indices or {}
+        self.default_section_group_rules = self._load_section_group_rules(section_group_rules)
 
-        # Load surrogate model if needed
         self.surrogate = None
         if mode == "surrogate":
-            if surrogate_path is None:
-                raise ValueError("surrogate_path required for surrogate mode")
             self._load_surrogate(surrogate_path)
 
     def _load_section_group_rules(
@@ -118,73 +109,29 @@ class StructuralEvaluator:
 
     def _load_surrogate(self, path: str):
         """Load surrogate model from file."""
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-
-        # Detect model type
-        if "strategy" in data:
-            self.surrogate = AdvancedSurrogateModel.load(path)
-        else:
-            raise ValueError(f"Unknown surrogate model format in {path}")
-
+        self.surrogate = AdvancedSurrogateModel.load(path)
         print(f"Loaded surrogate model from: {path}")
 
-    def evaluate(self, *args, **kwargs) -> EvalResult:
+    def evaluate(
+        self,
+        config: DesignConfig,
+        section_group_rules: SectionGroupingRuleset | None = None,
+        grouped_section_indices: dict[str, int] | None = None,
+    ) -> EvalResult:
         """
         Evaluate a structural design.
         """
-        if args and isinstance(args[0], DesignConfig):
-            config = args[0]
-        elif "config" in kwargs and isinstance(kwargs["config"], DesignConfig):
-            config = kwargs["config"]
-        else:
-            config = ResearchDesignConfig(
-                L=kwargs["L"],
-                W=kwargs["W"],
-                H=kwargs["H"],
-                pressure=kwargs["pressure"],
-                main_beam_spacing=kwargs["main_beam_spacing"],
-                num_secondary_width=kwargs["num_secondary_width"],
-                num_secondary_height=kwargs["num_secondary_height"],
-                add_support_beam=kwargs["add_support_beam"],
-                frame_section_index=kwargs["sections"][0],
-                main_beam_section_index=kwargs["sections"][1],
-                secondary_beam_section_index=kwargs["sections"][2],
-                brace_section_index=kwargs["sections"][3],
-            )
+        rules = section_group_rules or self.default_section_group_rules
         if self.mode == "surrogate":
-            return self._evaluate_surrogate(config)
-        return self._evaluate_fea(config)
+            return self._evaluate_surrogate(config, rules, grouped_section_indices)
+        return self._evaluate_fea(config, rules, grouped_section_indices)
 
-    def evaluate_legacy(
+    def _evaluate_fea(
         self,
-        L: float,
-        W: float,
-        H: float,
-        pressure: float,
-        main_beam_spacing: float,
-        num_secondary_width: int,
-        num_secondary_height: int,
-        add_support_beam: bool,
-        sections: List[int],
+        config: DesignConfig,
+        section_group_rules: SectionGroupingRuleset | None = None,
+        grouped_section_indices: dict[str, int] | None = None,
     ) -> EvalResult:
-        config = ResearchDesignConfig(
-            L=L,
-            W=W,
-            H=H,
-            pressure=pressure,
-            main_beam_spacing=main_beam_spacing,
-            num_secondary_width=num_secondary_width,
-            num_secondary_height=num_secondary_height,
-            add_support_beam=add_support_beam,
-            frame_section_index=sections[0],
-            main_beam_section_index=sections[1],
-            secondary_beam_section_index=sections[2],
-            brace_section_index=sections[3],
-        )
-        return self.evaluate(config)
-
-    def _evaluate_fea(self, config: DesignConfig) -> EvalResult:
         """Real FEA evaluation using OpenSeesSolver."""
         params = build_params_from_config(config)
         section_lib = get_section_lib(config.layout_strategy, self.section_lib_path)
@@ -192,7 +139,7 @@ class StructuralEvaluator:
         # Build model
         model = StructuralModel(params, section_lib)
         model.generate()
-        self._apply_grouped_sections(model, section_lib)
+        self._apply_grouped_sections(model, section_lib, section_group_rules, grouped_section_indices)
         mass = model.calculate_mass_kg()
 
         # Mesh
@@ -216,15 +163,25 @@ class StructuralEvaluator:
 
         return EvalResult(mass=mass, u_sigma=u_sigma, u_delta=u_delta, feasible=feasible)
 
-    def _evaluate_surrogate(self, config: DesignConfig) -> EvalResult:
+    def _evaluate_surrogate(
+        self,
+        config: DesignConfig,
+        section_group_rules: SectionGroupingRuleset | None = None,
+        grouped_section_indices: dict[str, int] | None = None,
+    ) -> EvalResult:
         """Fast surrogate model evaluation."""
         # Compute mass (fast, no FEA)
         section_lib = get_section_lib(config.layout_strategy, self.section_lib_path)
-        if self.section_group_rules and self.grouped_section_indices:
+        if section_group_rules and grouped_section_indices:
             params = build_params_from_config(config)
             model = StructuralModel(params, section_lib)
             model.generate()
-            self._apply_grouped_sections(model, section_lib)
+            self._apply_grouped_sections(
+                model,
+                section_lib,
+                section_group_rules,
+                grouped_section_indices,
+            )
             mass = model.calculate_mass_kg()
         else:
             mass = compute_mass_fast(config, section_lib)
@@ -236,18 +193,31 @@ class StructuralEvaluator:
 
         return EvalResult(mass=mass, u_sigma=u_sigma, u_delta=u_delta, feasible=feasible)
 
-    def evaluate_batch(self, configs: List[DesignConfig]) -> List[EvalResult]:
+    def evaluate_batch(
+        self,
+        configs: List[DesignConfig],
+        section_group_rules: SectionGroupingRuleset | None = None,
+        grouped_section_indices: List[dict[str, int]] | None = None,
+    ) -> List[EvalResult]:
         """Evaluate a batch of designs.
 
         Surrogate mode uses one model call for the whole batch. FEA remains
         single-design because OpenSees analyses are externally parallelized by
         the caller.
         """
+        rules = section_group_rules or self.default_section_group_rules
         if self.mode != "surrogate":
-            return [self._evaluate_fea(config) for config in configs]
+            assignments = grouped_section_indices or [None] * len(configs)
+            return [
+                self._evaluate_fea(config, rules, assignment)
+                for config, assignment in zip(configs, assignments)
+            ]
 
-        if self.section_group_rules and self.grouped_section_indices:
-            return [self._evaluate_surrogate(config) for config in configs]
+        if rules and grouped_section_indices:
+            return [
+                self._evaluate_surrogate(config, rules, assignment)
+                for config, assignment in zip(configs, grouped_section_indices)
+            ]
 
         section_libs = {
             config.layout_strategy: get_section_lib(config.layout_strategy, self.section_lib_path)
@@ -265,14 +235,20 @@ class StructuralEvaluator:
             for mass, u_sigma, u_delta in zip(masses, sigmas, deltas)
         ]
 
-    def _apply_grouped_sections(self, model: StructuralModel, section_lib) -> None:
-        if not self.section_group_rules or not self.grouped_section_indices:
+    def _apply_grouped_sections(
+        self,
+        model: StructuralModel,
+        section_lib,
+        section_group_rules: SectionGroupingRuleset | None,
+        grouped_section_indices: dict[str, int] | None,
+    ) -> None:
+        if not section_group_rules or not grouped_section_indices:
             return
         apply_group_sections(
             model,
             section_lib,
-            self.section_group_rules,
-            self.grouped_section_indices,
+            section_group_rules,
+            grouped_section_indices,
         )
 
     def evaluate_params(self, params: BaseLayoutParameters, pressure: float) -> EvalResult:
@@ -292,104 +268,22 @@ class StructuralEvaluator:
         return compute_mass_fast(config, get_section_lib(config.layout_strategy, self.section_lib_path))
 
 
-# Module-level cache for parallel processing
-# Each worker process will have its own cache
-_EVALUATOR_CACHE: Dict[str, StructuralEvaluator] = {}
-
-
-def get_evaluator(
-    mode: str = "fea",
-    surrogate_path: Optional[str] = None,
-    force_new: bool = False,
-    section_group_rules: SectionGroupingRuleset | str | None = None,
-    grouped_section_indices: dict[str, int] | None = None,
-) -> StructuralEvaluator:
-    """
-    Get or create cached evaluator.
-
-    Uses a cache keyed by (mode, surrogate_path) to avoid reloading models.
-    Each worker process maintains its own cache.
-
-    Args:
-        mode: "fea" or "surrogate"
-        surrogate_path: Path to surrogate model (required for surrogate mode)
-        force_new: If True, always create new evaluator
-
-    Returns:
-        StructuralEvaluator instance
-    """
-    if section_group_rules is not None or grouped_section_indices is not None:
-        return StructuralEvaluator(
-            mode=mode,
-            surrogate_path=surrogate_path,
-            section_group_rules=section_group_rules,
-            grouped_section_indices=grouped_section_indices,
-        )
-
-    cache_key = f"{mode}:{surrogate_path or 'none'}"
-
-    if force_new or cache_key not in _EVALUATOR_CACHE:
-        _EVALUATOR_CACHE[cache_key] = StructuralEvaluator(mode=mode, surrogate_path=surrogate_path)
-
-    return _EVALUATOR_CACHE[cache_key]
-
-
 # Standalone function for parallel processing
 def evaluate_design(
-    config: Optional[DesignConfig] = None,
+    config: DesignConfig,
     mode: str = "fea",
     surrogate_path: Optional[str] = None,
-    section_group_rules: SectionGroupingRuleset | str | None = None,
+    section_group_rules: SectionGroupingRuleset | None = None,
     grouped_section_indices: dict[str, int] | None = None,
-    **legacy_kwargs,
 ) -> Tuple[float, float, float, bool]:
     """
     Standalone evaluation function for parallel processing.
 
-    Uses cached evaluator to avoid reloading model on every call.
-    Each worker process maintains its own cache.
-
     Returns:
         (mass, u_sigma, u_delta, feasible)
     """
-    evaluator = get_evaluator(
-        mode=mode,
-        surrogate_path=surrogate_path,
-        section_group_rules=section_group_rules,
-        grouped_section_indices=grouped_section_indices,
-    )
-    assert config is not None, "Config must be provided as a DesignConfig"
-    # if config is None:
-    #     config = ResearchDesignConfig(
-    #         L=legacy_kwargs["L"],
-    #         W=legacy_kwargs["W"],
-    #         H=legacy_kwargs["H"],
-    #         pressure=legacy_kwargs["pressure"],
-    #         main_beam_spacing=legacy_kwargs["main_beam_spacing"],
-    #         num_secondary_width=legacy_kwargs["num_secondary_width"],
-    #         num_secondary_height=legacy_kwargs["num_secondary_height"],
-    #         add_support_beam=legacy_kwargs["add_support_beam"],
-    #         frame_section_index=legacy_kwargs["sections"][0],
-    #         main_beam_section_index=legacy_kwargs["sections"][1],
-    #         secondary_beam_section_index=legacy_kwargs["sections"][2],
-    #         brace_section_index=legacy_kwargs["sections"][3],
-    #     )
-    result = evaluator.evaluate(config)
+    evaluator = StructuralEvaluator(mode=mode, surrogate_path=surrogate_path)
+    result = evaluator.evaluate(config, section_group_rules, grouped_section_indices)
     return result.mass, result.u_sigma, result.u_delta, result.feasible
 
 
-def evaluate_designs_batch(
-    configs: List[DesignConfig],
-    mode: str = "surrogate",
-    surrogate_path: Optional[str] = None,
-) -> List[Tuple[float, float, float, bool]]:
-    """Batch evaluation entry point for surrogate optimization."""
-    evaluator = get_evaluator(mode=mode, surrogate_path=surrogate_path)
-    try:
-        return [
-            (result.mass, result.u_sigma, result.u_delta, result.feasible)
-            for result in evaluator.evaluate_batch(configs)
-        ]
-    except Exception as e:
-        print(f"Error occurred while evaluating design batch: {e}")
-        return [(1e9, 10.0, 10.0, False) for _ in configs]

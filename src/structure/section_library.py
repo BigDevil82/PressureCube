@@ -91,6 +91,7 @@ class SectionLibrary:
 
     def _load_from_json(self, path: str):
         with open(path, "r", encoding="utf-8") as f:
+            print(f"Loading section data from {path}...")
             data = json.load(f)
 
         # 1. 加载方钢 (Box)

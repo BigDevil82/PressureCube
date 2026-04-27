@@ -12,7 +12,7 @@ from typing import Optional
 import numpy as np
 from joblib import Parallel, delayed
 
-from src.heuristic.evaluator import evaluate_design, evaluate_designs_batch
+from src.heuristic.evaluator import StructuralEvaluator, evaluate_design
 from src.optimization.design_space import DesignConfig, VariableSpec, get_layout_adapter, get_section_lib
 from src.optimization.section_grouping import SectionGroupingRuleset, section_counts_for_groups
 from src.structure.section_library import SectionType
@@ -39,6 +39,74 @@ class GAResult:
     time_seconds: float
 
 
+@dataclass(frozen=True)
+class Candidate:
+    config: DesignConfig
+    topology: dict
+    group_sections: dict[str, int]
+
+
+@dataclass
+class SectionScheme:
+    """Maps section genes to beam-group section assignments."""
+
+    max_indices: list[int]
+    rules: SectionGroupingRuleset
+    group_ids: list[str]
+    group_sec_counts: list[int]
+    apply_to_model: bool = False
+
+    @classmethod
+    def by_beam_type(cls, layout_strategy: str, section_lib, max_indices: list[int]) -> "SectionScheme":
+        rules = SectionGroupingRuleset.by_beam_type(layout_strategy)
+        return cls(
+            max_indices=max_indices,
+            rules=rules,
+            group_ids=rules.group_ids(),
+            group_sec_counts=section_counts_for_groups(rules, section_lib),
+            apply_to_model=False,
+        )
+
+    @classmethod
+    def grouped(
+        cls,
+        rules: SectionGroupingRuleset,
+        section_lib,
+        max_indices: list[int],
+    ) -> "SectionScheme":
+        return cls(
+            max_indices=max_indices,
+            rules=rules,
+            group_ids=rules.group_ids(),
+            group_sec_counts=section_counts_for_groups(rules, section_lib),
+            apply_to_model=True,
+        )
+
+    @property
+    def n_genes(self) -> int:
+        return len(self.group_ids)
+
+    @property
+    def gene_counts(self) -> list[int]:
+        return self.group_sec_counts
+
+    @property
+    def evaluation_rules(self) -> SectionGroupingRuleset | None:
+        return self.rules if self.apply_to_model else None
+
+    def max_gene_values(self) -> np.ndarray:
+        return np.array([count - 1 for count in self.gene_counts], dtype=np.float32)
+
+    def decode(self, genes: np.ndarray) -> tuple[list[int], dict[str, int]]:
+        group_sections = {
+            group_id: int(np.clip(round(genes[offset]), 0, self.group_sec_counts[offset] - 1))
+            for offset, group_id in enumerate(self.group_ids)
+        }
+        if self.apply_to_model:
+            return self.max_indices, group_sections
+        return [group_sections[group_id] for group_id in self.group_ids], group_sections
+
+
 def _decode_topology_gene(gene_value: float, spec: VariableSpec):
     if spec.kind in {"categorical", "bool"}:
         choices = list(spec.choices or [])
@@ -55,67 +123,32 @@ def _decode_topology_gene(gene_value: float, spec: VariableSpec):
     raise ValueError(f"Unsupported variable spec kind: {spec.kind}")
 
 
-def decode_individual(
+def decode_candidate(
     genes: np.ndarray,
+    geometry: dict,
     topology_specs: list[VariableSpec],
-    sec_counts: list[int],
-    group_ids: list[str] | None = None,
-    group_sec_counts: list[int] | None = None,
-) -> dict:
-    """Decode genes to topology + section dict."""
+    layout_strategy: str,
+    section_scheme: SectionScheme,
+) -> Candidate:
+    """Decode genes to a structural design candidate."""
     topology = {}
     for idx, spec in enumerate(topology_specs):
         topology[spec.name] = _decode_topology_gene(float(genes[idx]), spec)
 
     section_start = len(topology_specs)
-    if group_ids is None or group_sec_counts is None:
-        sections = [
-            int(np.clip(round(genes[section_start + offset]), 0, sec_counts[offset] - 1))
-            for offset in range(4)
-        ]
-        return {
-            "topology": topology,
-            "sections": sections,
-            "group_sections": {},
-        }
-
-    group_sections = {
-        group_id: int(np.clip(round(genes[section_start + offset]), 0, group_sec_counts[offset] - 1))
-        for offset, group_id in enumerate(group_ids)
-    }
-    # 分组截面模式下，四类基础截面只作为未覆盖梁的 fallback。
-    return {
-        "topology": topology,
-        "sections": [count - 1 for count in sec_counts],
-        "group_sections": group_sections,
-    }
-
-
-def _config_from_genes(
-    genes: np.ndarray,
-    geometry: dict,
-    sec_counts: list[int],
-    topology_specs: list[VariableSpec],
-    layout_strategy: str,
-    section_group_rules: SectionGroupingRuleset | None = None,
-    group_ids: list[str] | None = None,
-    group_sec_counts: list[int] | None = None,
-) -> tuple[DesignConfig, dict]:
-    decoded = decode_individual(
-        genes,
-        topology_specs,
-        sec_counts,
-        group_ids if section_group_rules is not None else None,
-        group_sec_counts if section_group_rules is not None else None,
-    )
+    sections, group_sections = section_scheme.decode(genes[section_start:])
     adapter = get_layout_adapter(layout_strategy)
     config = adapter.build_config(
         geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
         pressure=geometry.get("pressure", 30000.0),
-        topology=decoded["topology"],
-        sections=decoded["sections"],
+        topology=topology,
+        sections=sections,
     )
-    return config, decoded
+    return Candidate(
+        config=config,
+        topology=topology,
+        group_sections=group_sections,
+    )
 
 
 def _fitness_from_eval(
@@ -137,14 +170,11 @@ def _fitness_from_eval(
 def evaluate_individual(
     genes: np.ndarray,
     geometry: dict,
-    sec_counts: list[int],
     topology_specs: list[VariableSpec],
     layout_strategy: str,
+    section_scheme: SectionScheme,
     eval_mode: str = "fea",
     surrogate_path: Optional[str] = None,
-    section_group_rules: SectionGroupingRuleset | None = None,
-    group_ids: list[str] | None = None,
-    group_sec_counts: list[int] | None = None,
 ) -> tuple[float, float, float, float, bool]:
     """
     Evaluate fitness of an individual.
@@ -152,23 +182,20 @@ def evaluate_individual(
     Returns:
         (mass, u_sigma, u_delta, fitness, feasible)
     """
-    config, decoded = _config_from_genes(
+    candidate = decode_candidate(
         genes,
         geometry,
-        sec_counts,
         topology_specs,
         layout_strategy,
-        section_group_rules,
-        group_ids,
-        group_sec_counts,
+        section_scheme,
     )
 
     mass, u_sigma, u_delta, feasible = evaluate_design(
-        config=config,
+        config=candidate.config,
         mode=eval_mode,
         surrogate_path=surrogate_path,
-        section_group_rules=section_group_rules,
-        grouped_section_indices=decoded["group_sections"] if section_group_rules is not None else None,
+        section_group_rules=section_scheme.evaluation_rules,
+        grouped_section_indices=candidate.group_sections if section_scheme.apply_to_model else None,
     )
 
     return _fitness_from_eval(mass, u_sigma, u_delta, feasible, eval_mode)
@@ -176,16 +203,14 @@ def evaluate_individual(
 
 def create_random_population(
     pop_size: int,
-    sec_counts: list[int],
     topology_specs: list[VariableSpec],
+    section_gene_counts: list[int],
     rng: np.random.Generator,
-    n_section_genes: int = 4,
-    section_gene_counts: list[int] | None = None,
 ) -> np.ndarray:
     """Create random initial population."""
+    n_section_genes = len(section_gene_counts)
     n_genes = len(topology_specs) + n_section_genes
     population = np.zeros((pop_size, n_genes), dtype=np.float32)
-    counts = section_gene_counts or sec_counts
 
     for i in range(pop_size):
         for gene_idx, spec in enumerate(topology_specs):
@@ -204,7 +229,7 @@ def create_random_population(
 
         section_start = len(topology_specs)
         for offset in range(n_section_genes):
-            population[i, section_start + offset] = rng.integers(0, counts[offset])
+            population[i, section_start + offset] = rng.integers(0, section_gene_counts[offset])
 
     return population
 
@@ -245,15 +270,12 @@ def uniform_crossover(
 def mutate(
     individual: np.ndarray,
     mutation_rate: float,
-    sec_counts: list[int],
     topology_specs: list[VariableSpec],
+    section_gene_counts: list[int],
     rng: np.random.Generator,
-    n_section_genes: int = 4,
-    section_gene_counts: list[int] | None = None,
 ) -> np.ndarray:
     """Mutate individual genes."""
     mutated = individual.copy()
-    counts = section_gene_counts or sec_counts
 
     for gene_idx, spec in enumerate(topology_specs):
         if rng.random() >= mutation_rate:
@@ -277,11 +299,11 @@ def mutate(
                 )
 
     section_start = len(topology_specs)
-    for offset in range(n_section_genes):
+    for offset, count in enumerate(section_gene_counts):
         gene_idx = section_start + offset
         if rng.random() < mutation_rate:
             delta = rng.integers(-3, 4)
-            mutated[gene_idx] = np.clip(mutated[gene_idx] + delta, 0, counts[offset] - 1)
+            mutated[gene_idx] = np.clip(mutated[gene_idx] + delta, 0, count - 1)
 
     return mutated
 
@@ -327,18 +349,20 @@ class ParallelGAOptimizer:
 
         section_lib = get_section_lib(layout_strategy)
         sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
-        self.sec_counts = [section_lib.section_counts[t] for t in sec_types]
-        self.max_indices = [count - 1 for count in self.sec_counts]
-        if self.section_group_rules is None:
-            self.group_ids = None
-            self.group_sec_counts = None
-        else:
-            self.group_ids = self.section_group_rules.group_ids()
-            self.group_sec_counts = section_counts_for_groups(self.section_group_rules, section_lib)
+        max_indices = [section_lib.section_counts[t] - 1 for t in sec_types]
+        self.section_scheme = (
+            SectionScheme.by_beam_type(layout_strategy, section_lib, max_indices)
+            if self.section_group_rules is None
+            else SectionScheme.grouped(self.section_group_rules, section_lib, max_indices)
+        )
+        self.surrogate_evaluator = (
+            StructuralEvaluator(mode="surrogate", surrogate_path=surrogate_path)
+            if eval_mode == "surrogate"
+            else None
+        )
 
     def _encode_default_individual(self) -> np.ndarray:
-        n_section_genes = len(self.group_ids) if self.section_group_rules is not None else 4
-        genes = np.zeros(len(self.topology_specs) + n_section_genes, dtype=np.float32)
+        genes = np.zeros(len(self.topology_specs) + self.section_scheme.n_genes, dtype=np.float32)
         defaults = self.adapter.default_topology()
         for idx, spec in enumerate(self.topology_specs):
             value = defaults[spec.name]
@@ -357,10 +381,7 @@ class ParallelGAOptimizer:
             else:
                 genes[idx] = float(value)
         section_start = len(self.topology_specs)
-        if self.section_group_rules is None:
-            genes[section_start:] = np.array(self.max_indices, dtype=np.float32)
-        else:
-            genes[section_start:] = np.array([count - 1 for count in self.group_sec_counts], dtype=np.float32)
+        genes[section_start:] = self.section_scheme.max_gene_values()
         return genes
 
     def _evaluate_population_surrogate(
@@ -368,38 +389,29 @@ class ParallelGAOptimizer:
         population: np.ndarray,
         geometry: dict,
     ) -> list[tuple[float, float, float, float, bool]]:
-        if self.section_group_rules is not None:
-            return [
-                evaluate_individual(
-                    ind,
-                    geometry,
-                    self.sec_counts,
-                    self.topology_specs,
-                    self.layout_strategy,
-                    self.eval_mode,
-                    self.surrogate_path,
-                    self.section_group_rules,
-                    self.group_ids,
-                    self.group_sec_counts,
-                )
-                for ind in population
-            ]
-
-        configs = [
-            _config_from_genes(
+        candidates = [
+            decode_candidate(
                 ind,
                 geometry,
-                self.sec_counts,
                 self.topology_specs,
                 self.layout_strategy,
-            )[0]
+                self.section_scheme,
+            )
             for ind in population
         ]
-        evals = evaluate_designs_batch(
-            configs=configs,
-            mode="surrogate",
-            surrogate_path=self.surrogate_path,
+        eval_results = self.surrogate_evaluator.evaluate_batch(
+            [candidate.config for candidate in candidates],
+            section_group_rules=self.section_scheme.evaluation_rules,
+            grouped_section_indices=(
+                [candidate.group_sections for candidate in candidates]
+                if self.section_scheme.apply_to_model
+                else None
+            ),
         )
+        evals = [
+            (result.mass, result.u_sigma, result.u_delta, result.feasible)
+            for result in eval_results
+        ]
         return [
             _fitness_from_eval(mass, u_sigma, u_delta, feasible, self.eval_mode)
             for mass, u_sigma, u_delta, feasible in evals
@@ -411,30 +423,27 @@ class ParallelGAOptimizer:
         rng = np.random.default_rng(self.seed)
 
         max_genes = self._encode_default_individual()
-        initial_result = evaluate_individual(
-            max_genes,
-            geometry,
-            self.sec_counts,
-            self.topology_specs,
-            self.layout_strategy,
-            self.eval_mode,
-            self.surrogate_path,
-            self.section_group_rules,
-            self.group_ids,
-            self.group_sec_counts,
-        )
+        if self.eval_mode == "surrogate":
+            initial_result = self._evaluate_population_surrogate(np.array([max_genes]), geometry)[0]
+        else:
+            initial_result = evaluate_individual(
+                max_genes,
+                geometry,
+                self.topology_specs,
+                self.layout_strategy,
+                self.section_scheme,
+                self.eval_mode,
+                self.surrogate_path,
+            )
         initial_mass = initial_result[0]
         if verbose:
             print(f"Initial mass (max sections): {initial_mass:.0f}kg")
 
-        n_section_genes = len(self.group_ids) if self.section_group_rules is not None else 4
         population = create_random_population(
             self.pop_size,
-            self.sec_counts,
             self.topology_specs,
+            self.section_scheme.gene_counts,
             rng,
-            n_section_genes=n_section_genes,
-            section_gene_counts=self.group_sec_counts if self.section_group_rules is not None else None,
         )
         population[0] = max_genes
 
@@ -450,14 +459,11 @@ class ParallelGAOptimizer:
                     delayed(evaluate_individual)(
                         ind,
                         geometry,
-                        self.sec_counts,
                         self.topology_specs,
                         self.layout_strategy,
+                        self.section_scheme,
                         self.eval_mode,
                         self.surrogate_path,
-                        self.section_group_rules,
-                        self.group_ids,
-                        self.group_sec_counts,
                     )
                     for ind in population
                 )
@@ -498,20 +504,16 @@ class ParallelGAOptimizer:
                 child1 = mutate(
                     child1,
                     self.mutation_rate,
-                    self.sec_counts,
                     self.topology_specs,
+                    self.section_scheme.gene_counts,
                     rng,
-                    n_section_genes=n_section_genes,
-                    section_gene_counts=self.group_sec_counts if self.section_group_rules is not None else None,
                 )
                 child2 = mutate(
                     child2,
                     self.mutation_rate,
-                    self.sec_counts,
                     self.topology_specs,
+                    self.section_scheme.gene_counts,
                     rng,
-                    n_section_genes=n_section_genes,
-                    section_gene_counts=self.group_sec_counts if self.section_group_rules is not None else None,
                 )
                 next_population[offspring_idx] = child1
                 offspring_idx += 1
@@ -524,34 +526,29 @@ class ParallelGAOptimizer:
         elapsed = time.time() - start_time
 
         if best_individual is None:
-            decoded = {
-                "topology": self.adapter.default_topology(),
-                "sections": self.max_indices,
-                "group_sections": (
-                    {}
-                    if self.section_group_rules is None
-                    else {
-                        group_id: count - 1
-                        for group_id, count in zip(self.group_ids, self.group_sec_counts)
-                    }
-                ),
-            }
-        else:
-            decoded = decode_individual(
-                best_individual,
+            best_candidate = decode_candidate(
+                max_genes,
+                geometry,
                 self.topology_specs,
-                self.sec_counts,
-                self.group_ids if self.section_group_rules is not None else None,
-                self.group_sec_counts if self.section_group_rules is not None else None,
+                self.layout_strategy,
+                self.section_scheme,
+            )
+        else:
+            best_candidate = decode_candidate(
+                best_individual,
+                geometry,
+                self.topology_specs,
+                self.layout_strategy,
+                self.section_scheme,
             )
 
         return GAResult(
             structure_id=geometry.get("structure_id", "unknown"),
             layout_strategy=self.layout_strategy,
             geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
-            optimal_topology=decoded["topology"],
-            optimal_sections=decoded["sections"],
-            optimal_group_sections=decoded["group_sections"],
+            optimal_topology=best_candidate.topology,
+            optimal_sections=best_candidate.config.section_indices(),
+            optimal_group_sections=best_candidate.group_sections,
             initial_mass=initial_mass,
             optimal_mass=best_result[0],
             mass_reduction_pct=(initial_mass - best_result[0]) / initial_mass * 100,
@@ -662,8 +659,12 @@ def run_ga_optimization(
     fea_result = evaluate_design(
         config=config,
         mode="fea",
-        section_group_rules=opt.section_group_rules,
-        grouped_section_indices=result.optimal_group_sections,
+        section_group_rules=opt.section_scheme.evaluation_rules,
+        grouped_section_indices=(
+            result.optimal_group_sections
+            if opt.section_scheme.apply_to_model
+            else None
+        ),
     )
 
     print()
