@@ -13,12 +13,7 @@ import numpy as np
 from joblib import Parallel, delayed
 
 from src.heuristic.evaluator import evaluate_design
-from src.optimization.design_space import (
-    DesignConfig,
-    VariableSpec,
-    get_layout_adapter,
-    get_section_lib,
-)
+from src.optimization.design_space import DesignConfig, VariableSpec, get_layout_adapter, get_section_lib
 from src.optimization.section_grouping import SectionGroupingRuleset, section_counts_for_groups
 from src.structure.section_library import SectionType
 
@@ -78,7 +73,11 @@ def decode_individual(
         for offset, group_id in enumerate(group_ids)
     }
     # 分组截面模式下，四类基础截面只作为未覆盖梁的 fallback。
-    return {"topology": topology, "sections": [count - 1 for count in sec_counts], "group_sections": group_sections}
+    return {
+        "topology": topology,
+        "sections": [count - 1 for count in sec_counts],
+        "group_sections": group_sections,
+    }
 
 
 def evaluate_individual(
@@ -148,7 +147,9 @@ def create_random_population(
                 population[i, gene_idx] = rng.integers(int(spec.low), int(spec.high) + 1)
             elif spec.kind == "float":
                 if spec.step:
-                    values = np.arange(float(spec.low), float(spec.high) + 0.5 * float(spec.step), float(spec.step))
+                    values = np.arange(
+                        float(spec.low), float(spec.high) + 0.5 * float(spec.step), float(spec.step)
+                    )
                     population[i, gene_idx] = float(values[rng.integers(0, len(values))])
                 else:
                     population[i, gene_idx] = rng.uniform(float(spec.low), float(spec.high))
@@ -294,7 +295,10 @@ class ParallelGAOptimizer:
                 if value in choices:
                     genes[idx] = choices.index(value)
                 elif isinstance(value, (int, float)) and choices:
-                    nearest = min(range(len(choices)), key=lambda choice_idx: abs(float(choices[choice_idx]) - float(value)))
+                    nearest = min(
+                        range(len(choices)),
+                        key=lambda choice_idx: abs(float(choices[choice_idx]) - float(value)),
+                    )
                     genes[idx] = nearest
                 else:
                     genes[idx] = 0
@@ -424,9 +428,8 @@ class ParallelGAOptimizer:
                 "topology": self.adapter.default_topology(),
                 "sections": self.max_indices,
                 "group_sections": {
-                    group_id: count - 1
-                    for group_id, count in zip(self.group_ids, self.group_sec_counts)
-                }
+                    group_id: count - 1 for group_id, count in zip(self.group_ids, self.group_sec_counts)
+                },
             }
         else:
             decoded = decode_individual(
@@ -618,8 +621,12 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--eval_mode", type=str, default="fea", choices=["fea", "surrogate"])
     parser.add_argument("--surrogate", type=str, default=None, help="Path to surrogate model")
-    parser.add_argument("--layout-strategy", type=str, default="research", choices=["research", "engineering"])
-    parser.add_argument("--section-group-rules", type=str, default=None, help="Path to section grouping ruleset JSON")
+    parser.add_argument(
+        "--layout-strategy", type=str, default="research", choices=["research", "engineering"]
+    )
+    parser.add_argument(
+        "--section-group-rules", type=str, default=None, help="Path to section grouping ruleset JSON"
+    )
 
     args = parser.parse_args()
 

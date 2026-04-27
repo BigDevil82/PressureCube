@@ -76,7 +76,7 @@ def _run_single_fea(model: StructuralModel, pressure: float) -> Tuple[float, flo
     """
     try:
         mass = model.calculate_mass_kg()
-        mesh_generator = MeshGenerator(model, 0.3)
+        mesh_generator = MeshGenerator(model, 0.5)
         model = mesh_generator.generate()
 
         solver = OpenSeesSolver(model)

@@ -289,13 +289,13 @@ def get_evaluator(
     Returns:
         StructuralEvaluator instance
     """
-    if section_group_rules is not None or grouped_section_indices is not None:
-        return StructuralEvaluator(
-            mode=mode,
-            surrogate_path=surrogate_path,
-            section_group_rules=section_group_rules,
-            grouped_section_indices=grouped_section_indices,
-        )
+    # if section_group_rules is not None or grouped_section_indices is not None:
+    #     return StructuralEvaluator(
+    #         mode=mode,
+    #         surrogate_path=surrogate_path,
+    #         section_group_rules=section_group_rules,
+    #         grouped_section_indices=grouped_section_indices,
+    #     )
 
     cache_key = f"{mode}:{surrogate_path or 'none'}"
 
