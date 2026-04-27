@@ -236,7 +236,8 @@ class ResearchLayoutAdapter(LayoutDesignAdapter):
             VariableSpec(
                 "main_beam_spacing",
                 "categorical",
-                choices=[0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.30],
+                # choices=[0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.30],
+                choices=[0.7, 0.8, 0.9, 1.0, 1.1, 1.2],
                 default=0.75,
             ),
             VariableSpec("num_secondary_width", "int", low=2, high=6, default=4),

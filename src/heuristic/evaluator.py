@@ -236,6 +236,35 @@ class StructuralEvaluator:
 
         return EvalResult(mass=mass, u_sigma=u_sigma, u_delta=u_delta, feasible=feasible)
 
+    def evaluate_batch(self, configs: List[DesignConfig]) -> List[EvalResult]:
+        """Evaluate a batch of designs.
+
+        Surrogate mode uses one model call for the whole batch. FEA remains
+        single-design because OpenSees analyses are externally parallelized by
+        the caller.
+        """
+        if self.mode != "surrogate":
+            return [self._evaluate_fea(config) for config in configs]
+
+        if self.section_group_rules and self.grouped_section_indices:
+            return [self._evaluate_surrogate(config) for config in configs]
+
+        section_libs = {
+            config.layout_strategy: get_section_lib(config.layout_strategy, self.section_lib_path)
+            for config in configs
+        }
+        masses = [compute_mass_fast(config, section_libs[config.layout_strategy]) for config in configs]
+        sigmas, deltas = self.surrogate.predict_batch(configs)
+        return [
+            EvalResult(
+                mass=mass,
+                u_sigma=float(u_sigma),
+                u_delta=float(u_delta),
+                feasible=bool(u_sigma <= 1.0 and u_delta <= 1.0),
+            )
+            for mass, u_sigma, u_delta in zip(masses, sigmas, deltas)
+        ]
+
     def _apply_grouped_sections(self, model: StructuralModel, section_lib) -> None:
         if not self.section_group_rules or not self.grouped_section_indices:
             return
@@ -289,13 +318,13 @@ def get_evaluator(
     Returns:
         StructuralEvaluator instance
     """
-    # if section_group_rules is not None or grouped_section_indices is not None:
-    #     return StructuralEvaluator(
-    #         mode=mode,
-    #         surrogate_path=surrogate_path,
-    #         section_group_rules=section_group_rules,
-    #         grouped_section_indices=grouped_section_indices,
-    #     )
+    if section_group_rules is not None or grouped_section_indices is not None:
+        return StructuralEvaluator(
+            mode=mode,
+            surrogate_path=surrogate_path,
+            section_group_rules=section_group_rules,
+            grouped_section_indices=grouped_section_indices,
+        )
 
     cache_key = f"{mode}:{surrogate_path or 'none'}"
 
@@ -329,24 +358,38 @@ def evaluate_design(
         section_group_rules=section_group_rules,
         grouped_section_indices=grouped_section_indices,
     )
+    assert config is not None, "Config must be provided as a DesignConfig"
+    # if config is None:
+    #     config = ResearchDesignConfig(
+    #         L=legacy_kwargs["L"],
+    #         W=legacy_kwargs["W"],
+    #         H=legacy_kwargs["H"],
+    #         pressure=legacy_kwargs["pressure"],
+    #         main_beam_spacing=legacy_kwargs["main_beam_spacing"],
+    #         num_secondary_width=legacy_kwargs["num_secondary_width"],
+    #         num_secondary_height=legacy_kwargs["num_secondary_height"],
+    #         add_support_beam=legacy_kwargs["add_support_beam"],
+    #         frame_section_index=legacy_kwargs["sections"][0],
+    #         main_beam_section_index=legacy_kwargs["sections"][1],
+    #         secondary_beam_section_index=legacy_kwargs["sections"][2],
+    #         brace_section_index=legacy_kwargs["sections"][3],
+    #     )
+    result = evaluator.evaluate(config)
+    return result.mass, result.u_sigma, result.u_delta, result.feasible
+
+
+def evaluate_designs_batch(
+    configs: List[DesignConfig],
+    mode: str = "surrogate",
+    surrogate_path: Optional[str] = None,
+) -> List[Tuple[float, float, float, bool]]:
+    """Batch evaluation entry point for surrogate optimization."""
+    evaluator = get_evaluator(mode=mode, surrogate_path=surrogate_path)
     try:
-        if config is None:
-            config = ResearchDesignConfig(
-                L=legacy_kwargs["L"],
-                W=legacy_kwargs["W"],
-                H=legacy_kwargs["H"],
-                pressure=legacy_kwargs["pressure"],
-                main_beam_spacing=legacy_kwargs["main_beam_spacing"],
-                num_secondary_width=legacy_kwargs["num_secondary_width"],
-                num_secondary_height=legacy_kwargs["num_secondary_height"],
-                add_support_beam=legacy_kwargs["add_support_beam"],
-                frame_section_index=legacy_kwargs["sections"][0],
-                main_beam_section_index=legacy_kwargs["sections"][1],
-                secondary_beam_section_index=legacy_kwargs["sections"][2],
-                brace_section_index=legacy_kwargs["sections"][3],
-            )
-        result = evaluator.evaluate(config)
-        return result.mass, result.u_sigma, result.u_delta, result.feasible
+        return [
+            (result.mass, result.u_sigma, result.u_delta, result.feasible)
+            for result in evaluator.evaluate_batch(configs)
+        ]
     except Exception as e:
-        print(f"Error occurred while evaluating design: {e}")
-        return 1e9, 10.0, 10.0, False
+        print(f"Error occurred while evaluating design batch: {e}")
+        return [(1e9, 10.0, 10.0, False) for _ in configs]

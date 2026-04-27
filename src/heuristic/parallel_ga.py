@@ -12,7 +12,7 @@ from typing import Optional
 import numpy as np
 from joblib import Parallel, delayed
 
-from src.heuristic.evaluator import evaluate_design
+from src.heuristic.evaluator import evaluate_design, evaluate_designs_batch
 from src.optimization.design_space import DesignConfig, VariableSpec, get_layout_adapter, get_section_lib
 from src.optimization.section_grouping import SectionGroupingRuleset, section_counts_for_groups
 from src.structure.section_library import SectionType
@@ -59,8 +59,8 @@ def decode_individual(
     genes: np.ndarray,
     topology_specs: list[VariableSpec],
     sec_counts: list[int],
-    group_ids: list[str],
-    group_sec_counts: list[int],
+    group_ids: list[str] | None = None,
+    group_sec_counts: list[int] | None = None,
 ) -> dict:
     """Decode genes to topology + section dict."""
     topology = {}
@@ -68,6 +68,17 @@ def decode_individual(
         topology[spec.name] = _decode_topology_gene(float(genes[idx]), spec)
 
     section_start = len(topology_specs)
+    if group_ids is None or group_sec_counts is None:
+        sections = [
+            int(np.clip(round(genes[section_start + offset]), 0, sec_counts[offset] - 1))
+            for offset in range(4)
+        ]
+        return {
+            "topology": topology,
+            "sections": sections,
+            "group_sections": {},
+        }
+
     group_sections = {
         group_id: int(np.clip(round(genes[section_start + offset]), 0, group_sec_counts[offset] - 1))
         for offset, group_id in enumerate(group_ids)
@@ -78,6 +89,49 @@ def decode_individual(
         "sections": [count - 1 for count in sec_counts],
         "group_sections": group_sections,
     }
+
+
+def _config_from_genes(
+    genes: np.ndarray,
+    geometry: dict,
+    sec_counts: list[int],
+    topology_specs: list[VariableSpec],
+    layout_strategy: str,
+    section_group_rules: SectionGroupingRuleset | None = None,
+    group_ids: list[str] | None = None,
+    group_sec_counts: list[int] | None = None,
+) -> tuple[DesignConfig, dict]:
+    decoded = decode_individual(
+        genes,
+        topology_specs,
+        sec_counts,
+        group_ids if section_group_rules is not None else None,
+        group_sec_counts if section_group_rules is not None else None,
+    )
+    adapter = get_layout_adapter(layout_strategy)
+    config = adapter.build_config(
+        geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
+        pressure=geometry.get("pressure", 30000.0),
+        topology=decoded["topology"],
+        sections=decoded["sections"],
+    )
+    return config, decoded
+
+
+def _fitness_from_eval(
+    mass: float,
+    u_sigma: float,
+    u_delta: float,
+    feasible: bool,
+    eval_mode: str,
+) -> tuple[float, float, float, float, bool]:
+    if eval_mode == "surrogate":
+        violation = max(0, u_sigma - 0.9) + max(0, u_delta - 0.9)
+    else:
+        violation = max(0, u_sigma - 1.0) + max(0, u_delta - 1.0)
+
+    fitness = mass * (1 + 10 * violation) if violation > 0 else mass
+    return mass, u_sigma, u_delta, fitness, feasible
 
 
 def evaluate_individual(
@@ -98,15 +152,15 @@ def evaluate_individual(
     Returns:
         (mass, u_sigma, u_delta, fitness, feasible)
     """
-    if section_group_rules is None or group_ids is None or group_sec_counts is None:
-        raise ValueError("Section group rules and group section metadata are required.")
-    decoded = decode_individual(genes, topology_specs, sec_counts, group_ids, group_sec_counts)
-    adapter = get_layout_adapter(layout_strategy)
-    config = adapter.build_config(
-        geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
-        pressure=geometry.get("pressure", 30000.0),
-        topology=decoded["topology"],
-        sections=decoded["sections"],
+    config, decoded = _config_from_genes(
+        genes,
+        geometry,
+        sec_counts,
+        topology_specs,
+        layout_strategy,
+        section_group_rules,
+        group_ids,
+        group_sec_counts,
     )
 
     mass, u_sigma, u_delta, feasible = evaluate_design(
@@ -114,16 +168,10 @@ def evaluate_individual(
         mode=eval_mode,
         surrogate_path=surrogate_path,
         section_group_rules=section_group_rules,
-        grouped_section_indices=decoded["group_sections"],
+        grouped_section_indices=decoded["group_sections"] if section_group_rules is not None else None,
     )
 
-    if eval_mode == "surrogate":
-        violation = max(0, u_sigma - 0.9) + max(0, u_delta - 0.9)
-    else:
-        violation = max(0, u_sigma - 1.0) + max(0, u_delta - 1.0)
-
-    fitness = mass * (1 + 10 * violation) if violation > 0 else mass
-    return mass, u_sigma, u_delta, fitness, feasible
+    return _fitness_from_eval(mass, u_sigma, u_delta, feasible, eval_mode)
 
 
 def create_random_population(
@@ -275,17 +323,21 @@ class ParallelGAOptimizer:
             SectionGroupingRuleset.load_json(section_group_rules)
             if isinstance(section_group_rules, str)
             else section_group_rules
-        ) or SectionGroupingRuleset.by_beam_type(layout_strategy)
+        )
 
         section_lib = get_section_lib(layout_strategy)
         sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
         self.sec_counts = [section_lib.section_counts[t] for t in sec_types]
         self.max_indices = [count - 1 for count in self.sec_counts]
-        self.group_ids = self.section_group_rules.group_ids()
-        self.group_sec_counts = section_counts_for_groups(self.section_group_rules, section_lib)
+        if self.section_group_rules is None:
+            self.group_ids = None
+            self.group_sec_counts = None
+        else:
+            self.group_ids = self.section_group_rules.group_ids()
+            self.group_sec_counts = section_counts_for_groups(self.section_group_rules, section_lib)
 
     def _encode_default_individual(self) -> np.ndarray:
-        n_section_genes = len(self.group_ids)
+        n_section_genes = len(self.group_ids) if self.section_group_rules is not None else 4
         genes = np.zeros(len(self.topology_specs) + n_section_genes, dtype=np.float32)
         defaults = self.adapter.default_topology()
         for idx, spec in enumerate(self.topology_specs):
@@ -305,8 +357,53 @@ class ParallelGAOptimizer:
             else:
                 genes[idx] = float(value)
         section_start = len(self.topology_specs)
-        genes[section_start:] = np.array([count - 1 for count in self.group_sec_counts], dtype=np.float32)
+        if self.section_group_rules is None:
+            genes[section_start:] = np.array(self.max_indices, dtype=np.float32)
+        else:
+            genes[section_start:] = np.array([count - 1 for count in self.group_sec_counts], dtype=np.float32)
         return genes
+
+    def _evaluate_population_surrogate(
+        self,
+        population: np.ndarray,
+        geometry: dict,
+    ) -> list[tuple[float, float, float, float, bool]]:
+        if self.section_group_rules is not None:
+            return [
+                evaluate_individual(
+                    ind,
+                    geometry,
+                    self.sec_counts,
+                    self.topology_specs,
+                    self.layout_strategy,
+                    self.eval_mode,
+                    self.surrogate_path,
+                    self.section_group_rules,
+                    self.group_ids,
+                    self.group_sec_counts,
+                )
+                for ind in population
+            ]
+
+        configs = [
+            _config_from_genes(
+                ind,
+                geometry,
+                self.sec_counts,
+                self.topology_specs,
+                self.layout_strategy,
+            )[0]
+            for ind in population
+        ]
+        evals = evaluate_designs_batch(
+            configs=configs,
+            mode="surrogate",
+            surrogate_path=self.surrogate_path,
+        )
+        return [
+            _fitness_from_eval(mass, u_sigma, u_delta, feasible, self.eval_mode)
+            for mass, u_sigma, u_delta, feasible in evals
+        ]
 
     def optimize(self, geometry: dict, verbose: bool = True) -> GAResult:
         """Run parallel GA optimization."""
@@ -330,14 +427,14 @@ class ParallelGAOptimizer:
         if verbose:
             print(f"Initial mass (max sections): {initial_mass:.0f}kg")
 
-        n_section_genes = len(self.group_ids)
+        n_section_genes = len(self.group_ids) if self.section_group_rules is not None else 4
         population = create_random_population(
             self.pop_size,
             self.sec_counts,
             self.topology_specs,
             rng,
             n_section_genes=n_section_genes,
-            section_gene_counts=self.group_sec_counts,
+            section_gene_counts=self.group_sec_counts if self.section_group_rules is not None else None,
         )
         population[0] = max_genes
 
@@ -346,21 +443,24 @@ class ParallelGAOptimizer:
         total_evaluations = 0
 
         for gen in range(self.n_generations):
-            results = Parallel(n_jobs=self.n_jobs, backend="loky")(
-                delayed(evaluate_individual)(
-                    ind,
-                    geometry,
-                    self.sec_counts,
-                    self.topology_specs,
-                    self.layout_strategy,
-                    self.eval_mode,
-                    self.surrogate_path,
-                    self.section_group_rules,
-                    self.group_ids,
-                    self.group_sec_counts,
+            if self.eval_mode == "surrogate":
+                results = self._evaluate_population_surrogate(population, geometry)
+            else:
+                results = Parallel(n_jobs=self.n_jobs, backend="loky")(
+                    delayed(evaluate_individual)(
+                        ind,
+                        geometry,
+                        self.sec_counts,
+                        self.topology_specs,
+                        self.layout_strategy,
+                        self.eval_mode,
+                        self.surrogate_path,
+                        self.section_group_rules,
+                        self.group_ids,
+                        self.group_sec_counts,
+                    )
+                    for ind in population
                 )
-                for ind in population
-            )
             total_evaluations += len(population)
 
             fitness = np.array([result[3] for result in results])
@@ -402,7 +502,7 @@ class ParallelGAOptimizer:
                     self.topology_specs,
                     rng,
                     n_section_genes=n_section_genes,
-                    section_gene_counts=self.group_sec_counts,
+                    section_gene_counts=self.group_sec_counts if self.section_group_rules is not None else None,
                 )
                 child2 = mutate(
                     child2,
@@ -411,7 +511,7 @@ class ParallelGAOptimizer:
                     self.topology_specs,
                     rng,
                     n_section_genes=n_section_genes,
-                    section_gene_counts=self.group_sec_counts,
+                    section_gene_counts=self.group_sec_counts if self.section_group_rules is not None else None,
                 )
                 next_population[offspring_idx] = child1
                 offspring_idx += 1
@@ -427,17 +527,22 @@ class ParallelGAOptimizer:
             decoded = {
                 "topology": self.adapter.default_topology(),
                 "sections": self.max_indices,
-                "group_sections": {
-                    group_id: count - 1 for group_id, count in zip(self.group_ids, self.group_sec_counts)
-                },
+                "group_sections": (
+                    {}
+                    if self.section_group_rules is None
+                    else {
+                        group_id: count - 1
+                        for group_id, count in zip(self.group_ids, self.group_sec_counts)
+                    }
+                ),
             }
         else:
             decoded = decode_individual(
                 best_individual,
                 self.topology_specs,
                 self.sec_counts,
-                self.group_ids,
-                self.group_sec_counts,
+                self.group_ids if self.section_group_rules is not None else None,
+                self.group_sec_counts if self.section_group_rules is not None else None,
             )
 
         return GAResult(
