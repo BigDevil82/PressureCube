@@ -35,9 +35,11 @@ from src.optimization.design_space import (
     design_config_from_params,
     get_section_lib,
 )
-from src.optimization.section_grouping import SectionGroupingRuleset, apply_group_sections
+from src.optimization.section_grouping import SectionGroupingRuleset
+from src.optimization.section_grouping.application import build_section_assignment
 from src.structure.layout.params import BaseLayoutParameters
 from src.structure.mesh_generator import MeshGenerator
+from src.structure.section_assignment import SectionAssignment
 from src.structure.structural_model import StructuralModel
 
 
@@ -116,30 +118,24 @@ class StructuralEvaluator:
         self,
         config: DesignConfig,
         section_group_rules: SectionGroupingRuleset | None = None,
-        grouped_section_indices: dict[str, int] | None = None,
+        section_indices_by_group: dict[str, int] | None = None,
     ) -> EvalResult:
         """
         Evaluate a structural design.
         """
         rules = section_group_rules or self.default_section_group_rules
         if self.mode == "surrogate":
-            return self._evaluate_surrogate(config, rules, grouped_section_indices)
-        return self._evaluate_fea(config, rules, grouped_section_indices)
+            return self._evaluate_surrogate(config, rules, section_indices_by_group)
+        return self._evaluate_fea(config, rules, section_indices_by_group)
 
     def _evaluate_fea(
         self,
         config: DesignConfig,
         section_group_rules: SectionGroupingRuleset | None = None,
-        grouped_section_indices: dict[str, int] | None = None,
+        section_indices_by_group: dict[str, int] | None = None,
     ) -> EvalResult:
         """Real FEA evaluation using OpenSeesSolver."""
-        params = build_params_from_config(config)
-        section_lib = get_section_lib(config.layout_strategy, self.section_lib_path)
-
-        # Build model
-        model = StructuralModel(params, section_lib)
-        model.generate()
-        self._apply_grouped_sections(model, section_lib, section_group_rules, grouped_section_indices)
+        model = self._build_model(config, section_group_rules, section_indices_by_group)
         mass = model.calculate_mass_kg()
 
         # Mesh
@@ -167,21 +163,17 @@ class StructuralEvaluator:
         self,
         config: DesignConfig,
         section_group_rules: SectionGroupingRuleset | None = None,
-        grouped_section_indices: dict[str, int] | None = None,
+        section_indices_by_group: dict[str, int] | None = None,
     ) -> EvalResult:
         """Fast surrogate model evaluation."""
         # Compute mass (fast, no FEA)
         section_lib = get_section_lib(config.layout_strategy, self.section_lib_path)
-        if section_group_rules and grouped_section_indices:
-            params = build_params_from_config(config)
-            model = StructuralModel(params, section_lib)
-            model.generate()
-            self._apply_grouped_sections(
-                model,
-                section_lib,
-                section_group_rules,
-                grouped_section_indices,
-            )
+        if (
+            section_group_rules
+            and section_indices_by_group
+            and not self._rules_are_by_beam_type(section_group_rules)
+        ):
+            model = self._build_model(config, section_group_rules, section_indices_by_group)
             mass = model.calculate_mass_kg()
         else:
             mass = compute_mass_fast(config, section_lib)
@@ -197,7 +189,7 @@ class StructuralEvaluator:
         self,
         configs: List[DesignConfig],
         section_group_rules: SectionGroupingRuleset | None = None,
-        grouped_section_indices: List[dict[str, int]] | None = None,
+        section_indices_by_group: List[dict[str, int]] | None = None,
     ) -> List[EvalResult]:
         """Evaluate a batch of designs.
 
@@ -207,16 +199,16 @@ class StructuralEvaluator:
         """
         rules = section_group_rules or self.default_section_group_rules
         if self.mode != "surrogate":
-            assignments = grouped_section_indices or [None] * len(configs)
+            assignments = section_indices_by_group or [None] * len(configs)
             return [
                 self._evaluate_fea(config, rules, assignment)
                 for config, assignment in zip(configs, assignments)
             ]
 
-        if rules and grouped_section_indices:
+        if rules and section_indices_by_group and not self._rules_are_by_beam_type(rules):
             return [
-                self._evaluate_surrogate(config, rules, assignment)
-                for config, assignment in zip(configs, grouped_section_indices)
+                self._evaluate_surrogate(config, rules, assignment_indices)
+                for config, assignment_indices in zip(configs, section_indices_by_group)
             ]
 
         section_libs = {
@@ -235,21 +227,52 @@ class StructuralEvaluator:
             for mass, u_sigma, u_delta in zip(masses, sigmas, deltas)
         ]
 
-    def _apply_grouped_sections(
+    def _build_model(
+        self,
+        config: DesignConfig,
+        section_group_rules: SectionGroupingRuleset | None,
+        section_indices_by_group: dict[str, int] | None,
+    ) -> StructuralModel:
+        params = build_params_from_config(config)
+        section_lib = get_section_lib(config.layout_strategy, self.section_lib_path)
+        model = StructuralModel(params, section_lib)
+        model.generate()
+        assignment = self._section_assignment_from_model(model, section_group_rules, section_indices_by_group)
+        if assignment:
+            model.apply_section_assignment(assignment)
+        return model
+
+    def _section_assignment(
+        self,
+        config: DesignConfig,
+        section_group_rules: SectionGroupingRuleset | None,
+        section_indices_by_group: dict[str, int] | None,
+    ) -> SectionAssignment | None:
+        if not section_group_rules or not section_indices_by_group:
+            return None
+        if not section_group_rules.prototypes:
+            return SectionAssignment.from_group_indices(
+                section_group_rules.group_beam_types(),
+                section_indices_by_group,
+            )
+        params = build_params_from_config(config)
+        section_lib = get_section_lib(config.layout_strategy, self.section_lib_path)
+        model = StructuralModel(params, section_lib)
+        model.generate()
+        return self._section_assignment_from_model(model, section_group_rules, section_indices_by_group)
+
+    def _section_assignment_from_model(
         self,
         model: StructuralModel,
-        section_lib,
         section_group_rules: SectionGroupingRuleset | None,
-        grouped_section_indices: dict[str, int] | None,
-    ) -> None:
-        if not section_group_rules or not grouped_section_indices:
-            return
-        apply_group_sections(
-            model,
-            section_lib,
-            section_group_rules,
-            grouped_section_indices,
-        )
+        section_indices_by_group: dict[str, int] | None,
+    ) -> SectionAssignment | None:
+        if not section_group_rules or not section_indices_by_group:
+            return None
+        return build_section_assignment(model, section_group_rules, section_indices_by_group)
+
+    def _rules_are_by_beam_type(self, rules: SectionGroupingRuleset) -> bool:
+        return not rules.prototypes and all(int(count) == 1 for count in rules.n_groups_by_type.values())
 
     def evaluate_params(self, params: BaseLayoutParameters, pressure: float) -> EvalResult:
         """
@@ -274,7 +297,7 @@ def evaluate_design(
     mode: str = "fea",
     surrogate_path: Optional[str] = None,
     section_group_rules: SectionGroupingRuleset | None = None,
-    grouped_section_indices: dict[str, int] | None = None,
+    section_indices_by_group: dict[str, int] | None = None,
 ) -> Tuple[float, float, float, bool]:
     """
     Standalone evaluation function for parallel processing.
@@ -283,7 +306,7 @@ def evaluate_design(
         (mass, u_sigma, u_delta, feasible)
     """
     evaluator = StructuralEvaluator(mode=mode, surrogate_path=surrogate_path)
-    result = evaluator.evaluate(config, section_group_rules, grouped_section_indices)
+    result = evaluator.evaluate(config, section_group_rules, section_indices_by_group)
     return result.mass, result.u_sigma, result.u_delta, result.feasible
 
 

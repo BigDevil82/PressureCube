@@ -1,6 +1,7 @@
 from src.optimization.section_grouping.application import (
     apply_group_sections,
     assign_beam_groups,
+    build_section_assignment,
     section_counts_for_groups,
 )
 from src.optimization.section_grouping.discovery import (
@@ -24,6 +25,7 @@ __all__ = [
     "SectionGroupingRuleset",
     "apply_group_sections",
     "assign_beam_groups",
+    "build_section_assignment",
     "build_rules_from_design_configs",
     "discover_section_group_rules",
     "discover_section_group_rules_with_assignments",

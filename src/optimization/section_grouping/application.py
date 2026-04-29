@@ -4,8 +4,9 @@ import numpy as np
 
 from src.optimization.section_grouping.features import beam_assignment_vector, make_geometry_context
 from src.optimization.section_grouping.models import SectionGroupingRuleset
+from src.structure.section_assignment import BEAM_SECTION_TYPES, SectionAssignment
 from src.structure.section_library import SectionLibrary
-from src.structure.structural_model import BEAM_TYPE_MAP, StructuralModel
+from src.structure.structural_model import StructuralModel
 
 
 def assign_beam_groups(model: StructuralModel, ruleset: SectionGroupingRuleset) -> dict[int, str]:
@@ -47,23 +48,28 @@ def apply_group_sections(
     原截面不变。
     """
 
-    assignments = assign_beam_groups(model, ruleset)
-    group_types = ruleset.group_beam_types()
-    for beam_id, group_id in assignments.items():
-        if group_id not in section_indices_by_group:
-            continue
-        beam_type = group_types[group_id]
-        section_type = BEAM_TYPE_MAP[beam_type]
-        model.beams[beam_id].section = section_lib.get_section(
-            section_type,
-            int(section_indices_by_group[group_id]),
-        )
-    return assignments
+    assignment = build_section_assignment(model, ruleset, section_indices_by_group)
+    model.apply_section_assignment(assignment)
+    return assignment.beam_groups
+
+
+def build_section_assignment(
+    model: StructuralModel,
+    ruleset: SectionGroupingRuleset,
+    section_indices_by_group: dict[str, int],
+) -> SectionAssignment:
+    """Build a concrete section assignment for the current generated model."""
+
+    return SectionAssignment.from_group_indices(
+        ruleset.group_beam_types(),
+        section_indices_by_group,
+        beam_groups=assign_beam_groups(model, ruleset),
+    )
 
 
 def section_counts_for_groups(ruleset: SectionGroupingRuleset, section_lib: SectionLibrary) -> list[int]:
     group_types = ruleset.group_beam_types()
     return [
-        section_lib.section_counts[BEAM_TYPE_MAP[group_types[group_id]]]
+        section_lib.section_counts[BEAM_SECTION_TYPES[group_types[group_id]]]
         for group_id in ruleset.group_ids()
     ]

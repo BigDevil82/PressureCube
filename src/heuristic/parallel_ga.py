@@ -27,7 +27,7 @@ class GAResult:
     geometry: dict
     optimal_topology: dict
     optimal_sections: list[int]
-    optimal_group_sections: dict[str, int]
+    optimal_section_indices_by_group: dict[str, int]
     initial_mass: float
     optimal_mass: float
     mass_reduction_pct: float
@@ -43,7 +43,7 @@ class GAResult:
 class Candidate:
     config: DesignConfig
     topology: dict
-    group_sections: dict[str, int]
+    section_indices_by_group: dict[str, int]
 
 
 @dataclass
@@ -54,7 +54,6 @@ class SectionScheme:
     rules: SectionGroupingRuleset
     group_ids: list[str]
     group_sec_counts: list[int]
-    apply_to_model: bool = False
 
     @classmethod
     def by_beam_type(cls, layout_strategy: str, section_lib, max_indices: list[int]) -> "SectionScheme":
@@ -64,7 +63,6 @@ class SectionScheme:
             rules=rules,
             group_ids=rules.group_ids(),
             group_sec_counts=section_counts_for_groups(rules, section_lib),
-            apply_to_model=False,
         )
 
     @classmethod
@@ -79,7 +77,6 @@ class SectionScheme:
             rules=rules,
             group_ids=rules.group_ids(),
             group_sec_counts=section_counts_for_groups(rules, section_lib),
-            apply_to_model=True,
         )
 
     @property
@@ -90,21 +87,20 @@ class SectionScheme:
     def gene_counts(self) -> list[int]:
         return self.group_sec_counts
 
-    @property
-    def evaluation_rules(self) -> SectionGroupingRuleset | None:
-        return self.rules if self.apply_to_model else None
-
     def max_gene_values(self) -> np.ndarray:
         return np.array([count - 1 for count in self.gene_counts], dtype=np.float32)
 
     def decode(self, genes: np.ndarray) -> tuple[list[int], dict[str, int]]:
-        group_sections = {
+        section_indices_by_group = {
             group_id: int(np.clip(round(genes[offset]), 0, self.group_sec_counts[offset] - 1))
             for offset, group_id in enumerate(self.group_ids)
         }
-        if self.apply_to_model:
-            return self.max_indices, group_sections
-        return [group_sections[group_id] for group_id in self.group_ids], group_sections
+        return self._config_sections(section_indices_by_group), section_indices_by_group
+
+    def _config_sections(self, section_indices_by_group: dict[str, int]) -> list[int]:
+        if all(count == 1 for count in self.rules.n_groups_by_type.values()):
+            return [section_indices_by_group[group_id] for group_id in self.group_ids]
+        return self.max_indices
 
 
 def _decode_topology_gene(gene_value: float, spec: VariableSpec):
@@ -136,7 +132,7 @@ def decode_candidate(
         topology[spec.name] = _decode_topology_gene(float(genes[idx]), spec)
 
     section_start = len(topology_specs)
-    sections, group_sections = section_scheme.decode(genes[section_start:])
+    sections, section_indices_by_group = section_scheme.decode(genes[section_start:])
     adapter = get_layout_adapter(layout_strategy)
     config = adapter.build_config(
         geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
@@ -147,7 +143,7 @@ def decode_candidate(
     return Candidate(
         config=config,
         topology=topology,
-        group_sections=group_sections,
+        section_indices_by_group=section_indices_by_group,
     )
 
 
@@ -194,8 +190,8 @@ def evaluate_individual(
         config=candidate.config,
         mode=eval_mode,
         surrogate_path=surrogate_path,
-        section_group_rules=section_scheme.evaluation_rules,
-        grouped_section_indices=candidate.group_sections if section_scheme.apply_to_model else None,
+        section_group_rules=section_scheme.rules,
+        section_indices_by_group=candidate.section_indices_by_group,
     )
 
     return _fitness_from_eval(mass, u_sigma, u_delta, feasible, eval_mode)
@@ -401,12 +397,8 @@ class ParallelGAOptimizer:
         ]
         eval_results = self.surrogate_evaluator.evaluate_batch(
             [candidate.config for candidate in candidates],
-            section_group_rules=self.section_scheme.evaluation_rules,
-            grouped_section_indices=(
-                [candidate.group_sections for candidate in candidates]
-                if self.section_scheme.apply_to_model
-                else None
-            ),
+            section_group_rules=self.section_scheme.rules,
+            section_indices_by_group=[candidate.section_indices_by_group for candidate in candidates],
         )
         evals = [
             (result.mass, result.u_sigma, result.u_delta, result.feasible)
@@ -548,7 +540,7 @@ class ParallelGAOptimizer:
             geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
             optimal_topology=best_candidate.topology,
             optimal_sections=best_candidate.config.section_indices(),
-            optimal_group_sections=best_candidate.group_sections,
+            optimal_section_indices_by_group=best_candidate.section_indices_by_group,
             initial_mass=initial_mass,
             optimal_mass=best_result[0],
             mass_reduction_pct=(initial_mass - best_result[0]) / initial_mass * 100,
@@ -659,12 +651,8 @@ def run_ga_optimization(
     fea_result = evaluate_design(
         config=config,
         mode="fea",
-        section_group_rules=opt.section_scheme.evaluation_rules,
-        grouped_section_indices=(
-            result.optimal_group_sections
-            if opt.section_scheme.apply_to_model
-            else None
-        ),
+        section_group_rules=opt.section_scheme.rules,
+        section_indices_by_group=result.optimal_section_indices_by_group,
     )
 
     print()
@@ -673,7 +661,7 @@ def run_ga_optimization(
     print("=" * 70)
     print(f"Optimal mass: {result.optimal_mass:.0f}kg ({result.mass_reduction_pct:.1f}% reduction)")
     print(f"Topology: {result.optimal_topology}")
-    print(f"Grouped sections: {result.optimal_group_sections}")
+    print(f"Grouped sections: {result.optimal_section_indices_by_group}")
     print(f"FEA Feasible Check: {fea_result[3]} (u_sigma={fea_result[1]:.3f}, u_delta={fea_result[2]:.3f})")
     print(f"Evaluations: {result.n_evaluations}, Time: {result.time_seconds:.1f}s")
     return result

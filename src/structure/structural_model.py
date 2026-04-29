@@ -6,6 +6,7 @@ import numpy as np
 from src.structure.enums import BeamType
 from src.structure.layout import LayoutEngineProtocol, create_layout_engine
 from src.structure.layout.params import BaseLayoutParameters, StructuralParameters
+from src.structure.section_assignment import BEAM_SECTION_TYPES, SectionAssignment
 from src.structure.section_library import SectionLibrary, SectionProperties, SectionType
 
 
@@ -127,18 +128,19 @@ class BeamManager:
 # 3. 主模型类 (入口)
 # ==========================================
 
-BEAM_TYPE_MAP = {
-    BeamType.FRAME: SectionType.BOX,
-    BeamType.MAIN: SectionType.H_MAIN,
-    BeamType.SECONDARY: SectionType.H_SEC,
-    BeamType.BRACE: SectionType.CHANNEL,
-}
+BEAM_TYPE_MAP = BEAM_SECTION_TYPES
 
 
 class StructuralModel:
-    def __init__(self, params: BaseLayoutParameters, section_lib: SectionLibrary):
+    def __init__(
+        self,
+        params: BaseLayoutParameters,
+        section_lib: SectionLibrary,
+        section_assignment: SectionAssignment | None = None,
+    ):
         self.params = params
         self.section_lib = section_lib
+        self.section_assignment = section_assignment or SectionAssignment.from_params(params)
         self.node_manager = NodeManager()
         self.beam_manager = BeamManager(self.node_manager)
 
@@ -274,14 +276,11 @@ class StructuralModel:
         self.plate_counter += 1
 
     def _get_section(self, b_type: BeamType) -> SectionProperties:
-        sec_type = BEAM_TYPE_MAP.get(b_type, SectionType.BOX)
-        idx_map = {
-            BeamType.FRAME: self.params.frame_section_index,
-            BeamType.MAIN: self.params.main_beam_section_index,
-            BeamType.SECONDARY: self.params.secondary_beam_section_index,
-            BeamType.BRACE: self.params.brace_section_index,
-        }
-        return self.section_lib.get_section(sec_type, idx_map.get(b_type, 0))
+        return self.section_assignment.section_for_beam_type(b_type, self.section_lib)
+
+    def apply_section_assignment(self, assignment: SectionAssignment) -> None:
+        self.section_assignment = assignment
+        assignment.apply_to_model(self, self.section_lib)
 
     def _cleanup_orphans(self):
         used = set()

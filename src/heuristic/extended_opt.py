@@ -146,8 +146,11 @@ class JointBayesianOptimizer:
                     topology=topology,
                     sections=sections,
                 )
-                self.evaluator.grouped_section_indices = group_sections
-                result = self.evaluator.evaluate(config)
+                result = self.evaluator.evaluate(
+                    config,
+                    section_group_rules=self.section_group_rules,
+                    section_indices_by_group=group_sections,
+                )
             except Exception as e:
                 # Evaluation failed - heavily penalize
                 trial.set_user_attr("error", str(e))
@@ -183,16 +186,18 @@ class JointBayesianOptimizer:
         pressure = parameters.get("pressure", 30000.0)
 
         # Get initial mass (max sections, default topology)
-        self.evaluator.grouped_section_indices = {
+        initial_section_indices_by_group = {
             group_id: count - 1 for group_id, count in zip(self.group_ids, self.group_sec_counts)
         }
         initial_result = self.evaluator.evaluate(
-            self.adapter.build_config(
+            config=self.adapter.build_config(
                 geometry={"L": L, "W": W, "H": H},
                 pressure=pressure,
                 topology=self.adapter.default_topology(),
                 sections=self.max_indices,
-            )
+            ),
+            section_group_rules=self.section_group_rules,
+            section_indices_by_group=initial_section_indices_by_group,
         )
         initial_mass = initial_result.mass
 
@@ -275,8 +280,10 @@ if __name__ == "__main__":
     )
     evaluator = StructuralEvaluator(
         mode="fea",
-        section_group_rules=opt.section_group_rules,
-        grouped_section_indices=result.optimal_group_sections,
     )
-    check = evaluator.evaluate(config)
+    check = evaluator.evaluate(
+        config,
+        section_group_rules=opt.section_group_rules,
+        section_indices_by_group=result.optimal_group_sections,
+    )
     print("FEA Check - u_sigma: {:.3f}, u_delta: {:.3f}".format(check.u_sigma, check.u_delta))
