@@ -18,7 +18,7 @@ import numpy as np
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 
-from src.heuristic.evaluator import StructuralEvaluator
+from src.analysis.evaluator import StructuralEvaluator
 from src.optimization.design_space import get_layout_adapter
 from src.reinforcement.sb3.env import SteelSectionOptEnvSB3
 

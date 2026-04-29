@@ -87,3 +87,7 @@ class SectionAssignment:
         if len(matches) != 1:
             raise ValueError(f"Beam type {beam_type.name} does not have exactly one section group.")
         return matches[0]
+
+
+def zero_assignment() -> SectionAssignment:
+    return SectionAssignment.by_beam_type({beam_type: 0 for beam_type in BEAM_SECTION_TYPES})

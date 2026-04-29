@@ -5,7 +5,7 @@ from typing import Any, Literal, Sequence
 
 import numpy as np
 
-from src.optimization.section_grouping.application import build_section_assignment
+from src.optimization.section_grouping.application import assign_beam_groups
 from src.optimization.section_grouping.models import SectionGroupingRuleset
 from src.structure.enums import BeamType
 from src.structure.layout.params import (
@@ -13,7 +13,7 @@ from src.structure.layout.params import (
     EngineeringLayoutParameters,
     ResearchLayoutParameters,
 )
-from src.structure.section_assignment import BEAM_SECTION_TYPES, SectionAssignment
+from src.structure.section_assignment import BEAM_SECTION_TYPES, SectionAssignment, zero_assignment
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_design import StructuralDesign
 from src.structure.structural_model import StructuralModel
@@ -65,14 +65,13 @@ class LayoutDesignAdapter:
         topology: dict[str, Any],
         section_group_rules: SectionGroupingRuleset,
         section_indices_by_group: dict[str, int],
-        section_lib: SectionLibrary | None = None,
     ) -> StructuralDesign:
         params = self.build_params(geometry=geometry, topology=topology)
         assignment = build_assignment_for_params(
             params,
             section_group_rules,
             section_indices_by_group,
-            section_lib or get_section_lib(params.layout_strategy),
+            get_section_lib(params.layout_strategy),
         )
         return StructuralDesign(
             params=params,
@@ -87,7 +86,6 @@ class LayoutDesignAdapter:
         pressure: float,
         topology: dict[str, Any],
         sections: list[int],
-        section_lib: SectionLibrary | None = None,
     ) -> StructuralDesign:
         rules = SectionGroupingRuleset.by_beam_type(self.layout_strategy)
         return self.build_design(
@@ -98,7 +96,6 @@ class LayoutDesignAdapter:
             section_indices_by_group={
                 group_id: index for group_id, index in zip(rules.group_ids(), sections)
             },
-            section_lib=section_lib,
         )
 
     def _extra_param_kwargs(self, topology: dict[str, Any]) -> dict[str, Any]:
@@ -183,12 +180,8 @@ _ADAPTERS: dict[str, LayoutDesignAdapter] = {
 _SECTION_LIB_CACHE: dict[str, SectionLibrary] = {}
 
 
-def get_default_section_lib_path(layout_strategy: str) -> str:
-    return get_layout_adapter(layout_strategy).default_section_lib_path
-
-
 def get_section_lib(layout_strategy: str = "research", file_path: str | None = None) -> SectionLibrary:
-    resolved_path = file_path or get_default_section_lib_path(layout_strategy)
+    resolved_path = file_path or get_layout_adapter(layout_strategy).default_section_lib_path
     if resolved_path not in _SECTION_LIB_CACHE:
         _SECTION_LIB_CACHE[resolved_path] = SectionLibrary(resolved_path)
     return _SECTION_LIB_CACHE[resolved_path]
@@ -204,36 +197,27 @@ def build_assignment_for_params(
     section_indices_by_group: dict[str, int],
     section_lib: SectionLibrary,
 ) -> SectionAssignment:
-    if not ruleset.prototypes:
-        return SectionAssignment.from_group_indices(
-            ruleset.group_beam_types(),
-            section_indices_by_group,
-        )
-
-    model = StructuralModel(params, section_lib, section_assignment=_zero_assignment())
+    model = StructuralModel(params, section_lib, section_assignment=zero_assignment())
     model.generate()
-    return build_section_assignment(model, ruleset, section_indices_by_group)
+    return SectionAssignment.from_group_indices(
+        ruleset.group_beam_types(),
+        section_indices_by_group,
+        beam_groups=assign_beam_groups(model, ruleset),
+    )
 
 
-def compute_mass_fast(design: StructuralDesign, section_lib: SectionLibrary) -> float:
-    return design.build_model(section_lib).calculate_mass_kg()
-
-
-def design_to_feature_vector(design: StructuralDesign, use_physics: bool = True) -> np.ndarray:
-    if not use_physics:
-        raise NotImplementedError("Index-based features are deprecated. Use physics-based features instead.")
-
-    params = design.params
-    lib = get_section_lib(params.layout_strategy)
-    adapter = get_layout_adapter(params.layout_strategy)
+def design_to_feature_vector(design: StructuralDesign) -> np.ndarray:
+    p = design.params
+    lib = get_section_lib(p.layout_strategy)
+    adapter = get_layout_adapter(p.layout_strategy)
     section_stats = _section_feature_stats(design.section_assignment, lib)
 
-    volume = params.length * params.width * params.height
-    floor_area = params.length * params.width
-    aspect_ratio = params.length / params.width if params.width > 0 else 1.0
+    volume = p.length * p.width * p.height
+    floor_area = p.length * p.width
+    aspect_ratio = p.length / p.width if p.width > 0 else 1.0
     pressure_kpa = design.pressure / 1000.0
     total_load = design.pressure * floor_area
-    n_main_beams = int(params.length / params.main_beam_spacing) + 1
+    n_main_beams = int(p.length / p.main_beam_spacing) + 1
 
     areas = section_stats["areas"]
     ixs = section_stats["ixs"]
@@ -248,16 +232,16 @@ def design_to_feature_vector(design: StructuralDesign, use_physics: bool = True)
     strength_load_ratio = total_area / (total_load / 1e6 + 1e-10)
 
     features = [
-        params.length,
-        params.width,
-        params.height,
+        p.length,
+        p.width,
+        p.height,
         volume,
         floor_area,
         aspect_ratio,
         pressure_kpa,
         total_load / 1e6,
-        params.main_beam_spacing,
-        *adapter.topology_feature_values(params),
+        p.main_beam_spacing,
+        *adapter.topology_feature_values(p),
         float(n_main_beams),
         *areas,
         *ixs,
@@ -328,10 +312,6 @@ def _section_feature_stats(assignment: SectionAssignment, lib: SectionLibrary) -
         iys.append(float(np.mean([section.Iy * 1e8 for section in sections])))
 
     return {"areas": areas, "ixs": ixs, "iys": iys}
-
-
-def _zero_assignment() -> SectionAssignment:
-    return SectionAssignment.by_beam_type({beam_type: 0 for beam_type in BEAM_SECTION_TYPES})
 
 
 def sample_spec_from_unit(spec: VariableSpec, value: float) -> Any:

@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
 from src.analysis.surrogate_model import AdvancedSurrogateModel
-from src.optimization.design_space import compute_mass_fast, get_section_lib
+from src.optimization.design_space import get_section_lib
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.structural_design import StructuralDesign
 
@@ -87,8 +87,7 @@ class StructuralEvaluator:
         )
 
     def _evaluate_surrogate(self, design: StructuralDesign) -> EvalResult:
-        section_lib = get_section_lib(design.layout_strategy, self.section_lib_path)
-        mass = compute_mass_fast(design, section_lib)
+        mass = self.get_mass_only(design)
         u_sigma, u_delta = self.surrogate.predict(design)
 
         return EvalResult(
@@ -102,11 +101,7 @@ class StructuralEvaluator:
         if self.mode != "surrogate":
             return [self._evaluate_fea(design) for design in designs]
 
-        section_libs = {
-            design.layout_strategy: get_section_lib(design.layout_strategy, self.section_lib_path)
-            for design in designs
-        }
-        masses = [compute_mass_fast(design, section_libs[design.layout_strategy]) for design in designs]
+        masses = [self.get_mass_only(design) for design in designs]
         sigmas, deltas = self.surrogate.predict_batch(designs)
         return [
             EvalResult(
@@ -119,7 +114,8 @@ class StructuralEvaluator:
         ]
 
     def get_mass_only(self, design: StructuralDesign) -> float:
-        return compute_mass_fast(design, get_section_lib(design.layout_strategy, self.section_lib_path))
+        section_lib = get_section_lib(design.layout_strategy, self.section_lib_path)
+        return design.build_model(section_lib).calculate_mass_kg()
 
 
 def evaluate_design(

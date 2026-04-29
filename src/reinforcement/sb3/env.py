@@ -13,7 +13,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from src.heuristic.evaluator import StructuralEvaluator
+from src.analysis.evaluator import StructuralEvaluator
 from src.optimization.design_space import get_layout_adapter
 from src.structure.section_library import SectionLibrary, SectionType
 
@@ -240,7 +240,6 @@ class SteelSectionOptEnvSB3(gym.Env):
                 "add_support_beam": self.add_support_beam,
             },
             sections=sections,
-            section_lib=self.section_lib,
         )
 
     def _get_section_properties(self) -> Tuple[List[float], List[float], List[float]]:

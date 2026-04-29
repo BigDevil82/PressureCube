@@ -37,6 +37,14 @@ class SectionGroupingRuleset:
 
     规则集不保存 beam_id，因为 beam_id 随拓扑和网格变化不稳定。它保存每个
     梁组的几何原型，并在新模型中通过“梁类型 + 几何最近原型”动态分配组别。
+
+    params:
+        layout_strategy: 适用的布局策略，决定了几何特征的定义。
+        n_groups_by_type: 每种梁类型的组数（如果没有 prototypes 的话）。例如 {"FRAME": 2, "MAIN": 1} 表示 FRAME 梁分成两组，MAIN 梁分成一组，其他梁类型不分组（1组）。
+        prototypes: 稳定分组的几何原型列表。
+        feature_schema: 定义 prototype_centroid 中每个维度的几何特征名称，便于解释和调试。
+        created_from_samples: 该规则集是基于多少个样本创建的，便于评估规则集的泛化能力。
+        description: 规则集的文本描述，便于记录设计思路和使用注意事项。
     """
 
     layout_strategy: str

@@ -14,7 +14,7 @@ from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.analysis.surrogate_data import detect_feature_format
-from src.optimization.design_space import compute_mass_fast, design_to_feature_vector, get_section_lib
+from src.optimization.design_space import design_to_feature_vector, get_section_lib
 from src.structure.structural_design import StructuralDesign
 
 
@@ -442,18 +442,14 @@ class AdvancedSurrogateModel:
 
     def predict(self, design: StructuralDesign) -> Tuple[float, float]:
         """Predict for a single design."""
-        X = design_to_feature_vector(design, use_physics=self.use_physics_features).reshape(1, -1)
+        X = design_to_feature_vector(design).reshape(1, -1)
         pred_sigma, pred_delta = self.trainer.predict(X)
         return float(pred_sigma[0]), float(pred_delta[0])
 
     def predict_batch(self, designs: List[StructuralDesign]) -> Tuple[np.ndarray, np.ndarray]:
         """Batch prediction."""
-        X = np.array([design_to_feature_vector(design, use_physics=self.use_physics_features) for design in designs])
+        X = np.array([design_to_feature_vector(design) for design in designs])
         return self.trainer.predict(X)
-
-    def get_mass(self, design: StructuralDesign) -> float:
-        """Fast mass calculation."""
-        return compute_mass_fast(design, get_section_lib(design.layout_strategy))
 
     def save(self, path: str):
         """Save model."""

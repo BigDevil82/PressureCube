@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from src.structure.layout.params import BaseLayoutParameters
 from src.structure.section_assignment import SectionAssignment
 from src.structure.section_library import SectionLibrary
+from src.structure.structural_model import StructuralModel
 
 
 @dataclass
@@ -26,8 +27,6 @@ class StructuralDesign:
         return self.params.layout_strategy
 
     def build_model(self, section_lib: SectionLibrary):
-        from src.structure.structural_model import StructuralModel
-
         model = StructuralModel(self.params, section_lib, section_assignment=self.section_assignment)
         model.generate()
         return model

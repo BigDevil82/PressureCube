@@ -19,13 +19,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import xgboost as xgb
 from joblib import Parallel, delayed
 from scipy.stats import qmc
-from torch.utils.data import DataLoader, TensorDataset
 
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
@@ -207,7 +202,6 @@ class DataCollector:
                         pressure=pressure_pa,
                         topology=topology,
                         sections=sections,
-                        section_lib=self.section_lib,
                     )
                 )
 
@@ -255,7 +249,8 @@ class DataCollector:
                 models.append(design.build_model(self.section_lib))
 
             batch_results = Parallel(n_jobs=self.n_jobs, backend="loky", verbose=10)(
-                delayed(_run_single_fea)(model, design.pressure) for model, design in zip(models, batch_configs)
+                delayed(_run_single_fea)(model, design.pressure)
+                for model, design in zip(models, batch_configs)
             )
 
             all_results.extend(batch_results)

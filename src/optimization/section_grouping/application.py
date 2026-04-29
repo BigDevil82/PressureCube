@@ -22,7 +22,7 @@ def assign_beam_groups(model: StructuralModel, ruleset: SectionGroupingRuleset) 
         if beam.is_virtual:
             continue
         prototypes = prototypes_by_type.get(beam.beam_type, [])
-        if not prototypes and ruleset.n_groups_by_type.get(beam.beam_type, 0) == 1:
+        if not prototypes and ruleset.n_groups_by_type.get(beam.beam_type, 1) == 1:
             assignments[beam_id] = f"{beam.beam_type.name}-SG1"
             continue
         if not prototypes:
@@ -34,37 +34,6 @@ def assign_beam_groups(model: StructuralModel, ruleset: SectionGroupingRuleset) 
         ]
         assignments[beam_id] = prototypes[int(np.argmin(distances))].group_id
     return assignments
-
-
-def apply_group_sections(
-    model: StructuralModel,
-    section_lib: SectionLibrary,
-    ruleset: SectionGroupingRuleset,
-    section_indices_by_group: dict[str, int],
-) -> dict[int, str]:
-    """按分组规则更新模型中每根梁的截面。
-
-    返回 beam_id -> group_id，便于调试和可视化。没有匹配到 prototype 的梁保持
-    原截面不变。
-    """
-
-    assignment = build_section_assignment(model, ruleset, section_indices_by_group)
-    model.apply_section_assignment(assignment)
-    return assignment.beam_groups
-
-
-def build_section_assignment(
-    model: StructuralModel,
-    ruleset: SectionGroupingRuleset,
-    section_indices_by_group: dict[str, int],
-) -> SectionAssignment:
-    """Build a concrete section assignment for the current generated model."""
-
-    return SectionAssignment.from_group_indices(
-        ruleset.group_beam_types(),
-        section_indices_by_group,
-        beam_groups=assign_beam_groups(model, ruleset),
-    )
 
 
 def section_counts_for_groups(ruleset: SectionGroupingRuleset, section_lib: SectionLibrary) -> list[int]:

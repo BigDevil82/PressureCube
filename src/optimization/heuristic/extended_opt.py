@@ -29,7 +29,7 @@ from typing import Optional
 import optuna
 from optuna.samplers import TPESampler
 
-from src.heuristic.evaluator import StructuralEvaluator
+from src.analysis.evaluator import StructuralEvaluator
 from src.optimization.design_space import get_layout_adapter, get_section_lib, suggest_spec_with_optuna
 from src.optimization.section_grouping import SectionGroupingRuleset, section_counts_for_groups
 
@@ -240,8 +240,12 @@ if __name__ == "__main__":
     parser.add_argument("--pressure", type=float, default=30000.0)
     parser.add_argument("--mode", type=str, default="fea", choices=["fea", "surrogate"])
     parser.add_argument("--surrogate", type=str, default=None, help="Path to surrogate model")
-    parser.add_argument("--layout-strategy", type=str, default="research", choices=["research", "engineering"])
-    parser.add_argument("--section-group-rules", type=str, default=None, help="Path to section grouping ruleset JSON")
+    parser.add_argument(
+        "--layout-strategy", type=str, default="research", choices=["research", "engineering"]
+    )
+    parser.add_argument(
+        "--section-group-rules", type=str, default=None, help="Path to section grouping ruleset JSON"
+    )
     args = parser.parse_args()
 
     parameter = {"L": args.L, "W": args.W, "H": args.H, "pressure": args.pressure}
