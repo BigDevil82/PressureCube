@@ -37,6 +37,8 @@ class Logger:
         Logger._loggers[log_file] = self.logger
 
     def _init_loggers(self, level, name=None):
+        if self.disable:
+            return
         # print("_loggers: ", Logger._loggers)
         if self.log_file in Logger._loggers:
             self.logger = Logger._loggers[self.log_file]
