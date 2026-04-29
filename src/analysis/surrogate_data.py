@@ -32,36 +32,14 @@ from src.optimization.design_space import (
     sample_spec_from_unit,
 )
 from src.structure.mesh_generator import MeshGenerator
-from src.structure.section_library import SectionLibrary, SectionType
+from src.structure.section_library import SectionType
 from src.structure.structural_design import StructuralDesign
 from src.structure.structural_model import StructuralModel
 
 # ============================================================================
-# Feature Engineering
-# ============================================================================
-
-
-def detect_feature_format(X: np.ndarray) -> str:
-    """
-    Detect whether features are in old index format (12-dim) or new physics format (31-dim).
-
-    Returns: "index" or "physics"
-    """
-    n_features = X.shape[1]
-    if n_features == 12:
-        print(
-            "Detected index-based features (12 dimensions). This format is deprecated. Please use physics-based features instead."
-        )
-        return "index"
-    elif n_features >= 30:
-        return "physics"
-    else:
-        raise ValueError(f"Unknown feature format with {n_features} dimensions. Expected 12 or >=30.")
-
-
-# ============================================================================
 # Data Collection
 # ============================================================================
+MESH_SIZE = 0.5  # Global mesh size for FEA
 
 
 def _run_single_fea(model: StructuralModel, pressure: float) -> Tuple[float, float, float, bool]:
@@ -71,7 +49,7 @@ def _run_single_fea(model: StructuralModel, pressure: float) -> Tuple[float, flo
     """
     try:
         mass = model.calculate_mass_kg()
-        mesh_generator = MeshGenerator(model, 0.5)
+        mesh_generator = MeshGenerator(model, MESH_SIZE)
         model = mesh_generator.generate()
 
         solver = OpenSeesSolver(model)

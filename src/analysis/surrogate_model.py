@@ -13,7 +13,6 @@ import torch.optim as optim
 from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.analysis.surrogate_data import detect_feature_format
 from src.optimization.design_space import design_to_feature_vector, get_section_lib
 from src.structure.structural_design import StructuralDesign
 
@@ -371,14 +370,12 @@ class AdvancedSurrogateModel:
         self.strategy = "kfold_resnet"
         self.trainer: Optional[KFoldTrainer] = None
         self.is_trained = False
-        self.use_physics_features = True
         self.section_lib = None
 
     def train(
         self,
         dataset_path: str,
         test_ratio: float = 0.1,
-        use_physics_features: bool = True,
         **kwargs,
     ) -> Dict:
         """Train the model."""
@@ -388,14 +385,6 @@ class AdvancedSurrogateModel:
         X = data["X"]
         y_sigma = data["y_sigma"]
         y_delta = data["y_delta"]
-
-        feature_format = detect_feature_format(X)
-        print(f"Detected feature format: {feature_format} ({X.shape[1]} dimensions)")
-
-        if use_physics_features and feature_format == "index":
-            raise ValueError("Index format is deprecated. Please convert to physics features first.")
-
-        self.use_physics_features = use_physics_features
 
         n = len(X)
         n_test = int(n * test_ratio)
@@ -455,7 +444,6 @@ class AdvancedSurrogateModel:
         """Save model."""
         data = {
             "strategy": self.strategy,
-            "use_physics_features": self.use_physics_features,
             "trainer_state": self.trainer.get_state(),
         }
         with open(path, "wb") as f:
@@ -473,7 +461,6 @@ class AdvancedSurrogateModel:
             raise ValueError(f"Unsupported model strategy: {strategy}. Only 'kfold_resnet' is supported.")
 
         model = cls()
-        model.use_physics_features = data["use_physics_features"]
         model.trainer = KFoldTrainer(KFoldConfig())
         model.trainer.load_state(data["trainer_state"])
 

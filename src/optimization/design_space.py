@@ -256,10 +256,7 @@ def design_to_feature_vector(design: StructuralDesign) -> np.ndarray:
     return np.array(features, dtype=np.float32)
 
 
-def feature_names(layout_strategy: str, use_physics: bool = True) -> list[str]:
-    if not use_physics:
-        raise NotImplementedError("Index-based features are deprecated. Use physics-based features instead.")
-
+def feature_names(layout_strategy: str) -> list[str]:
     adapter = get_layout_adapter(layout_strategy)
     return [
         "L",
