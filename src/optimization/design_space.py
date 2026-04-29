@@ -1,16 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, Sequence
 
 import numpy as np
 
+from src.optimization.section_grouping.application import build_section_assignment
+from src.optimization.section_grouping.models import SectionGroupingRuleset
+from src.structure.enums import BeamType
 from src.structure.layout.params import (
     BaseLayoutParameters,
     EngineeringLayoutParameters,
     ResearchLayoutParameters,
 )
-from src.structure.section_library import SectionLibrary, SectionType
+from src.structure.section_assignment import BEAM_SECTION_TYPES, SectionAssignment
+from src.structure.section_library import SectionLibrary
+from src.structure.structural_design import StructuralDesign
+from src.structure.structural_model import StructuralModel
 
 
 @dataclass(frozen=True)
@@ -24,159 +30,8 @@ class VariableSpec:
     default: Any = None
 
 
-@dataclass
-class DesignConfig:
-    L: float
-    W: float
-    H: float
-    pressure: float
-    main_beam_spacing: float
-    add_support_beam: bool
-    frame_section_index: int
-    main_beam_section_index: int
-    secondary_beam_section_index: int
-    brace_section_index: int
-    layout_strategy: str = field(init=False, default="base")
-
-    def section_indices(self) -> list[int]:
-        return [
-            self.frame_section_index,
-            self.main_beam_section_index,
-            self.secondary_beam_section_index,
-            self.brace_section_index,
-        ]
-
-    def topology_dict(self) -> dict[str, Any]:
-        raise NotImplementedError
-
-    def to_feature_vector(self, use_physics: bool = True) -> np.ndarray:
-        if not use_physics:
-            raise NotImplementedError(
-                "Index-based features are deprecated. Use physics-based features instead."
-            )
-
-        lib = get_section_lib(self.layout_strategy)
-        adapter = get_layout_adapter(self.layout_strategy)
-        sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
-        sections = [
-            lib.get_section(sec_type, idx) for sec_type, idx in zip(sec_types, self.section_indices())
-        ]
-
-        volume = self.L * self.W * self.H
-        floor_area = self.L * self.W
-        aspect_ratio = self.L / self.W if self.W > 0 else 1.0
-        pressure_kpa = self.pressure / 1000.0
-        total_load = self.pressure * floor_area
-        n_main_beams = int(self.L / self.main_beam_spacing) + 1
-
-        areas = [section.area * 1e4 for section in sections]
-        ixs = [section.Ix * 1e8 for section in sections]
-        iys = [section.Iy * 1e8 for section in sections]
-
-        total_area = sum(areas)
-        avg_ix = float(np.mean(ixs))
-        min_ix = min(ixs)
-        max_ix = max(ixs)
-        ix_ratio = min_ix / (max_ix + 1e-10)
-        stiffness_load_ratio = avg_ix / (total_load / 1e6 + 1e-10)
-        strength_load_ratio = total_area / (total_load / 1e6 + 1e-10)
-
-        features = [
-            self.L,
-            self.W,
-            self.H,
-            volume,
-            floor_area,
-            aspect_ratio,
-            pressure_kpa,
-            total_load / 1e6,
-            self.main_beam_spacing,
-            *adapter.topology_feature_values(self),
-            float(n_main_beams),
-            *areas,
-            *ixs,
-            *iys,
-            total_area,
-            avg_ix,
-            min_ix,
-            ix_ratio,
-            stiffness_load_ratio,
-            strength_load_ratio,
-        ]
-        return np.array(features, dtype=np.float32)
-
-    @classmethod
-    def feature_names(cls, layout_strategy: str, use_physics: bool = True) -> list[str]:
-        if not use_physics:
-            raise NotImplementedError(
-                "Index-based features are deprecated. Use physics-based features instead."
-            )
-
-        adapter = get_layout_adapter(layout_strategy)
-        return [
-            "L",
-            "W",
-            "H",
-            "volume",
-            "floor_area",
-            "aspect_ratio",
-            "pressure_kPa",
-            "total_load_MN",
-            "main_beam_spacing",
-            *adapter.topology_feature_names(),
-            "n_main_beams",
-            "frame_area",
-            "main_area",
-            "sec_area",
-            "brace_area",
-            "frame_Ix",
-            "main_Ix",
-            "sec_Ix",
-            "brace_Ix",
-            "frame_Iy",
-            "main_Iy",
-            "sec_Iy",
-            "brace_Iy",
-            "total_area",
-            "avg_Ix",
-            "min_Ix",
-            "Ix_ratio",
-            "stiffness_load_ratio",
-            "strength_load_ratio",
-        ]
-
-
-@dataclass
-class ResearchDesignConfig(DesignConfig):
-    num_secondary_width: int = 3
-    num_secondary_height: int = 3
-    layout_strategy: Literal["research"] = field(init=False, default="research")
-
-    def topology_dict(self) -> dict[str, Any]:
-        return {
-            "main_beam_spacing": self.main_beam_spacing,
-            "num_secondary_width": self.num_secondary_width,
-            "num_secondary_height": self.num_secondary_height,
-            "add_support_beam": self.add_support_beam,
-        }
-
-
-@dataclass
-class EngineeringDesignConfig(DesignConfig):
-    support_beam_max_spacing: float = 0.75
-    layout_strategy: Literal["engineering"] = field(init=False, default="engineering")
-
-    def topology_dict(self) -> dict[str, Any]:
-        return {
-            "main_beam_spacing": self.main_beam_spacing,
-            "support_beam_max_spacing": self.support_beam_max_spacing,
-            "add_support_beam": self.add_support_beam,
-        }
-
-
 class LayoutDesignAdapter:
     layout_strategy: str
-    config_cls: type[DesignConfig]
     params_cls: type[BaseLayoutParameters]
     default_section_lib_path: str
 
@@ -186,48 +41,72 @@ class LayoutDesignAdapter:
     def topology_feature_names(self) -> list[str]:
         raise NotImplementedError
 
-    def topology_feature_values(self, config: DesignConfig) -> list[float]:
+    def topology_feature_values(self, params: BaseLayoutParameters) -> list[float]:
         raise NotImplementedError
 
     def default_topology(self) -> dict[str, Any]:
         return {spec.name: spec.default for spec in self.topology_specs()}
 
-    def build_config(
-        self, *, geometry: dict[str, float], pressure: float, topology: dict[str, Any], sections: list[int]
-    ) -> DesignConfig:
-        return self.config_cls(
-            L=geometry["L"],
-            W=geometry["W"],
-            H=geometry["H"],
-            pressure=pressure,
-            frame_section_index=sections[0],
-            main_beam_section_index=sections[1],
-            secondary_beam_section_index=sections[2],
-            brace_section_index=sections[3],
-            **topology,
-        )
-
-    def build_params(self, config: DesignConfig) -> BaseLayoutParameters:
+    def build_params(self, *, geometry: dict[str, float], topology: dict[str, Any]) -> BaseLayoutParameters:
         return self.params_cls(
-            length=config.L,
-            width=config.W,
-            height=config.H,
-            main_beam_spacing=config.main_beam_spacing,
-            add_support_beam=config.add_support_beam,
-            frame_section_index=config.frame_section_index,
-            main_beam_section_index=config.main_beam_section_index,
-            secondary_beam_section_index=config.secondary_beam_section_index,
-            brace_section_index=config.brace_section_index,
-            **self._extra_param_kwargs(config),
+            length=geometry["L"],
+            width=geometry["W"],
+            height=geometry["H"],
+            main_beam_spacing=topology["main_beam_spacing"],
+            add_support_beam=topology["add_support_beam"],
+            **self._extra_param_kwargs(topology),
         )
 
-    def _extra_param_kwargs(self, config: DesignConfig) -> dict[str, Any]:
+    def build_design(
+        self,
+        *,
+        geometry: dict[str, float],
+        pressure: float,
+        topology: dict[str, Any],
+        section_group_rules: SectionGroupingRuleset,
+        section_indices_by_group: dict[str, int],
+        section_lib: SectionLibrary | None = None,
+    ) -> StructuralDesign:
+        params = self.build_params(geometry=geometry, topology=topology)
+        assignment = build_assignment_for_params(
+            params,
+            section_group_rules,
+            section_indices_by_group,
+            section_lib or get_section_lib(params.layout_strategy),
+        )
+        return StructuralDesign(
+            params=params,
+            pressure=pressure,
+            section_assignment=assignment,
+        )
+
+    def build_design_from_sections(
+        self,
+        *,
+        geometry: dict[str, float],
+        pressure: float,
+        topology: dict[str, Any],
+        sections: list[int],
+        section_lib: SectionLibrary | None = None,
+    ) -> StructuralDesign:
+        rules = SectionGroupingRuleset.by_beam_type(self.layout_strategy)
+        return self.build_design(
+            geometry=geometry,
+            pressure=pressure,
+            topology=topology,
+            section_group_rules=rules,
+            section_indices_by_group={
+                group_id: index for group_id, index in zip(rules.group_ids(), sections)
+            },
+            section_lib=section_lib,
+        )
+
+    def _extra_param_kwargs(self, topology: dict[str, Any]) -> dict[str, Any]:
         return {}
 
 
 class ResearchLayoutAdapter(LayoutDesignAdapter):
     layout_strategy = "research"
-    config_cls = ResearchDesignConfig
     params_cls = ResearchLayoutParameters
     default_section_lib_path = "src/data/steel_sections_large.json"
 
@@ -248,25 +127,23 @@ class ResearchLayoutAdapter(LayoutDesignAdapter):
     def topology_feature_names(self) -> list[str]:
         return ["num_secondary_width", "num_secondary_height", "add_support_beam"]
 
-    def topology_feature_values(self, config: DesignConfig) -> list[float]:
-        assert isinstance(config, ResearchDesignConfig)
+    def topology_feature_values(self, params: BaseLayoutParameters) -> list[float]:
+        assert isinstance(params, ResearchLayoutParameters)
         return [
-            float(config.num_secondary_width),
-            float(config.num_secondary_height),
-            float(config.add_support_beam),
+            float(params.num_secondary_width),
+            float(params.num_secondary_height),
+            float(params.add_support_beam),
         ]
 
-    def _extra_param_kwargs(self, config: DesignConfig) -> dict[str, Any]:
-        assert isinstance(config, ResearchDesignConfig)
+    def _extra_param_kwargs(self, topology: dict[str, Any]) -> dict[str, Any]:
         return {
-            "num_secondary_width": config.num_secondary_width,
-            "num_secondary_height": config.num_secondary_height,
+            "num_secondary_width": topology["num_secondary_width"],
+            "num_secondary_height": topology["num_secondary_height"],
         }
 
 
 class EngineeringLayoutAdapter(LayoutDesignAdapter):
     layout_strategy = "engineering"
-    config_cls = EngineeringDesignConfig
     params_cls = EngineeringLayoutParameters
     default_section_lib_path = "src/data/steel_sections.json"
 
@@ -290,13 +167,12 @@ class EngineeringLayoutAdapter(LayoutDesignAdapter):
     def topology_feature_names(self) -> list[str]:
         return ["support_beam_max_spacing", "add_support_beam"]
 
-    def topology_feature_values(self, config: DesignConfig) -> list[float]:
-        assert isinstance(config, EngineeringDesignConfig)
-        return [float(config.support_beam_max_spacing), float(config.add_support_beam)]
+    def topology_feature_values(self, params: BaseLayoutParameters) -> list[float]:
+        assert isinstance(params, EngineeringLayoutParameters)
+        return [float(params.support_beam_max_spacing), float(params.add_support_beam)]
 
-    def _extra_param_kwargs(self, config: DesignConfig) -> dict[str, Any]:
-        assert isinstance(config, EngineeringDesignConfig)
-        return {"support_beam_max_spacing": config.support_beam_max_spacing}
+    def _extra_param_kwargs(self, topology: dict[str, Any]) -> dict[str, Any]:
+        return {"support_beam_max_spacing": topology["support_beam_max_spacing"]}
 
 
 _ADAPTERS: dict[str, LayoutDesignAdapter] = {
@@ -319,49 +195,143 @@ def get_section_lib(layout_strategy: str = "research", file_path: str | None = N
 
 
 def get_layout_adapter(layout_strategy: str) -> LayoutDesignAdapter:
-    if layout_strategy not in _ADAPTERS:
-        raise ValueError(f"Unsupported layout strategy: {layout_strategy}")
     return _ADAPTERS[layout_strategy]
 
 
-def build_params_from_config(config: DesignConfig) -> BaseLayoutParameters:
-    return get_layout_adapter(config.layout_strategy).build_params(config)
+def build_assignment_for_params(
+    params: BaseLayoutParameters,
+    ruleset: SectionGroupingRuleset,
+    section_indices_by_group: dict[str, int],
+    section_lib: SectionLibrary,
+) -> SectionAssignment:
+    if not ruleset.prototypes:
+        return SectionAssignment.from_group_indices(
+            ruleset.group_beam_types(),
+            section_indices_by_group,
+        )
 
-
-def compute_mass_fast(config: DesignConfig, section_lib: SectionLibrary) -> float:
-    from src.structure.structural_model import StructuralModel
-
-    params = build_params_from_config(config)
-    model = StructuralModel(params, section_lib)
+    model = StructuralModel(params, section_lib, section_assignment=_zero_assignment())
     model.generate()
-    return model.calculate_mass_kg()
+    return build_section_assignment(model, ruleset, section_indices_by_group)
 
 
-def design_config_from_params(params: BaseLayoutParameters, pressure: float) -> DesignConfig:
-    common = dict(
-        L=params.length,
-        W=params.width,
-        H=params.height,
-        pressure=pressure,
-        main_beam_spacing=params.main_beam_spacing,
-        add_support_beam=params.add_support_beam,
-        frame_section_index=params.frame_section_index,
-        main_beam_section_index=params.main_beam_section_index,
-        secondary_beam_section_index=params.secondary_beam_section_index,
-        brace_section_index=params.brace_section_index,
-    )
-    if isinstance(params, ResearchLayoutParameters):
-        return ResearchDesignConfig(
-            **common,
-            num_secondary_width=params.num_secondary_width,
-            num_secondary_height=params.num_secondary_height,
-        )
-    if isinstance(params, EngineeringLayoutParameters):
-        return EngineeringDesignConfig(
-            **common,
-            support_beam_max_spacing=params.support_beam_max_spacing,
-        )
-    raise TypeError(f"Unsupported params type: {type(params)}")
+def compute_mass_fast(design: StructuralDesign, section_lib: SectionLibrary) -> float:
+    return design.build_model(section_lib).calculate_mass_kg()
+
+
+def design_to_feature_vector(design: StructuralDesign, use_physics: bool = True) -> np.ndarray:
+    if not use_physics:
+        raise NotImplementedError("Index-based features are deprecated. Use physics-based features instead.")
+
+    params = design.params
+    lib = get_section_lib(params.layout_strategy)
+    adapter = get_layout_adapter(params.layout_strategy)
+    section_stats = _section_feature_stats(design.section_assignment, lib)
+
+    volume = params.length * params.width * params.height
+    floor_area = params.length * params.width
+    aspect_ratio = params.length / params.width if params.width > 0 else 1.0
+    pressure_kpa = design.pressure / 1000.0
+    total_load = design.pressure * floor_area
+    n_main_beams = int(params.length / params.main_beam_spacing) + 1
+
+    areas = section_stats["areas"]
+    ixs = section_stats["ixs"]
+    iys = section_stats["iys"]
+
+    total_area = sum(areas)
+    avg_ix = float(np.mean(ixs))
+    min_ix = min(ixs)
+    max_ix = max(ixs)
+    ix_ratio = min_ix / (max_ix + 1e-10)
+    stiffness_load_ratio = avg_ix / (total_load / 1e6 + 1e-10)
+    strength_load_ratio = total_area / (total_load / 1e6 + 1e-10)
+
+    features = [
+        params.length,
+        params.width,
+        params.height,
+        volume,
+        floor_area,
+        aspect_ratio,
+        pressure_kpa,
+        total_load / 1e6,
+        params.main_beam_spacing,
+        *adapter.topology_feature_values(params),
+        float(n_main_beams),
+        *areas,
+        *ixs,
+        *iys,
+        total_area,
+        avg_ix,
+        min_ix,
+        ix_ratio,
+        stiffness_load_ratio,
+        strength_load_ratio,
+    ]
+    return np.array(features, dtype=np.float32)
+
+
+def feature_names(layout_strategy: str, use_physics: bool = True) -> list[str]:
+    if not use_physics:
+        raise NotImplementedError("Index-based features are deprecated. Use physics-based features instead.")
+
+    adapter = get_layout_adapter(layout_strategy)
+    return [
+        "L",
+        "W",
+        "H",
+        "volume",
+        "floor_area",
+        "aspect_ratio",
+        "pressure_kPa",
+        "total_load_MN",
+        "main_beam_spacing",
+        *adapter.topology_feature_names(),
+        "n_main_beams",
+        "frame_area_mean",
+        "main_area_mean",
+        "sec_area_mean",
+        "brace_area_mean",
+        "frame_Ix_mean",
+        "main_Ix_mean",
+        "sec_Ix_mean",
+        "brace_Ix_mean",
+        "frame_Iy_mean",
+        "main_Iy_mean",
+        "sec_Iy_mean",
+        "brace_Iy_mean",
+        "total_area",
+        "avg_Ix",
+        "min_Ix",
+        "Ix_ratio",
+        "stiffness_load_ratio",
+        "strength_load_ratio",
+    ]
+
+
+def _section_feature_stats(assignment: SectionAssignment, lib: SectionLibrary) -> dict[str, list[float]]:
+    groups_by_type: dict[BeamType, list[str]] = {beam_type: [] for beam_type in BEAM_SECTION_TYPES}
+    for group_id, group in assignment.groups.items():
+        groups_by_type[group.beam_type].append(group_id)
+
+    areas = []
+    ixs = []
+    iys = []
+    for beam_type in sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value)):
+        sections = [
+            lib.get_section(BEAM_SECTION_TYPES[beam_type], assignment.section_indices[group_id])
+            for group_id in groups_by_type[beam_type]
+        ]
+        areas.append(float(np.mean([section.area * 1e4 for section in sections])))
+        ixs.append(float(np.mean([section.Ix * 1e8 for section in sections])))
+        iys.append(float(np.mean([section.Iy * 1e8 for section in sections])))
+
+    return {"areas": areas, "ixs": ixs, "iys": iys}
+
+
+def _zero_assignment() -> SectionAssignment:
+    return SectionAssignment.by_beam_type({beam_type: 0 for beam_type in BEAM_SECTION_TYPES})
 
 
 def sample_spec_from_unit(spec: VariableSpec, value: float) -> Any:

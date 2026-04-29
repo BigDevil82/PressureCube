@@ -13,6 +13,7 @@ from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.results import AnalysisResults
 from src.analysis.unit import M_TO_MM
 from src.structure.layout.params import StructuralParameters
+from src.structure.section_assignment import SectionAssignment
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import BeamType, StructuralModel
 
@@ -186,14 +187,13 @@ if __name__ == "__main__":
         num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
         num_secondary_height=3,  # 高度方向分3段
         add_support_beam=True,  # 添加支撑梁
-        frame_section_index=0,
-        main_beam_section_index=0,
-        secondary_beam_section_index=0,
-        brace_section_index=0,
         plate_thickness=0.005,
     )
 
-    model = StructuralModel(params, SectionLibrary())
+    assignment = SectionAssignment.by_beam_type(
+        {BeamType.FRAME: 0, BeamType.MAIN: 0, BeamType.SECONDARY: 0, BeamType.BRACE: 0}
+    )
+    model = StructuralModel(params, SectionLibrary(), section_assignment=assignment)
     model.generate()
 
     mesh_generator = MeshGenerator(model, 0.3)

@@ -8,14 +8,14 @@ from src.app.model_visualization import build_structure_figure
 from src.app.result_visualization import build_modal_result_figure, build_static_result_figure
 from src.app.section_grouping_visualization import build_section_grouping_figure
 from src.app.session import AppSession
-from src.optimization.section_grouping import (
+from src.optimization.section_grouping.discovery import (
     RepresentativeAnalysis,
     SectionGroupingDiscoveryConfig,
     discover_section_group_rules_with_assignments,
 )
 from src.structure.enums import BeamType
 from src.structure.layout.params import EngineeringLayoutParameters, ResearchLayoutParameters
-from src.structure.section_library import SectionType
+from src.structure.section_assignment import BEAM_SECTION_TYPES
 from src.structure.structural_model import StructuralModel
 
 st.set_page_config(layout="wide", page_title="有限元模型")
@@ -129,12 +129,18 @@ with col1:
                 st.write(f"支撑梁最大间距: {params.support_beam_max_spacing:.2f} m")
         with summary_col2:
             lib = session.section_library
-            st.write(f"Frame: {lib.get_section(SectionType.BOX, params.frame_section_index).name}")
-            st.write(f"Main: {lib.get_section(SectionType.H_MAIN, params.main_beam_section_index).name}")
-            st.write(
-                f"Secondary: {lib.get_section(SectionType.H_SEC, params.secondary_beam_section_index).name}"
-            )
-            st.write(f"Brace: {lib.get_section(SectionType.CHANNEL, params.brace_section_index).name}")
+            assignment = session.model.section_assignment
+            for beam_type in sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value)):
+                group_ids = [
+                    group_id
+                    for group_id, group in assignment.groups.items()
+                    if group.beam_type == beam_type
+                ]
+                names = [
+                    lib.get_section(BEAM_SECTION_TYPES[beam_type], assignment.section_indices[group_id]).name
+                    for group_id in group_ids
+                ]
+                st.write(f"{beam_type.name}: {', '.join(names)}")
         with summary_col3:
             st.write(f"截面库: {'研究版' if 'large' in getattr(lib, 'file_path', '') else '工程版'}")
             if isinstance(params, ResearchLayoutParameters):

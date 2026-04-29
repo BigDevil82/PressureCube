@@ -14,6 +14,7 @@ import numpy as np
 from gymnasium import spaces
 
 from src.heuristic.evaluator import StructuralEvaluator
+from src.optimization.design_space import get_layout_adapter
 from src.structure.section_library import SectionLibrary, SectionType
 
 
@@ -51,6 +52,7 @@ class SteelSectionOptEnvSB3(gym.Env):
 
         # Section library
         self.section_lib = SectionLibrary("src/data/steel_sections_large.json")
+        self.adapter = get_layout_adapter("research")
         self.sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
         self.sec_counts = [self.section_lib.section_counts[t] for t in self.sec_types]
         self.max_indices = np.array(self.sec_counts, dtype=np.int64) - 1
@@ -215,17 +217,7 @@ class SteelSectionOptEnvSB3(gym.Env):
 
     def _evaluate(self) -> Dict:
         """Run evaluation and return metrics."""
-        result = self.evaluator.evaluate(
-            L=self.L,
-            W=self.W,
-            H=self.H,
-            pressure=self.pressure,
-            main_beam_spacing=self.main_beam_spacing,
-            num_secondary_width=self.num_secondary_width,
-            num_secondary_height=self.num_secondary_height,
-            add_support_beam=self.add_support_beam,
-            sections=self.idx.tolist(),
-        )
+        result = self.evaluator.evaluate(self._build_design(self.idx.tolist()))
         return {
             "mass": result.mass,
             "u_sigma": result.u_sigma,
@@ -235,17 +227,21 @@ class SteelSectionOptEnvSB3(gym.Env):
 
     def _calc_m0(self) -> float:
         """Calculate mass with max sections (for normalization)."""
-        result = self.evaluator.get_mass_only(
-            L=self.L,
-            W=self.W,
-            H=self.H,
-            main_beam_spacing=self.main_beam_spacing,
-            num_secondary_width=self.num_secondary_width,
-            num_secondary_height=self.num_secondary_height,
-            add_support_beam=self.add_support_beam,
-            sections=self.max_indices.tolist(),
+        return self.evaluator.get_mass_only(self._build_design(self.max_indices.tolist()))
+
+    def _build_design(self, sections: list[int]):
+        return self.adapter.build_design_from_sections(
+            geometry={"L": self.L, "W": self.W, "H": self.H},
+            pressure=self.pressure,
+            topology={
+                "main_beam_spacing": self.main_beam_spacing,
+                "num_secondary_width": self.num_secondary_width,
+                "num_secondary_height": self.num_secondary_height,
+                "add_support_beam": self.add_support_beam,
+            },
+            sections=sections,
+            section_lib=self.section_lib,
         )
-        return result
 
     def _get_section_properties(self) -> Tuple[List[float], List[float], List[float]]:
         """Get current section properties for observation."""

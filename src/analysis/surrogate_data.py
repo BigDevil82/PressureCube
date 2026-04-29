@@ -30,15 +30,15 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
 from src.optimization.design_space import (
-    DesignConfig,
-    build_params_from_config,
-    compute_mass_fast,
+    design_to_feature_vector,
+    feature_names,
     get_layout_adapter,
     get_section_lib,
     sample_spec_from_unit,
 )
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_library import SectionLibrary, SectionType
+from src.structure.structural_design import StructuralDesign
 from src.structure.structural_model import StructuralModel
 
 # ============================================================================
@@ -132,7 +132,7 @@ class DataCollector:
         self.sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
         self.sec_counts = [self.section_lib.section_counts[t] for t in self.sec_types]
 
-    def _generate_lhs_samples(self) -> List[DesignConfig]:
+    def _generate_lhs_samples(self) -> List[StructuralDesign]:
         """Generate samples using Latin Hypercube Sampling."""
 
         topology_specs = self.adapter.topology_specs()
@@ -202,11 +202,12 @@ class DataCollector:
 
                 seen_configs.add(config_key)
                 configs.append(
-                    self.adapter.build_config(
+                    self.adapter.build_design_from_sections(
                         geometry=geometry,
                         pressure=pressure_pa,
                         topology=topology,
                         sections=sections,
+                        section_lib=self.section_lib,
                     )
                 )
 
@@ -250,13 +251,11 @@ class DataCollector:
             )
 
             models = []
-            for cfg in batch_configs:
-                model = StructuralModel(build_params_from_config(cfg), self.section_lib)
-                model.generate()
-                models.append(model)
+            for design in batch_configs:
+                models.append(design.build_model(self.section_lib))
 
             batch_results = Parallel(n_jobs=self.n_jobs, backend="loky", verbose=10)(
-                delayed(_run_single_fea)(model, cfg.pressure) for model, cfg in zip(models, batch_configs)
+                delayed(_run_single_fea)(model, design.pressure) for model, design in zip(models, batch_configs)
             )
 
             all_results.extend(batch_results)
@@ -279,12 +278,12 @@ class DataCollector:
         masses = []
         valid_count = 0
 
-        for cfg, res in zip(configs, results):
-            # print(f"Processing sample: {cfg}")
+        for design, res in zip(configs, results):
+            # print(f"Processing sample: {design}")
             # print(f"  Result: {res}")
             u_sigma, u_delta, mass, success = res
             if success:
-                X.append(cfg.to_feature_vector())
+                X.append(design_to_feature_vector(design))
                 y_sigma.append(u_sigma)
                 y_delta.append(u_delta)
                 masses.append(mass)
@@ -303,7 +302,7 @@ class DataCollector:
             "y_sigma": y_sigma,
             "y_delta": y_delta,
             "masses": masses,
-            "feature_names": DesignConfig.feature_names(self.layout_strategy),
+            "feature_names": feature_names(self.layout_strategy),
             "layout_strategy": self.layout_strategy,
             "n_samples": valid_count,
             "collection_time": elapsed,
@@ -321,7 +320,7 @@ class DataCollector:
                 "geometry_ranges": self.GEOMETRY_RANGES,
                 "load_options": self.LOAD_OPTIONS,
             },
-            "feature_names": DesignConfig.feature_names(self.layout_strategy),
+            "feature_names": feature_names(self.layout_strategy),
             "layout_strategy": self.layout_strategy,
             "y_sigma_stats": {
                 "min": float(y_sigma.min()),

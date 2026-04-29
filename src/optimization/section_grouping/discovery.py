@@ -10,13 +10,7 @@ from sklearn.preprocessing import RobustScaler
 
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.results import AnalysisResults
-from src.optimization.design_space import (
-    DesignConfig,
-    EngineeringDesignConfig,
-    ResearchDesignConfig,
-    build_params_from_config,
-    get_section_lib,
-)
+from src.optimization.design_space import get_layout_adapter, get_section_lib
 from src.optimization.section_grouping.beam_features import (
     BeamFeature,
     extract_beam_features,
@@ -30,6 +24,7 @@ from src.optimization.section_grouping.features import (
 from src.optimization.section_grouping.models import BeamGroupPrototype, SectionGroupingRuleset
 from src.structure.enums import BeamType
 from src.structure.mesh_generator import MeshGenerator
+from src.structure.structural_design import StructuralDesign
 from src.structure.structural_model import StructuralModel
 
 
@@ -134,42 +129,40 @@ def discover_section_group_rules_with_assignments(
     )
 
 
-def build_rules_from_design_configs(
-    configs: Iterable[DesignConfig],
+def build_rules_from_designs(
+    designs: Iterable[StructuralDesign],
     discovery_config: SectionGroupingDiscoveryConfig,
     *,
     mesh_size: float = 0.5,
     section_lib_path: str | None = None,
 ) -> SectionGroupingRuleset:
-    """从若干 DesignConfig 自动建模、分析并发现分组规则。
+    """从若干 StructuralDesign 自动建模、分析并发现分组规则。
 
     这是离线规则发现入口，不建议在优化内层循环中调用。
     """
 
-    config_list = list(configs)
-    if not config_list:
-        raise ValueError("At least one representative config is required.")
+    design_list = list(designs)
+    if not design_list:
+        raise ValueError("At least one representative design is required.")
 
-    layout_strategy = config_list[0].layout_strategy
-    if any(config.layout_strategy != layout_strategy for config in config_list):
-        raise ValueError("Representative configs must use the same layout strategy.")
+    layout_strategy = design_list[0].layout_strategy
+    if any(design.layout_strategy != layout_strategy for design in design_list):
+        raise ValueError("Representative designs must use the same layout strategy.")
 
     section_lib = get_section_lib(layout_strategy, section_lib_path)
     samples = []
-    for design_config in config_list:
-        params = build_params_from_config(design_config)
-        model = StructuralModel(params, section_lib)
-        model.generate()
+    for design in design_list:
+        model = design.build_model(section_lib)
         model = MeshGenerator(model, mesh_size).generate()
 
         solver = OpenSeesSolver(model)
         strength_results = solver.run_load_combination(
             discovery_config.strength_combo,
-            pressure_pa=design_config.pressure,
+            pressure_pa=design.pressure,
         )
         service_results = solver.run_load_combination(
             discovery_config.service_combo,
-            pressure_pa=design_config.pressure,
+            pressure_pa=design.pressure,
         )
         samples.append(RepresentativeAnalysis(model, strength_results, service_results))
 
@@ -311,22 +304,20 @@ if __name__ == "__main__":
         description="engineering baseline grouping",
     )
 
-    design_config = EngineeringDesignConfig(
-        L=8.9,
-        W=3.7,
-        H=3.3,
+    adapter = get_layout_adapter("engineering")
+    design = adapter.build_design_from_sections(
+        geometry={"L": 8.9, "W": 3.7, "H": 3.3},
         pressure=30000.0,
-        main_beam_spacing=0.95,
-        add_support_beam=True,
-        frame_section_index=2,
-        main_beam_section_index=8,
-        secondary_beam_section_index=7,
-        brace_section_index=14,
-        support_beam_max_spacing=0.75,
+        topology={
+            "main_beam_spacing": 0.95,
+            "support_beam_max_spacing": 0.75,
+            "add_support_beam": True,
+        },
+        sections=[2, 8, 7, 14],
     )
 
-    rules = build_rules_from_design_configs(
-        [design_config],
+    rules = build_rules_from_designs(
+        [design],
         discovery_config,
         mesh_size=0.5,
     )

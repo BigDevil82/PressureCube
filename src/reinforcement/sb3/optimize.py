@@ -19,6 +19,7 @@ from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 
 from src.heuristic.evaluator import StructuralEvaluator
+from src.optimization.design_space import get_layout_adapter
 from src.reinforcement.sb3.env import SteelSectionOptEnvSB3
 
 
@@ -221,18 +222,20 @@ def validate_with_fea(
     Uses the topology from the optimization result.
     """
     topo = result.topology
-    evaluator = StructuralEvaluator(mode="fea")
-    result_fea = evaluator.evaluate(
-        L=L,
-        W=W,
-        H=H,
+    adapter = get_layout_adapter("research")
+    design = adapter.build_design_from_sections(
+        geometry={"L": L, "W": W, "H": H},
         pressure=pressure,
-        main_beam_spacing=topo.get("spacing", 0.7),
-        num_secondary_width=topo.get("num_secondary_width", 4),
-        num_secondary_height=topo.get("num_secondary_height", 4),
-        add_support_beam=topo.get("add_support_beam", True),
+        topology={
+            "main_beam_spacing": topo.get("main_beam_spacing", topo.get("spacing", 0.7)),
+            "num_secondary_width": topo.get("num_secondary_width", 4),
+            "num_secondary_height": topo.get("num_secondary_height", 4),
+            "add_support_beam": topo.get("add_support_beam", True),
+        },
         sections=result.sections,
     )
+    evaluator = StructuralEvaluator(mode="fea")
+    result_fea = evaluator.evaluate(design)
 
     return {
         "sections": result.sections,

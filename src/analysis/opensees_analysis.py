@@ -18,6 +18,8 @@ from src.analysis.unit import (
     RHO_STEEL_TONNE_MM3,
 )
 from src.structure.layout.params import StructuralParameters
+from src.structure.enums import BeamType
+from src.structure.section_assignment import SectionAssignment
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import Beam, StructuralModel
 from src.utils.constants import KPA_TO_MPA, LOAD_DEAD_BOTTOM_KPA, LOAD_LIVE_BOTTOM_KPA
@@ -471,12 +473,15 @@ if __name__ == "__main__":
             num_secondary_width=3,  # 宽度方向分3段 (2条中间次梁)
             num_secondary_height=3,  # 高度方向分3段
             add_support_beam=True,  # 添加支撑梁
-            frame_section_index=2,
-            main_beam_section_index=8,
-            secondary_beam_section_index=7,
-            brace_section_index=14,
         )
-        model = StructuralModel(params, SectionLibrary("src/data/steel_sections_large.json"))
+        assignment = SectionAssignment.by_beam_type(
+            {BeamType.FRAME: 2, BeamType.MAIN: 8, BeamType.SECONDARY: 7, BeamType.BRACE: 14}
+        )
+        model = StructuralModel(
+            params,
+            SectionLibrary("src/data/steel_sections_large.json"),
+            section_assignment=assignment,
+        )
         model.generate()
     else:
         # 配置参数
@@ -492,13 +497,12 @@ if __name__ == "__main__":
             main_beam_spacing=0.95,  # 主梁每1.5米一道
             add_support_beam=True,  # 添加支撑梁
             support_beam_max_spacing=0.75,
-            frame_section_index=2,
-            main_beam_section_index=8,
-            secondary_beam_section_index=7,
-            brace_section_index=14,
             window=windows,
         )
-        model = StructuralModel(params, SectionLibrary())
+        assignment = SectionAssignment.by_beam_type(
+            {BeamType.FRAME: 2, BeamType.MAIN: 8, BeamType.SECONDARY: 7, BeamType.BRACE: 14}
+        )
+        model = StructuralModel(params, SectionLibrary(), section_assignment=assignment)
         model.generate()
 
     print("Total mass：", model.calculate_mass_kg(), "kg")

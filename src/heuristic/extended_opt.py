@@ -9,11 +9,8 @@ Topology variables (discrete, small space = 300 combinations):
 - num_secondary_height: [2, 6] → 5 values
 - add_support_beam: True/False → 2 values
 
-Section variables (discrete, 20^4 = 160,000 combinations):
-- frame_section_index: [0, 19]
-- main_beam_section_index: [0, 19]
-- secondary_beam_section_index: [0, 19]
-- brace_section_index: [0, 19]
+Section variables are section-group indices. The default ruleset has four
+groups, one for each beam type.
 
 Total space: 300 × 160,000 = 48,000,000 combinations
 
@@ -35,7 +32,6 @@ from optuna.samplers import TPESampler
 from src.heuristic.evaluator import StructuralEvaluator
 from src.optimization.design_space import get_layout_adapter, get_section_lib, suggest_spec_with_optuna
 from src.optimization.section_grouping import SectionGroupingRuleset, section_counts_for_groups
-from src.structure.section_library import SectionType
 
 
 @dataclass
@@ -49,9 +45,7 @@ class ExtendedOptResult:
     # Optimal topology
     optimal_topology: dict
 
-    # Optimal sections
-    optimal_sections: list[int]
-    optimal_group_sections: dict[str, int]
+    optimal_section_indices_by_group: dict[str, int]
 
     # Metrics
     initial_mass: float  # With max sections and default topology
@@ -109,9 +103,6 @@ class JointBayesianOptimizer:
 
         # Get section counts from library
         section_lib = get_section_lib(layout_strategy)
-        sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
-        self.sec_counts = [section_lib.section_counts[t] for t in sec_types]
-        self.max_indices = [count - 1 for count in self.sec_counts]
         self.group_ids = self.section_group_rules.group_ids()
         self.group_sec_counts = section_counts_for_groups(self.section_group_rules, section_lib)
 
@@ -119,7 +110,6 @@ class JointBayesianOptimizer:
         self.evaluator = StructuralEvaluator(
             mode=eval_mode,
             surrogate_path=surrogate_path,
-            section_group_rules=self.section_group_rules,
         )
 
     def _create_objective(self, L: float, W: float, H: float, pressure: float):
@@ -132,7 +122,6 @@ class JointBayesianOptimizer:
 
             # Every section variable is a group section. The default ruleset has
             # four groups, one for each BeamType.
-            sections = self.max_indices
             group_sections = {
                 group_id: trial.suggest_int(f"group_section_{group_id}", 0, self.group_sec_counts[i] - 1)
                 for i, group_id in enumerate(self.group_ids)
@@ -140,17 +129,14 @@ class JointBayesianOptimizer:
 
             # Run evaluation
             try:
-                config = self.adapter.build_config(
+                design = self.adapter.build_design(
                     geometry={"L": L, "W": W, "H": H},
                     pressure=pressure,
                     topology=topology,
-                    sections=sections,
-                )
-                result = self.evaluator.evaluate(
-                    config,
                     section_group_rules=self.section_group_rules,
                     section_indices_by_group=group_sections,
                 )
+                result = self.evaluator.evaluate(design)
             except Exception as e:
                 # Evaluation failed - heavily penalize
                 trial.set_user_attr("error", str(e))
@@ -190,14 +176,13 @@ class JointBayesianOptimizer:
             group_id: count - 1 for group_id, count in zip(self.group_ids, self.group_sec_counts)
         }
         initial_result = self.evaluator.evaluate(
-            config=self.adapter.build_config(
+            self.adapter.build_design(
                 geometry={"L": L, "W": W, "H": H},
                 pressure=pressure,
                 topology=self.adapter.default_topology(),
-                sections=self.max_indices,
-            ),
-            section_group_rules=self.section_group_rules,
-            section_indices_by_group=initial_section_indices_by_group,
+                section_group_rules=self.section_group_rules,
+                section_indices_by_group=initial_section_indices_by_group,
+            )
         )
         initial_mass = initial_result.mass
 
@@ -231,8 +216,7 @@ class JointBayesianOptimizer:
             layout_strategy=self.layout_strategy,
             geometry={"L": L, "W": W, "H": H},
             optimal_topology={spec.name: best.params[spec.name] for spec in self.adapter.topology_specs()},
-            optimal_sections=self.max_indices,
-            optimal_group_sections={
+            optimal_section_indices_by_group={
                 group_id: best.params[f"group_section_{group_id}"] for group_id in self.group_ids
             },
             initial_mass=initial_mass,
@@ -272,18 +256,15 @@ if __name__ == "__main__":
     )
     result = opt.optimize(parameter)
     print(f"Mass: {result.optimal_mass:.0f}kg, Reduction: {result.mass_reduction_pct:.1f}%")
-    config = opt.adapter.build_config(
+    design = opt.adapter.build_design(
         geometry={"L": args.L, "W": args.W, "H": args.H},
         pressure=args.pressure,
         topology=result.optimal_topology,
-        sections=result.optimal_sections,
+        section_group_rules=opt.section_group_rules,
+        section_indices_by_group=result.optimal_section_indices_by_group,
     )
     evaluator = StructuralEvaluator(
         mode="fea",
     )
-    check = evaluator.evaluate(
-        config,
-        section_group_rules=opt.section_group_rules,
-        section_indices_by_group=result.optimal_group_sections,
-    )
+    check = evaluator.evaluate(design)
     print("FEA Check - u_sigma: {:.3f}, u_delta: {:.3f}".format(check.u_sigma, check.u_delta))

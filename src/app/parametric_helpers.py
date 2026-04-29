@@ -3,6 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from src.structure.layout.engineering_layout import EngineeringLayoutEngine
+from src.structure.enums import BeamType
 from src.structure.layout.params import (
     EngineeringLayoutParameters,
     ResearchLayoutParameters,
@@ -46,10 +47,13 @@ def hydrate_defaults() -> dict:
     defaults["H"] = saved_params.height
     defaults["beam_spacing"] = saved_params.main_beam_spacing
     defaults["add_brace"] = saved_params.add_support_beam
-    defaults["frame_idx"] = saved_params.frame_section_index
-    defaults["main_idx"] = saved_params.main_beam_section_index
-    defaults["sec_idx"] = saved_params.secondary_beam_section_index
-    defaults["brace_idx"] = saved_params.brace_section_index
+    saved_model = st.session_state.get("current_model")
+    if saved_model is not None:
+        section_indices = saved_model.section_assignment.section_indices
+        defaults["frame_idx"] = section_indices.get(f"{BeamType.FRAME.name}-SG1", defaults["frame_idx"])
+        defaults["main_idx"] = section_indices.get(f"{BeamType.MAIN.name}-SG1", defaults["main_idx"])
+        defaults["sec_idx"] = section_indices.get(f"{BeamType.SECONDARY.name}-SG1", defaults["sec_idx"])
+        defaults["brace_idx"] = section_indices.get(f"{BeamType.BRACE.name}-SG1", defaults["brace_idx"])
 
     if isinstance(saved_params, ResearchLayoutParameters):
         defaults["num_sec_w"] = saved_params.num_secondary_width

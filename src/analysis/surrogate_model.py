@@ -13,8 +13,9 @@ import torch.optim as optim
 from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.analysis.surrogate_data import DesignConfig, compute_mass_fast, detect_feature_format
-from src.optimization.design_space import get_section_lib
+from src.analysis.surrogate_data import detect_feature_format
+from src.optimization.design_space import compute_mass_fast, design_to_feature_vector, get_section_lib
+from src.structure.structural_design import StructuralDesign
 
 
 class ResidualBlock(nn.Module):
@@ -439,20 +440,20 @@ class AdvancedSurrogateModel:
 
         return metrics
 
-    def predict(self, config: DesignConfig) -> Tuple[float, float]:
-        """Predict for a single config."""
-        X = config.to_feature_vector(use_physics=self.use_physics_features).reshape(1, -1)
+    def predict(self, design: StructuralDesign) -> Tuple[float, float]:
+        """Predict for a single design."""
+        X = design_to_feature_vector(design, use_physics=self.use_physics_features).reshape(1, -1)
         pred_sigma, pred_delta = self.trainer.predict(X)
         return float(pred_sigma[0]), float(pred_delta[0])
 
-    def predict_batch(self, configs: List[DesignConfig]) -> Tuple[np.ndarray, np.ndarray]:
+    def predict_batch(self, designs: List[StructuralDesign]) -> Tuple[np.ndarray, np.ndarray]:
         """Batch prediction."""
-        X = np.array([cfg.to_feature_vector(use_physics=self.use_physics_features) for cfg in configs])
+        X = np.array([design_to_feature_vector(design, use_physics=self.use_physics_features) for design in designs])
         return self.trainer.predict(X)
 
-    def get_mass(self, config: DesignConfig) -> float:
+    def get_mass(self, design: StructuralDesign) -> float:
         """Fast mass calculation."""
-        return compute_mass_fast(config, get_section_lib(config.layout_strategy))
+        return compute_mass_fast(design, get_section_lib(design.layout_strategy))
 
     def save(self, path: str):
         """Save model."""

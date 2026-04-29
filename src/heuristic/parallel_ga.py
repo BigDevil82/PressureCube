@@ -13,9 +13,9 @@ import numpy as np
 from joblib import Parallel, delayed
 
 from src.heuristic.evaluator import StructuralEvaluator, evaluate_design
-from src.optimization.design_space import DesignConfig, VariableSpec, get_layout_adapter, get_section_lib
+from src.optimization.design_space import VariableSpec, get_layout_adapter, get_section_lib
 from src.optimization.section_grouping import SectionGroupingRuleset, section_counts_for_groups
-from src.structure.section_library import SectionType
+from src.structure.structural_design import StructuralDesign
 
 
 @dataclass
@@ -26,7 +26,6 @@ class GAResult:
     layout_strategy: str
     geometry: dict
     optimal_topology: dict
-    optimal_sections: list[int]
     optimal_section_indices_by_group: dict[str, int]
     initial_mass: float
     optimal_mass: float
@@ -41,7 +40,7 @@ class GAResult:
 
 @dataclass(frozen=True)
 class Candidate:
-    config: DesignConfig
+    design: StructuralDesign
     topology: dict
     section_indices_by_group: dict[str, int]
 
@@ -50,16 +49,14 @@ class Candidate:
 class SectionScheme:
     """Maps section genes to beam-group section assignments."""
 
-    max_indices: list[int]
     rules: SectionGroupingRuleset
     group_ids: list[str]
     group_sec_counts: list[int]
 
     @classmethod
-    def by_beam_type(cls, layout_strategy: str, section_lib, max_indices: list[int]) -> "SectionScheme":
+    def by_beam_type(cls, layout_strategy: str, section_lib) -> "SectionScheme":
         rules = SectionGroupingRuleset.by_beam_type(layout_strategy)
         return cls(
-            max_indices=max_indices,
             rules=rules,
             group_ids=rules.group_ids(),
             group_sec_counts=section_counts_for_groups(rules, section_lib),
@@ -70,10 +67,8 @@ class SectionScheme:
         cls,
         rules: SectionGroupingRuleset,
         section_lib,
-        max_indices: list[int],
     ) -> "SectionScheme":
         return cls(
-            max_indices=max_indices,
             rules=rules,
             group_ids=rules.group_ids(),
             group_sec_counts=section_counts_for_groups(rules, section_lib),
@@ -90,17 +85,11 @@ class SectionScheme:
     def max_gene_values(self) -> np.ndarray:
         return np.array([count - 1 for count in self.gene_counts], dtype=np.float32)
 
-    def decode(self, genes: np.ndarray) -> tuple[list[int], dict[str, int]]:
-        section_indices_by_group = {
+    def decode(self, genes: np.ndarray) -> dict[str, int]:
+        return {
             group_id: int(np.clip(round(genes[offset]), 0, self.group_sec_counts[offset] - 1))
             for offset, group_id in enumerate(self.group_ids)
         }
-        return self._config_sections(section_indices_by_group), section_indices_by_group
-
-    def _config_sections(self, section_indices_by_group: dict[str, int]) -> list[int]:
-        if all(count == 1 for count in self.rules.n_groups_by_type.values()):
-            return [section_indices_by_group[group_id] for group_id in self.group_ids]
-        return self.max_indices
 
 
 def _decode_topology_gene(gene_value: float, spec: VariableSpec):
@@ -132,16 +121,17 @@ def decode_candidate(
         topology[spec.name] = _decode_topology_gene(float(genes[idx]), spec)
 
     section_start = len(topology_specs)
-    sections, section_indices_by_group = section_scheme.decode(genes[section_start:])
+    section_indices_by_group = section_scheme.decode(genes[section_start:])
     adapter = get_layout_adapter(layout_strategy)
-    config = adapter.build_config(
+    design = adapter.build_design(
         geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
         pressure=geometry.get("pressure", 30000.0),
         topology=topology,
-        sections=sections,
+        section_group_rules=section_scheme.rules,
+        section_indices_by_group=section_indices_by_group,
     )
     return Candidate(
-        config=config,
+        design=design,
         topology=topology,
         section_indices_by_group=section_indices_by_group,
     )
@@ -187,11 +177,9 @@ def evaluate_individual(
     )
 
     mass, u_sigma, u_delta, feasible = evaluate_design(
-        config=candidate.config,
+        design=candidate.design,
         mode=eval_mode,
         surrogate_path=surrogate_path,
-        section_group_rules=section_scheme.rules,
-        section_indices_by_group=candidate.section_indices_by_group,
     )
 
     return _fitness_from_eval(mass, u_sigma, u_delta, feasible, eval_mode)
@@ -344,12 +332,10 @@ class ParallelGAOptimizer:
         )
 
         section_lib = get_section_lib(layout_strategy)
-        sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
-        max_indices = [section_lib.section_counts[t] - 1 for t in sec_types]
         self.section_scheme = (
-            SectionScheme.by_beam_type(layout_strategy, section_lib, max_indices)
+            SectionScheme.by_beam_type(layout_strategy, section_lib)
             if self.section_group_rules is None
-            else SectionScheme.grouped(self.section_group_rules, section_lib, max_indices)
+            else SectionScheme.grouped(self.section_group_rules, section_lib)
         )
         self.surrogate_evaluator = (
             StructuralEvaluator(mode="surrogate", surrogate_path=surrogate_path)
@@ -396,14 +382,9 @@ class ParallelGAOptimizer:
             for ind in population
         ]
         eval_results = self.surrogate_evaluator.evaluate_batch(
-            [candidate.config for candidate in candidates],
-            section_group_rules=self.section_scheme.rules,
-            section_indices_by_group=[candidate.section_indices_by_group for candidate in candidates],
+            [candidate.design for candidate in candidates],
         )
-        evals = [
-            (result.mass, result.u_sigma, result.u_delta, result.feasible)
-            for result in eval_results
-        ]
+        evals = [(result.mass, result.u_sigma, result.u_delta, result.feasible) for result in eval_results]
         return [
             _fitness_from_eval(mass, u_sigma, u_delta, feasible, self.eval_mode)
             for mass, u_sigma, u_delta, feasible in evals
@@ -518,6 +499,7 @@ class ParallelGAOptimizer:
         elapsed = time.time() - start_time
 
         if best_individual is None:
+            print("WARNING: No feasible solution found, returning best infeasible candidate.")
             best_candidate = decode_candidate(
                 max_genes,
                 geometry,
@@ -539,7 +521,6 @@ class ParallelGAOptimizer:
             layout_strategy=self.layout_strategy,
             geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
             optimal_topology=best_candidate.topology,
-            optimal_sections=best_candidate.config.section_indices(),
             optimal_section_indices_by_group=best_candidate.section_indices_by_group,
             initial_mass=initial_mass,
             optimal_mass=best_result[0],
@@ -642,17 +623,16 @@ def run_ga_optimization(
     result = opt.optimize(geometry)
 
     adapter = get_layout_adapter(layout_strategy)
-    config = adapter.build_config(
+    design = adapter.build_design(
         geometry={"L": L, "W": W, "H": H},
         pressure=pressure,
         topology=result.optimal_topology,
-        sections=result.optimal_sections,
-    )
-    fea_result = evaluate_design(
-        config=config,
-        mode="fea",
         section_group_rules=opt.section_scheme.rules,
         section_indices_by_group=result.optimal_section_indices_by_group,
+    )
+    fea_result = evaluate_design(
+        design=design,
+        mode="fea",
     )
 
     print()

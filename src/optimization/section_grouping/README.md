@@ -15,9 +15,9 @@
 ## 离线发现规则
 
 ```python
-from src.optimization.section_grouping import (
+from src.optimization.section_grouping.discovery import (
     SectionGroupingDiscoveryConfig,
-    build_rules_from_design_configs,
+    build_rules_from_designs,
 )
 from src.structure.enums import BeamType
 
@@ -31,8 +31,8 @@ discovery_config = SectionGroupingDiscoveryConfig(
     description="engineering baseline grouping",
 )
 
-rules = build_rules_from_design_configs(
-    representative_configs,
+rules = build_rules_from_designs(
+    representative_designs,
     discovery_config,
     mesh_size=0.5,
 )
@@ -84,7 +84,7 @@ optimizer = ParallelGAOptimizer(
     section_group_rules="results/section_grouping/engineering_rules.json",
 )
 result = optimizer.optimize({"L": 8.9, "W": 3.6, "H": 3.3, "pressure": 30000})
-print(result.optimal_group_sections)
+print(result.optimal_section_indices_by_group)
 ```
 
 贝叶斯优化：
@@ -97,7 +97,7 @@ optimizer = JointBayesianOptimizer(
     section_group_rules="results/section_grouping/engineering_rules.json",
 )
 result = optimizer.optimize({"L": 8.9, "W": 3.6, "H": 3.3, "pressure": 30000})
-print(result.optimal_group_sections)
+print(result.optimal_section_indices_by_group)
 ```
 
 未传入 `section_group_rules` 时，优化器自动使用 `SectionGroupingRuleset.by_beam_type(...)`，也就是每类梁 1 组。

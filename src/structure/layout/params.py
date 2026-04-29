@@ -58,12 +58,6 @@ class BaseLayoutParameters:
     main_beam_spacing: float
     add_support_beam: bool = True
 
-    # 截面索引
-    frame_section_index: int = 0
-    main_beam_section_index: int = 0
-    secondary_beam_section_index: int = 0
-    brace_section_index: int = 0
-
     extension: ExtensionParameters = field(default_factory=ExtensionParameters)
 
     # 其他物理参数

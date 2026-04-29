@@ -8,6 +8,7 @@ from mpl_toolkits.mplot3d import Axes3D
 
 from src.structure.enums import BeamType
 from src.structure.layout.params import StructuralParameters
+from src.structure.section_assignment import SectionAssignment
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import Beam, Point, StructuralModel
 
@@ -49,16 +50,19 @@ def create_structural_model(config):
         num_secondary_width=params_dict["num_secondardy_witdth"],
         num_secondary_height=params_dict["num_secondardy_height"],
         add_support_beam=params_dict["add_support_beam"],
-        frame_section_index=params_dict["frame_section_index"],
-        main_beam_section_index=params_dict["main_beam_section_index"],
-        secondary_beam_section_index=params_dict["secondary_beam_section_index"],
-        brace_section_index=params_dict["brace_section_index"],
         plate_thickness=params_dict["plate_thickness"],
-        windows=windows,
+    )
+    section_assignment = SectionAssignment.by_beam_type(
+        {
+            BeamType.FRAME: params_dict["frame_section_index"],
+            BeamType.MAIN: params_dict["main_beam_section_index"],
+            BeamType.SECONDARY: params_dict["secondary_beam_section_index"],
+            BeamType.BRACE: params_dict["brace_section_index"],
+        }
     )
 
     # 创建结构模型并生成网格
-    model = StructuralModel(params, section_library)
+    model = StructuralModel(params, section_library, section_assignment=section_assignment)
 
     # 使用网格化建模方法
     model.generate()

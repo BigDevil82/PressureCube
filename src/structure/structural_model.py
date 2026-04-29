@@ -136,11 +136,11 @@ class StructuralModel:
         self,
         params: BaseLayoutParameters,
         section_lib: SectionLibrary,
-        section_assignment: SectionAssignment | None = None,
+        section_assignment: SectionAssignment,
     ):
         self.params = params
         self.section_lib = section_lib
-        self.section_assignment = section_assignment or SectionAssignment.from_params(params)
+        self.section_assignment = section_assignment
         self.node_manager = NodeManager()
         self.beam_manager = BeamManager(self.node_manager)
 
@@ -192,6 +192,9 @@ class StructuralModel:
         self._generate_plates_from_grid(engine)
         self._cleanup_orphans()
 
+        # --- 5. 应用截面分配 ---
+        self.apply_section_assignment(self.section_assignment)
+
     def _add_beam(self, p1_arr, p2_arr, b_type, face, is_virtual_override=False):
         n1 = self.node_manager.get_or_create(*p1_arr)
         n2 = self.node_manager.get_or_create(*p2_arr)
@@ -199,7 +202,7 @@ class StructuralModel:
         # 允许外部 override 虚拟属性，或者梁本身类型决定（例如以后 BRACE 想设为虚拟）
         is_virtual = is_virtual_override
 
-        sec_prop = self._get_section(b_type)
+        sec_prop = None
         self.beam_manager.add_or_update_beam(n1, n2, b_type, sec_prop, is_virtual, face)
 
     def _generate_plates_from_grid(self, engine: LayoutEngineProtocol):
@@ -274,9 +277,6 @@ class StructuralModel:
             return  # 忽略面积过小的板
         self.plates[self.plate_counter] = Plate(self.plate_counter, node_list, on_face, area, panel_type)
         self.plate_counter += 1
-
-    def _get_section(self, b_type: BeamType) -> SectionProperties:
-        return self.section_assignment.section_for_beam_type(b_type, self.section_lib)
 
     def apply_section_assignment(self, assignment: SectionAssignment) -> None:
         self.section_assignment = assignment
@@ -360,7 +360,10 @@ if __name__ == "__main__":
         num_secondary_height=3,  # 高度方向分3段
         add_support_beam=False,  # 添加支撑梁
     )
-    model = StructuralModel(params, SectionLibrary())
+    assignment = SectionAssignment.by_beam_type(
+        {BeamType.FRAME: 0, BeamType.MAIN: 0, BeamType.SECONDARY: 0, BeamType.BRACE: 0}
+    )
+    model = StructuralModel(params, SectionLibrary(), section_assignment=assignment)
     model.generate()
     mesh_generator = MeshGenerator(model, 0.5)
     model = mesh_generator.generate()

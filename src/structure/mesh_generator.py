@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from src.structure.structural_model import Beam, BeamType, NodeManager, Plate, StructuralModel
+from src.structure.section_assignment import SectionAssignment
 
 
 class MeshGenerator:
@@ -19,7 +20,11 @@ class MeshGenerator:
         self.original_model = model
         self.max_mesh_size = max_mesh_size
 
-        self.meshed_model = StructuralModel(model.params, model.section_lib)
+        self.meshed_model = StructuralModel(
+            model.params,
+            model.section_lib,
+            section_assignment=model.section_assignment,
+        )
 
         # 映射字典: Old ID -> New ID(s)
         self._node_map: Dict[int, int] = {}  # 旧节点 -> 新节点（端点）
@@ -432,9 +437,13 @@ if __name__ == "__main__":
         add_support_beam=True,
     )
     section_lib = SectionLibrary("src/data/steel_sections_large.json")
+    assignment = SectionAssignment.by_beam_type(
+        {BeamType.FRAME: 0, BeamType.MAIN: 0, BeamType.SECONDARY: 0, BeamType.BRACE: 0}
+    )
     model = StructuralModel(
         p,
         section_lib=section_lib,
+        section_assignment=assignment,
     )
     mesh_generator = MeshGenerator(model, max_mesh_size=0.5)
     meshed_model = mesh_generator.generate()

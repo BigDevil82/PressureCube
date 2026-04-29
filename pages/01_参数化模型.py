@@ -3,12 +3,14 @@ import streamlit as st
 from src.app.model_visualization import build_structure_figure
 from src.app.parametric_helpers import build_engineering_preview, hydrate_defaults
 from src.app.session import AppSession
+from src.structure.enums import BeamType
 from src.structure.layout.params import (
     EngineeringLayoutParameters,
     ResearchLayoutParameters,
     WindowParameters,
 )
 from src.structure.mesh_generator import MeshGenerator
+from src.structure.section_assignment import SectionAssignment
 from src.structure.section_library import SectionLibrary, SectionType
 from src.structure.structural_model import StructuralModel
 
@@ -183,10 +185,6 @@ if layout_mode == "research":
         num_secondary_width=num_sec_w,
         num_secondary_height=num_sec_h,
         add_support_beam=add_brace,
-        frame_section_index=frame_idx,
-        main_beam_section_index=main_idx,
-        secondary_beam_section_index=sec_idx,
-        brace_section_index=brace_idx,
     )
 else:
     params = EngineeringLayoutParameters(
@@ -195,17 +193,21 @@ else:
         height=height,
         main_beam_spacing=beam_spacing,
         add_support_beam=add_brace,
-        frame_section_index=frame_idx,
-        main_beam_section_index=main_idx,
-        secondary_beam_section_index=sec_idx,
-        brace_section_index=brace_idx,
         support_beam_max_spacing=support_beam_max_spacing,
         window=WindowParameters(
             front_spans=sorted(front_spans), back_spans=sorted(back_spans), right_spans=sorted(right_spans)
         ),
     )
 
-model = StructuralModel(params, section_library)
+section_assignment = SectionAssignment.by_beam_type(
+    {
+        BeamType.FRAME: frame_idx,
+        BeamType.MAIN: main_idx,
+        BeamType.SECONDARY: sec_idx,
+        BeamType.BRACE: brace_idx,
+    }
+)
+model = StructuralModel(params, section_library, section_assignment=section_assignment)
 model.generate()
 
 display_model = model
