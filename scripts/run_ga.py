@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from src.analysis.evaluator import evaluate_design
 from src.optimization.design_space import get_layout_adapter
-from src.optimization.heuristic.parallel_ga import GAResult, ParallelGAOptimizer
-from src.optimization.section_grouping.models import SectionGroupingRuleset
+from src.optimization.parallel_ga import GAResult, ParallelGAOptimizer
+from src.structure.section_grouping.models import SectionGroupingRuleset
 
 
 def compare_methods(

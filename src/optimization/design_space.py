@@ -5,8 +5,8 @@ from typing import Any, Literal, Sequence
 
 import numpy as np
 
-from src.optimization.section_grouping.application import assign_beam_groups
-from src.optimization.section_grouping.models import SectionGroupingRuleset
+from src.structure.section_grouping.application import assign_beam_groups
+from src.structure.section_grouping.models import SectionGroupingRuleset
 from src.structure.enums import BeamType
 from src.structure.layout.params import (
     BaseLayoutParameters,

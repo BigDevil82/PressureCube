@@ -31,7 +31,7 @@ from optuna.samplers import TPESampler
 
 from src.analysis.evaluator import StructuralEvaluator
 from src.optimization.design_space import get_layout_adapter, get_section_lib, suggest_spec_with_optuna
-from src.optimization.section_grouping import SectionGroupingRuleset, section_counts_for_groups
+from src.structure.section_grouping import SectionGroupingRuleset, section_counts_for_groups
 
 
 @dataclass

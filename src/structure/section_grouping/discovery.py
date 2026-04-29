@@ -11,17 +11,17 @@ from sklearn.preprocessing import RobustScaler
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.results import AnalysisResults
 from src.optimization.design_space import get_layout_adapter, get_section_lib
-from src.optimization.section_grouping.beam_features import (
+from src.structure.section_grouping.beam_features import (
     BeamFeature,
     extract_beam_features,
     group_features_by_symmetry,
 )
-from src.optimization.section_grouping.features import (
+from src.structure.section_grouping.features import (
     ASSIGNMENT_FEATURE_SCHEMA,
     beam_type_sort_key,
     feature_assignment_vector,
 )
-from src.optimization.section_grouping.models import BeamGroupPrototype, SectionGroupingRuleset
+from src.structure.section_grouping.models import BeamGroupPrototype, SectionGroupingRuleset
 from src.structure.enums import BeamType
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.structural_design import StructuralDesign

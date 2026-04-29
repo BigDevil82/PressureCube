@@ -8,7 +8,7 @@ from src.app.model_visualization import build_structure_figure
 from src.app.result_visualization import build_modal_result_figure, build_static_result_figure
 from src.app.section_grouping_visualization import build_section_grouping_figure
 from src.app.session import AppSession
-from src.optimization.section_grouping.discovery import (
+from src.structure.section_grouping.discovery import (
     RepresentativeAnalysis,
     SectionGroupingDiscoveryConfig,
     discover_section_group_rules_with_assignments,
@@ -132,9 +132,7 @@ with col1:
             assignment = session.model.section_assignment
             for beam_type in sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value)):
                 group_ids = [
-                    group_id
-                    for group_id, group in assignment.groups.items()
-                    if group.beam_type == beam_type
+                    group_id for group_id, group in assignment.groups.items() if group.beam_type == beam_type
                 ]
                 names = [
                     lib.get_section(BEAM_SECTION_TYPES[beam_type], assignment.section_indices[group_id]).name
@@ -389,10 +387,8 @@ elif analysis.analysis_done and analysis.analysis_type == "模态分析" and ana
 elif not run_analysis:
     st.info("👈 请在左侧设置分析参数，然后点击【运行分析】按钮开始计算")
     st.divider()
-    st.markdown(
-        """
+    st.markdown("""
         1. 先在参数化模型页确认几何与构件布局。
         2. 在本页设置网格大小和分析工况。
         3. 运行后可直接查看位移、板应力和梁内力的 Plotly 结果图。
-        """
-    )
+        """)

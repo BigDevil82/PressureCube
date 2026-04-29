@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.optimization.section_grouping.features import beam_assignment_vector, make_geometry_context
-from src.optimization.section_grouping.models import SectionGroupingRuleset
-from src.structure.section_assignment import BEAM_SECTION_TYPES, SectionAssignment
+from src.structure.section_grouping.features import beam_assignment_vector, make_geometry_context
+from src.structure.section_grouping.models import SectionGroupingRuleset
+from src.structure.section_assignment import BEAM_SECTION_TYPES
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import StructuralModel
 

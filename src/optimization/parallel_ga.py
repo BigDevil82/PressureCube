@@ -14,7 +14,7 @@ from joblib import Parallel, delayed
 
 from src.analysis.evaluator import StructuralEvaluator, evaluate_design
 from src.optimization.design_space import VariableSpec, get_layout_adapter, get_section_lib
-from src.optimization.section_grouping import SectionGroupingRuleset, section_counts_for_groups
+from src.structure.section_grouping import SectionGroupingRuleset, section_counts_for_groups
 from src.structure.structural_design import StructuralDesign
 
 

@@ -4,8 +4,8 @@ import plotly.graph_objects as go
 from plotly.colors import qualitative
 
 from src.app.model_visualization import build_structure_figure
-from src.optimization.section_grouping.application import assign_beam_groups
-from src.optimization.section_grouping.models import SectionGroupingRuleset
+from src.structure.section_grouping.application import assign_beam_groups
+from src.structure.section_grouping.models import SectionGroupingRuleset
 from src.structure.structural_model import StructuralModel
 
 
@@ -17,7 +17,9 @@ def build_section_grouping_figure(
     """显示梁组分配结果。"""
 
     assignments = beam_to_group or assign_beam_groups(model, ruleset)
-    fig = build_structure_figure(model, show_plates=True, show_nodes=False, show_beams=False, plate_opacity=0.12)
+    fig = build_structure_figure(
+        model, show_plates=True, show_nodes=False, show_beams=False, plate_opacity=0.12
+    )
     palette = qualitative.Safe + qualitative.Bold + qualitative.Dark24
     assigned_groups = set(assignments.values())
     group_ids = [group_id for group_id in ruleset.group_ids() if group_id in assigned_groups]

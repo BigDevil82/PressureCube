@@ -4,10 +4,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from src.optimization.section_grouping.beam_features import BeamFeature, beam_orientation
+from src.structure.section_grouping.beam_features import BeamFeature, beam_orientation
 from src.structure.enums import BeamType
 from src.structure.structural_model import Beam, StructuralModel
-
 
 ASSIGNMENT_FEATURE_SCHEMA = [
     "x_norm",
