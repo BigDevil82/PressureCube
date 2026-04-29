@@ -34,14 +34,13 @@ class Logger:
 
         # init loggers
         self._init_loggers(level, log_file)
-        Logger._loggers[log_file] = self.logger
 
     def _init_loggers(self, level, name=None):
         if self.disable:
             return
         # print("_loggers: ", Logger._loggers)
-        if self.log_file in Logger._loggers:
-            self.logger = Logger._loggers[self.log_file]
+        if name in Logger._loggers:
+            self.logger = Logger._loggers[name]
             return
         # create a logger object
         name = name or __name__
@@ -61,6 +60,7 @@ class Logger:
         fh.setFormatter(formatter)
         logger.addHandler(fh)
         self.logger = logger
+        Logger._loggers[name] = self.logger
 
         # # warning, error, critical logger
         # logger = logging.getLogger(name + "_warn")
