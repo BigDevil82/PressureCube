@@ -15,6 +15,7 @@ import json
 import os
 import pickle
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -47,6 +48,67 @@ from src.structure.structural_model import StructuralModel
 MESH_SIZE = 0.5  # Global mesh size for FEA
 
 
+@dataclass(frozen=True)
+class SampleSpec:
+    geometry: dict[str, float]
+    pressure: float
+    topology: dict
+    group_counts: dict[BeamType, int]
+    section_indices_by_group: dict[str, int]
+    assignment_seed: int
+    layout_strategy: str
+
+    def build_design(self) -> StructuralDesign:
+        adapter = get_layout_adapter(self.layout_strategy)
+        return _build_random_grouped_design(
+            geometry=self.geometry,
+            pressure=self.pressure,
+            topology=self.topology,
+            group_counts=self.group_counts,
+            section_indices_by_group=self.section_indices_by_group,
+            assignment_seed=self.assignment_seed,
+            layout_strategy=self.layout_strategy,
+            adapter=adapter,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "geometry": {key: float(value) for key, value in self.geometry.items()},
+            "pressure": float(self.pressure),
+            "topology": {key: _plain_scalar(value) for key, value in self.topology.items()},
+            "group_counts": {beam_type.name: int(count) for beam_type, count in self.group_counts.items()},
+            "section_indices_by_group": {
+                group_id: int(index) for group_id, index in self.section_indices_by_group.items()
+            },
+            "assignment_seed": int(self.assignment_seed),
+            "layout_strategy": self.layout_strategy,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SampleSpec":
+        return cls(
+            geometry=dict(data["geometry"]),
+            pressure=float(data["pressure"]),
+            topology=dict(data["topology"]),
+            group_counts={BeamType[name]: int(count) for name, count in data["group_counts"].items()},
+            section_indices_by_group={
+                group_id: int(index) for group_id, index in data["section_indices_by_group"].items()
+            },
+            assignment_seed=int(data["assignment_seed"]),
+            layout_strategy=data["layout_strategy"],
+        )
+
+
+def _plain_scalar(value):
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        return float(value)
+    return value
+
+
 def _generate_design_chunk(
     samples: np.ndarray,
     start_index: int,
@@ -55,7 +117,7 @@ def _generate_design_chunk(
     geometry_ranges: dict,
     load_options: dict,
     group_count_range: tuple[int, int],
-) -> list[StructuralDesign]:
+) -> list[SampleSpec]:
     adapter = get_layout_adapter(layout_strategy)
     section_lib = get_section_lib(layout_strategy)
     beam_types = sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value))
@@ -64,7 +126,7 @@ def _generate_design_chunk(
     n_group_count_dims = len(beam_types)
     n_section_dims = len(beam_types) * max_groups_per_type
 
-    designs = []
+    specs = []
     for local_index, sample in enumerate(samples):
         sample_index = start_index + local_index
 
@@ -99,8 +161,8 @@ def _generate_design_chunk(
             load_options["pressure_range"][1] - load_options["pressure_range"][0]
         )
 
-        designs.append(
-            _build_random_grouped_design(
+        specs.append(
+            SampleSpec(
                 geometry={"L": round(L, 2), "W": round(W, 2), "H": round(H, 2)},
                 pressure=float(round(pressure, 2)) * 1000.0,
                 topology=topology,
@@ -108,10 +170,9 @@ def _generate_design_chunk(
                 section_indices_by_group=section_indices_by_group,
                 assignment_seed=seed + sample_index,
                 layout_strategy=layout_strategy,
-                adapter=adapter,
             )
         )
-    return designs
+    return specs
 
 
 def _sample_group_counts(
@@ -203,11 +264,12 @@ def _run_single_fea(model: StructuralModel, pressure: float) -> Tuple[float, flo
         return (0.0, 0.0, 0.0, False)
 
 
-def _run_single_design_fea(
-    design: StructuralDesign,
+def _run_single_spec_fea(
+    spec: SampleSpec,
     layout_strategy: str,
 ) -> Tuple[float, float, float, bool]:
     section_lib = get_section_lib(layout_strategy)
+    design = spec.build_design()
     model = design.build_model(section_lib)
     return _run_single_fea(model, design.pressure)
 
@@ -245,7 +307,7 @@ class DataCollector:
         self.section_lib = get_section_lib(layout_strategy)
         self.beam_types = sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value))
 
-    def _generate_lhs_samples(self) -> List[StructuralDesign]:
+    def _generate_lhs_samples(self) -> List[SampleSpec]:
         """Generate samples using Latin Hypercube Sampling."""
 
         topology_specs = self.adapter.topology_specs()
@@ -270,10 +332,10 @@ class DataCollector:
             start = end
 
         if n_jobs == 1:
-            designs = []
+            specs = []
             with tqdm(total=self.n_samples, desc="Generating LHS samples") as pbar:
                 for start_index, chunk in chunks:
-                    chunk_designs = _generate_design_chunk(
+                    chunk_specs = _generate_design_chunk(
                         chunk,
                         start_index,
                         self.layout_strategy,
@@ -282,9 +344,9 @@ class DataCollector:
                         self.LOAD_OPTIONS,
                         self.GROUP_COUNT_RANGE,
                     )
-                    designs.extend(chunk_designs)
-                    pbar.update(len(chunk_designs))
-            return designs
+                    specs.extend(chunk_specs)
+                    pbar.update(len(chunk_specs))
+            return specs
 
         chunk_results = Parallel(n_jobs=n_jobs, backend="loky", verbose=10)(
             delayed(_generate_design_chunk)(
@@ -298,7 +360,7 @@ class DataCollector:
             )
             for start_index, chunk in chunks
         )
-        return [design for chunk_designs in chunk_results for design in chunk_designs]
+        return [spec for chunk_specs in chunk_results for spec in chunk_specs]
 
     def collect(self, output_dir: str = "results/surrogate_data") -> str:
         """
@@ -310,7 +372,7 @@ class DataCollector:
         os.makedirs(output_dir, exist_ok=True)
 
         print(f"Generating {self.n_samples} LHS samples...")
-        designs = self._generate_lhs_samples()
+        specs = self._generate_lhs_samples()
 
         print(f"Running FEA in parallel (n_jobs={self.n_jobs})...")
         start_time = time.time()
@@ -319,18 +381,17 @@ class DataCollector:
         batch_size = 5000
         all_results = []
 
-        for batch_start in range(0, len(designs), batch_size):
-            batch_end = min(batch_start + batch_size, len(designs))
-            batch_designs = designs[batch_start:batch_end]
+        for batch_start in range(0, len(specs), batch_size):
+            batch_end = min(batch_start + batch_size, len(specs))
+            batch_specs = specs[batch_start:batch_end]
 
             print(
-                f"Processing batch {batch_start//batch_size + 1}/{(len(designs) + batch_size - 1)//batch_size} "
+                f"Processing batch {batch_start//batch_size + 1}/{(len(specs) + batch_size - 1)//batch_size} "
                 f"(samples {batch_start}-{batch_end-1})..."
             )
 
             batch_results = Parallel(n_jobs=self.n_jobs, backend="loky", verbose=10)(
-                delayed(_run_single_design_fea)(design, self.layout_strategy)
-                for design in batch_designs
+                delayed(_run_single_spec_fea)(spec, self.layout_strategy) for spec in batch_specs
             )
 
             all_results.extend(batch_results)
@@ -342,7 +403,7 @@ class DataCollector:
 
         elapsed = time.time() - start_time
         print(
-            f"FEA completed in {elapsed:.1f}s ({elapsed/len(designs):.2f}s per sample with {self.n_jobs} workers)"
+            f"FEA completed in {elapsed:.1f}s ({elapsed/len(specs):.2f}s per sample with {self.n_jobs} workers)"
         )
 
         # Build dataset
@@ -352,15 +413,18 @@ class DataCollector:
         masses = []
         valid_count = 0
 
-        for design, res in zip(designs, results):
-            # print(f"Processing sample: {design}")
+        sample_specs = []
+        for spec, res in zip(specs, results):
+            # print(f"Processing sample: {spec}")
             # print(f"  Result: {res}")
             u_sigma, u_delta, mass, success = res
             if success:
+                design = spec.build_design()
                 X.append(design_to_group_feature_vector(design))
                 y_sigma.append(u_sigma)
                 y_delta.append(u_delta)
                 masses.append(mass)
+                sample_specs.append(spec.to_dict())
                 valid_count += 1
 
         X = np.array(X)
@@ -368,7 +432,7 @@ class DataCollector:
         y_delta = np.array(y_delta)
         masses = np.array(masses)
 
-        print(f"Valid samples: {valid_count}/{len(designs)} ({100*valid_count/len(designs):.1f}%)")
+        print(f"Valid samples: {valid_count}/{len(specs)} ({100*valid_count/len(specs):.1f}%)")
 
         # Save dataset
         dataset = {
@@ -378,6 +442,7 @@ class DataCollector:
             "masses": masses,
             "feature_names": group_feature_names(self.layout_strategy),
             "feature_format": "group_v1",
+            "sample_spec_format": "structural_design_v1",
             "layout_strategy": self.layout_strategy,
             "n_samples": valid_count,
             "collection_time": elapsed,
