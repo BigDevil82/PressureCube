@@ -49,11 +49,16 @@ def hydrate_defaults() -> dict:
     defaults["add_brace"] = saved_params.add_support_beam
     saved_model = st.session_state.get("current_model")
     if saved_model is not None:
-        section_indices = saved_model.section_assignment.section_indices
-        defaults["frame_idx"] = section_indices.get(f"{BeamType.FRAME.name}-SG1", defaults["frame_idx"])
-        defaults["main_idx"] = section_indices.get(f"{BeamType.MAIN.name}-SG1", defaults["main_idx"])
-        defaults["sec_idx"] = section_indices.get(f"{BeamType.SECONDARY.name}-SG1", defaults["sec_idx"])
-        defaults["brace_idx"] = section_indices.get(f"{BeamType.BRACE.name}-SG1", defaults["brace_idx"])
+        groups = saved_model.section_assignment.groups
+        for key, beam_type in [
+            ("frame_idx", BeamType.FRAME),
+            ("main_idx", BeamType.MAIN),
+            ("sec_idx", BeamType.SECONDARY),
+            ("brace_idx", BeamType.BRACE),
+        ]:
+            group = groups.get(f"{beam_type.name}-SG1")
+            if group is not None:
+                defaults[key] = group.section_index
 
     if isinstance(saved_params, ResearchLayoutParameters):
         defaults["num_sec_w"] = saved_params.num_secondary_width

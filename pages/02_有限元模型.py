@@ -135,7 +135,10 @@ with col1:
                     group_id for group_id, group in assignment.groups.items() if group.beam_type == beam_type
                 ]
                 names = [
-                    lib.get_section(BEAM_SECTION_TYPES[beam_type], assignment.section_indices[group_id]).name
+                    lib.get_section(
+                        BEAM_SECTION_TYPES[beam_type],
+                        assignment.groups[group_id].section_index,
+                    ).name
                     for group_id in group_ids
                 ]
                 st.write(f"{beam_type.name}: {', '.join(names)}")

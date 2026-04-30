@@ -25,6 +25,7 @@ class SectionGroup:
     group_id: str
     beam_type: BeamType
     section_type: SectionType
+    section_index: int
 
 
 @dataclass
@@ -32,28 +33,26 @@ class SectionAssignment:
     """Concrete section assignment for a generated structural model.
 
     This is the actual section contract: groups define allowed section pools,
-    section_indices chooses a section for each group, and beam_groups optionally
-    assigns individual beams to groups.
+    each group chooses a section index, and beam_groups optionally assigns
+    individual beams to groups.
     """
 
     groups: dict[str, SectionGroup]
-    section_indices: dict[str, int]
     beam_groups: dict[int, str] = field(default_factory=dict)
     random_seed: int | None = None
 
     @classmethod
     def by_beam_type(cls, section_indices_by_type: dict[BeamType, int]) -> "SectionAssignment":
         groups = {}
-        section_indices = {}
         for beam_type in sorted(section_indices_by_type, key=lambda item: int(item.value)):
             group_id = f"{beam_type.name}-SG1"
             groups[group_id] = SectionGroup(
                 group_id=group_id,
                 beam_type=beam_type,
                 section_type=BEAM_SECTION_TYPES[beam_type],
+                section_index=int(section_indices_by_type[beam_type]),
             )
-            section_indices[group_id] = int(section_indices_by_type[beam_type])
-        return cls(groups=groups, section_indices=section_indices)
+        return cls(groups=groups)
 
     @classmethod
     def from_group_indices(
@@ -68,12 +67,12 @@ class SectionAssignment:
                 group_id=group_id,
                 beam_type=beam_type,
                 section_type=BEAM_SECTION_TYPES[beam_type],
+                section_index=int(section_indices_by_group[group_id]),
             )
             for group_id, beam_type in group_beam_types.items()
         }
         return cls(
             groups=groups,
-            section_indices={group_id: int(index) for group_id, index in section_indices_by_group.items()},
             beam_groups=beam_groups or {},
             random_seed=random_seed,
         )
@@ -87,7 +86,7 @@ class SectionAssignment:
                 continue
             group_id = self.beam_groups.get(beam_id) or self._single_group_for_type(beam.beam_type)
             group = self.groups[group_id]
-            beam.section = section_lib.get_section(group.section_type, self.section_indices[group_id])
+            beam.section = section_lib.get_section(group.section_type, group.section_index)
             self.beam_groups[beam_id] = group_id  # Ensure every beam has an assigned group
 
     def _assign_missing_beam_groups(self, model: StructuralModel) -> None:

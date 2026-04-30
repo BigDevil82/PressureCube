@@ -301,7 +301,7 @@ def _section_feature_stats(assignment: SectionAssignment, lib: SectionLibrary) -
     iys = []
     for beam_type in sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value)):
         sections = [
-            lib.get_section(BEAM_SECTION_TYPES[beam_type], assignment.section_indices[group_id])
+            lib.get_section(BEAM_SECTION_TYPES[beam_type], assignment.groups[group_id].section_index)
             for group_id in groups_by_type[beam_type]
         ]
         areas.append(float(np.mean([section.area * 1e4 for section in sections])))
