@@ -27,8 +27,8 @@ from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.post_processor import ResultProcessor
 from src.optimization.design_space import (
     LayoutDesignAdapter,
-    design_to_feature_vector,
-    feature_names,
+    design_to_group_feature_vector,
+    group_feature_names,
     get_layout_adapter,
     get_section_lib,
     sample_spec_from_unit,
@@ -357,7 +357,7 @@ class DataCollector:
             # print(f"  Result: {res}")
             u_sigma, u_delta, mass, success = res
             if success:
-                X.append(design_to_feature_vector(design))
+                X.append(design_to_group_feature_vector(design))
                 y_sigma.append(u_sigma)
                 y_delta.append(u_delta)
                 masses.append(mass)
@@ -376,7 +376,8 @@ class DataCollector:
             "y_sigma": y_sigma,
             "y_delta": y_delta,
             "masses": masses,
-            "feature_names": feature_names(self.layout_strategy),
+            "feature_names": group_feature_names(self.layout_strategy),
+            "feature_format": "group_v1",
             "layout_strategy": self.layout_strategy,
             "n_samples": valid_count,
             "collection_time": elapsed,
@@ -395,7 +396,8 @@ class DataCollector:
                 "load_options": self.LOAD_OPTIONS,
                 "group_count_range": self.GROUP_COUNT_RANGE,
             },
-            "feature_names": feature_names(self.layout_strategy),
+            "feature_names": group_feature_names(self.layout_strategy),
+            "feature_format": "group_v1",
             "layout_strategy": self.layout_strategy,
             "y_sigma_stats": {
                 "min": float(y_sigma.min()),

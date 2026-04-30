@@ -291,6 +291,116 @@ def feature_names(layout_strategy: str) -> list[str]:
     ]
 
 
+def design_to_group_feature_vector(
+    design: StructuralDesign,
+    max_groups_per_type: int = 3,
+) -> np.ndarray:
+    """Feature vector for grouped-section surrogate datasets.
+
+    The legacy feature vector collapses all groups of the same BeamType to a
+    mean section property. That loses the section distribution when group count
+    varies. This feature keeps a fixed number of per-group slots for every beam
+    type, then adds per-type distribution statistics and load-demand
+    interactions. It is intended for newly generated grouped datasets and does
+    not replace design_to_feature_vector used by existing surrogate models.
+    """
+
+    p = design.params
+    lib = get_section_lib(p.layout_strategy)
+    adapter = get_layout_adapter(p.layout_strategy)
+
+    volume = p.length * p.width * p.height
+    floor_area = p.length * p.width
+    aspect_ratio = p.length / p.width if p.width > 0 else 1.0
+    pressure_kpa = design.pressure / 1000.0
+    total_load_mn = design.pressure * floor_area / 1e6
+    n_main_beams = int(p.length / p.main_beam_spacing) + 1
+
+    features = [
+        p.length,
+        p.width,
+        p.height,
+        volume,
+        floor_area,
+        aspect_ratio,
+        pressure_kpa,
+        total_load_mn,
+        p.main_beam_spacing,
+        *adapter.topology_feature_values(p),
+        float(n_main_beams),
+    ]
+
+    for beam_type in sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value)):
+        group_features = _group_section_features(
+            design.section_assignment,
+            lib,
+            beam_type,
+            max_groups_per_type,
+            total_load_mn,
+            pressure_kpa,
+            floor_area,
+        )
+        features.extend(group_features)
+
+    return np.array(features, dtype=np.float32)
+
+
+def group_feature_names(layout_strategy: str, max_groups_per_type: int = 3) -> list[str]:
+    adapter = get_layout_adapter(layout_strategy)
+    names = [
+        "L",
+        "W",
+        "H",
+        "volume",
+        "floor_area",
+        "aspect_ratio",
+        "pressure_kPa",
+        "total_load_MN",
+        "main_beam_spacing",
+        *adapter.topology_feature_names(),
+        "n_main_beams",
+    ]
+
+    for beam_type in sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value)):
+        prefix = _beam_type_prefix(beam_type)
+        names.extend([f"{prefix}_n_groups", f"{prefix}_n_groups_norm"])
+        for slot in range(1, max_groups_per_type + 1):
+            names.extend(
+                [
+                    f"{prefix}_g{slot}_active",
+                    f"{prefix}_g{slot}_section_index_norm",
+                    f"{prefix}_g{slot}_area",
+                    f"{prefix}_g{slot}_Ix",
+                    f"{prefix}_g{slot}_Iy",
+                    f"{prefix}_g{slot}_log_area",
+                    f"{prefix}_g{slot}_log_Ix",
+                    f"{prefix}_g{slot}_log_Iy",
+                    f"{prefix}_g{slot}_load_per_area",
+                    f"{prefix}_g{slot}_load_per_Ix",
+                    f"{prefix}_g{slot}_pressure_area_demand",
+                ]
+            )
+        for prop in ["area", "Ix", "Iy"]:
+            names.extend(
+                [
+                    f"{prefix}_{prop}_mean",
+                    f"{prefix}_{prop}_min",
+                    f"{prefix}_{prop}_max",
+                    f"{prefix}_{prop}_std",
+                    f"{prefix}_{prop}_cv",
+                    f"{prefix}_{prop}_min_to_max",
+                ]
+            )
+        names.extend(
+            [
+                f"{prefix}_weakest_load_per_area",
+                f"{prefix}_weakest_load_per_Ix",
+                f"{prefix}_weakest_pressure_area_demand",
+            ]
+        )
+    return names
+
+
 def _section_feature_stats(assignment: SectionAssignment, lib: SectionLibrary) -> dict[str, list[float]]:
     groups_by_type: dict[BeamType, list[str]] = {beam_type: [] for beam_type in BEAM_SECTION_TYPES}
     for group_id, group in assignment.groups.items():
@@ -309,6 +419,93 @@ def _section_feature_stats(assignment: SectionAssignment, lib: SectionLibrary) -
         iys.append(float(np.mean([section.Iy * 1e8 for section in sections])))
 
     return {"areas": areas, "ixs": ixs, "iys": iys}
+
+
+def _group_section_features(
+    assignment: SectionAssignment,
+    lib: SectionLibrary,
+    beam_type: BeamType,
+    max_groups_per_type: int,
+    total_load_mn: float,
+    pressure_kpa: float,
+    floor_area: float,
+) -> list[float]:
+    section_type = BEAM_SECTION_TYPES[beam_type]
+    groups = [
+        group
+        for group in assignment.groups.values()
+        if group.beam_type == beam_type
+    ]
+    groups.sort(key=lambda group: group.group_id)
+
+    values = [
+        lib.get_section(section_type, group.section_index)
+        for group in groups
+    ]
+    section_count = lib.section_counts[section_type]
+
+    areas = np.array([section.area * 1e4 for section in values], dtype=float)
+    ixs = np.array([section.Ix * 1e8 for section in values], dtype=float)
+    iys = np.array([section.Iy * 1e8 for section in values], dtype=float)
+
+    features = [float(len(groups)), float(len(groups) / max_groups_per_type)]
+    for slot in range(max_groups_per_type):
+        if slot < len(groups):
+            group = groups[slot]
+            section = values[slot]
+            area = section.area * 1e4
+            ix = section.Ix * 1e8
+            iy = section.Iy * 1e8
+            features.extend(
+                [
+                    1.0,
+                    float(group.section_index / max(section_count - 1, 1)),
+                    float(area),
+                    float(ix),
+                    float(iy),
+                    float(np.log1p(area)),
+                    float(np.log1p(ix)),
+                    float(np.log1p(iy)),
+                    float(total_load_mn / (area + 1e-10)),
+                    float(total_load_mn / (ix + 1e-10)),
+                    float(pressure_kpa * floor_area / (area + 1e-10)),
+                ]
+            )
+        else:
+            features.extend([0.0] * 11)
+
+    for prop_values in [areas, ixs, iys]:
+        features.extend(_distribution_features(prop_values))
+
+    features.extend(
+        [
+            float(total_load_mn / (np.min(areas) + 1e-10)),
+            float(total_load_mn / (np.min(ixs) + 1e-10)),
+            float(pressure_kpa * floor_area / (np.min(areas) + 1e-10)),
+        ]
+    )
+    return features
+
+
+def _distribution_features(values: np.ndarray) -> list[float]:
+    mean = float(np.mean(values))
+    min_value = float(np.min(values))
+    max_value = float(np.max(values))
+    std = float(np.std(values))
+    return [
+        mean,
+        min_value,
+        max_value,
+        std,
+        std / (mean + 1e-10),
+        min_value / (max_value + 1e-10),
+    ]
+
+
+def _beam_type_prefix(beam_type: BeamType) -> str:
+    if beam_type == BeamType.SECONDARY:
+        return "sec"
+    return beam_type.name.lower()
 
 
 def sample_spec_from_unit(spec: VariableSpec, value: float) -> Any:
