@@ -55,8 +55,8 @@ class SampleSpec:
     topology: dict
     group_counts: dict[BeamType, int]
     section_indices_by_group: dict[str, int]
-    assignment_seed: int
     layout_strategy: str
+    group_assignment_method: str = "geometric_kmeans_v1"
 
     def build_design(self) -> StructuralDesign:
         adapter = get_layout_adapter(self.layout_strategy)
@@ -66,7 +66,6 @@ class SampleSpec:
             topology=self.topology,
             group_counts=self.group_counts,
             section_indices_by_group=self.section_indices_by_group,
-            assignment_seed=self.assignment_seed,
             layout_strategy=self.layout_strategy,
             adapter=adapter,
         )
@@ -80,8 +79,8 @@ class SampleSpec:
             "section_indices_by_group": {
                 group_id: int(index) for group_id, index in self.section_indices_by_group.items()
             },
-            "assignment_seed": int(self.assignment_seed),
             "layout_strategy": self.layout_strategy,
+            "group_assignment_method": self.group_assignment_method,
         }
 
     @classmethod
@@ -94,8 +93,8 @@ class SampleSpec:
             section_indices_by_group={
                 group_id: int(index) for group_id, index in data["section_indices_by_group"].items()
             },
-            assignment_seed=int(data["assignment_seed"]),
             layout_strategy=data["layout_strategy"],
+            group_assignment_method=data.get("group_assignment_method", "geometric_kmeans_v1"),
         )
 
 
@@ -168,7 +167,6 @@ def _generate_design_chunk(
                 topology=topology,
                 group_counts=group_counts,
                 section_indices_by_group=section_indices_by_group,
-                assignment_seed=seed + sample_index,
                 layout_strategy=layout_strategy,
             )
         )
@@ -214,7 +212,6 @@ def _build_random_grouped_design(
     topology: dict,
     group_counts: dict[BeamType, int],
     section_indices_by_group: dict[str, int],
-    assignment_seed: int,
     layout_strategy: str,
     adapter: LayoutDesignAdapter,
 ) -> StructuralDesign:
@@ -224,13 +221,13 @@ def _build_random_grouped_design(
         prototypes=[],
         feature_schema=[],
         created_from_samples=0,
-        description="Random sampled grouping for surrogate data.",
+        description="Geometry-clustered grouping for surrogate data.",
     )
     params = adapter.build_params(geometry=geometry, topology=topology)
     assignment = SectionAssignment.from_group_indices(
         ruleset.group_beam_types(),
         section_indices_by_group,
-        random_seed=assignment_seed,
+        assign_missing_by_geometry=True,
     )
     return StructuralDesign(params=params, pressure=pressure, section_assignment=assignment)
 
@@ -463,6 +460,7 @@ class DataCollector:
             },
             "feature_names": group_feature_names(self.layout_strategy),
             "feature_format": "group_v1",
+            "sample_spec_format": "structural_design_v1",
             "layout_strategy": self.layout_strategy,
             "y_sigma_stats": {
                 "min": float(y_sigma.min()),

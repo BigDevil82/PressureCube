@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from src.structure.section_grouping.features import beam_assignment_vector, make_geometry_context
+from src.structure.section_grouping.geometric import assign_geometric_beam_groups
 from src.structure.section_grouping.models import SectionGroupingRuleset
 from src.structure.section_assignment import BEAM_SECTION_TYPES
 from src.structure.section_library import SectionLibrary
@@ -33,6 +34,10 @@ def assign_beam_groups(model: StructuralModel, ruleset: SectionGroupingRuleset) 
             for prototype in prototypes
         ]
         assignments[beam_id] = prototypes[int(np.argmin(distances))].group_id
+    if len(assignments) < len([beam for beam in model.beams.values() if not beam.is_virtual]):
+        geometric_assignments = assign_geometric_beam_groups(model, ruleset.n_groups_by_type)
+        geometric_assignments.update(assignments)
+        return geometric_assignments
     return assignments
 
 

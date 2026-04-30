@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 from src.structure.enums import BeamType
 from src.structure.section_library import SectionLibrary, SectionType
 
@@ -39,7 +37,7 @@ class SectionAssignment:
 
     groups: dict[str, SectionGroup]
     beam_groups: dict[int, str] = field(default_factory=dict)
-    random_seed: int | None = None
+    assign_missing_by_geometry: bool = False
 
     @classmethod
     def by_beam_type(cls, section_indices_by_type: dict[BeamType, int]) -> "SectionAssignment":
@@ -60,7 +58,7 @@ class SectionAssignment:
         group_beam_types: dict[str, BeamType],
         section_indices_by_group: dict[str, int],
         beam_groups: dict[int, str] | None = None,
-        random_seed: int | None = None,
+        assign_missing_by_geometry: bool = False,
     ) -> "SectionAssignment":
         groups = {
             group_id: SectionGroup(
@@ -74,12 +72,12 @@ class SectionAssignment:
         return cls(
             groups=groups,
             beam_groups=beam_groups or {},
-            random_seed=random_seed,
+            assign_missing_by_geometry=assign_missing_by_geometry,
         )
 
     def apply_to_model(self, model: StructuralModel, section_lib: SectionLibrary) -> None:
-        if self.random_seed is not None:
-            self._assign_missing_beam_groups(model)
+        if self.assign_missing_by_geometry:
+            self._assign_missing_beam_groups_by_geometry(model)
 
         for beam_id, beam in model.beams.items():
             if beam.is_virtual:
@@ -89,32 +87,16 @@ class SectionAssignment:
             beam.section = section_lib.get_section(group.section_type, group.section_index)
             self.beam_groups[beam_id] = group_id  # Ensure every beam has an assigned group
 
-    def _assign_missing_beam_groups(self, model: StructuralModel) -> None:
-        for beam_type in sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value)):
-            group_ids = [
-                group_id
-                for group_id, group in self.groups.items()
-                if group.beam_type == beam_type
-            ]
-            if not group_ids:
-                continue
+    def _assign_missing_beam_groups_by_geometry(self, model: StructuralModel) -> None:
+        from src.structure.section_grouping.geometric import assign_geometric_beam_groups
 
-            beam_ids = [
-                beam_id
-                for beam_id, beam in model.beams.items()
-                if not beam.is_virtual and beam.beam_type == beam_type and beam_id not in self.beam_groups
-            ]
-            if not beam_ids:
-                continue
+        n_groups_by_type: dict[BeamType, int] = {}
+        for group in self.groups.values():
+            n_groups_by_type[group.beam_type] = n_groups_by_type.get(group.beam_type, 0) + 1
 
-            rng = np.random.default_rng(np.random.SeedSequence([self.random_seed, int(beam_type.value)]))
-            rng.shuffle(beam_ids)
-            for offset, beam_id in enumerate(beam_ids):
-                if offset < len(group_ids):
-                    group_id = group_ids[offset]
-                else:
-                    group_id = group_ids[int(rng.integers(0, len(group_ids)))]
-                self.beam_groups[beam_id] = group_id
+        geometric_groups = assign_geometric_beam_groups(model, n_groups_by_type)
+        for beam_id, group_id in geometric_groups.items():
+            self.beam_groups.setdefault(beam_id, group_id)
 
     def _single_group_for_type(self, beam_type: BeamType) -> str:
         matches = [group_id for group_id, group in self.groups.items() if group.beam_type == beam_type]
