@@ -1,5 +1,13 @@
+from pathlib import Path
+import sys
+
 import streamlit as st
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import src
 from src.app.model_visualization import build_structure_figure
 from src.app.parametric_helpers import build_engineering_preview, hydrate_defaults
 from src.app.session import AppSession

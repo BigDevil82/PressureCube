@@ -1,7 +1,14 @@
 import json
+from pathlib import Path
+import sys
 
 import streamlit as st
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import src
 from src.analysis.post_processor import DesignCheckResult
 from src.analysis.workflows import run_modal_workflow, run_static_workflow
 from src.app.model_visualization import build_structure_figure
