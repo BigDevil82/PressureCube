@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Sequence
 
 import numpy as np
@@ -47,7 +47,20 @@ class LayoutDesignAdapter:
     def default_topology(self) -> dict[str, Any]:
         return {spec.name: spec.default for spec in self.topology_specs()}
 
-    def build_params(self, *, geometry: dict[str, float], topology: dict[str, Any]) -> BaseLayoutParameters:
+    def build_params(
+        self,
+        *,
+        geometry: dict[str, float],
+        topology: dict[str, Any],
+        base_params: BaseLayoutParameters | None = None,
+    ) -> BaseLayoutParameters:
+        if base_params is not None:
+            return replace(
+                base_params,
+                main_beam_spacing=topology["main_beam_spacing"],
+                add_support_beam=topology["add_support_beam"],
+                **self._extra_param_kwargs(topology),
+            )
         return self.params_cls(
             length=geometry["L"],
             width=geometry["W"],
@@ -65,8 +78,9 @@ class LayoutDesignAdapter:
         topology: dict[str, Any],
         section_group_rules: SectionGroupingRuleset,
         section_indices_by_group: dict[str, int],
+        base_params: BaseLayoutParameters | None = None,
     ) -> StructuralDesign:
-        params = self.build_params(geometry=geometry, topology=topology)
+        params = self.build_params(geometry=geometry, topology=topology, base_params=base_params)
         assignment = build_assignment_for_params(
             params,
             section_group_rules,

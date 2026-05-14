@@ -14,6 +14,7 @@ from joblib import Parallel, delayed
 
 from src.analysis.evaluator import StructuralEvaluator, evaluate_design
 from src.optimization.design_space import VariableSpec, get_layout_adapter, get_section_lib
+from src.structure.layout.params import BaseLayoutParameters
 from src.structure.section_grouping import SectionGroupingRuleset, section_counts_for_groups
 from src.structure.structural_design import StructuralDesign
 
@@ -114,6 +115,7 @@ def decode_candidate(
     topology_specs: list[VariableSpec],
     layout_strategy: str,
     section_scheme: SectionScheme,
+    base_params: BaseLayoutParameters | None = None,
 ) -> Candidate:
     """Decode genes to a structural design candidate."""
     topology = {}
@@ -129,6 +131,7 @@ def decode_candidate(
         topology=topology,
         section_group_rules=section_scheme.rules,
         section_indices_by_group=section_indices_by_group,
+        base_params=base_params,
     )
     return Candidate(
         design=design,
@@ -161,6 +164,7 @@ def evaluate_individual(
     section_scheme: SectionScheme,
     eval_mode: str = "fea",
     surrogate_path: Optional[str] = None,
+    base_params: BaseLayoutParameters | None = None,
 ) -> tuple[float, float, float, float, bool]:
     """
     Evaluate fitness of an individual.
@@ -174,6 +178,7 @@ def evaluate_individual(
         topology_specs,
         layout_strategy,
         section_scheme,
+        base_params,
     )
 
     mass, u_sigma, u_delta, feasible = evaluate_design(
@@ -311,6 +316,7 @@ class ParallelGAOptimizer:
         surrogate_path: Optional[str] = None,
         layout_strategy: str = "research",
         section_group_rules: SectionGroupingRuleset | str | None = None,
+        base_params: BaseLayoutParameters | None = None,
     ):
         self.pop_size = pop_size
         self.n_generations = n_generations
@@ -323,6 +329,7 @@ class ParallelGAOptimizer:
         self.eval_mode = eval_mode
         self.surrogate_path = surrogate_path
         self.layout_strategy = layout_strategy
+        self.base_params = base_params
         self.adapter = get_layout_adapter(layout_strategy)
         self.topology_specs = self.adapter.topology_specs()
         self.section_group_rules = (
@@ -378,6 +385,7 @@ class ParallelGAOptimizer:
                 self.topology_specs,
                 self.layout_strategy,
                 self.section_scheme,
+                self.base_params,
             )
             for ind in population
         ]
@@ -407,6 +415,7 @@ class ParallelGAOptimizer:
                 self.section_scheme,
                 self.eval_mode,
                 self.surrogate_path,
+                self.base_params,
             )
         initial_mass = initial_result[0]
         if verbose:
@@ -437,6 +446,7 @@ class ParallelGAOptimizer:
                         self.section_scheme,
                         self.eval_mode,
                         self.surrogate_path,
+                        self.base_params,
                     )
                     for ind in population
                 )
@@ -506,6 +516,7 @@ class ParallelGAOptimizer:
                 self.topology_specs,
                 self.layout_strategy,
                 self.section_scheme,
+                self.base_params,
             )
         else:
             best_candidate = decode_candidate(
@@ -514,6 +525,7 @@ class ParallelGAOptimizer:
                 self.topology_specs,
                 self.layout_strategy,
                 self.section_scheme,
+                self.base_params,
             )
 
         return GAResult(
