@@ -253,15 +253,15 @@ def apply_optimization_result(result):
 
 
 def load_ga_optimizer():
-    design_space_mod = importlib.import_module("src.optimization.design_space")
-    surrogate_model_mod = importlib.import_module("src.analysis.surrogate_model")
-    evaluator_mod = importlib.import_module("src.analysis.evaluator")
+    module_names = [
+        "src.optimization.parallel_ga",
+        "src.analysis.evaluator",
+        "src.analysis.surrogate_model",
+        "src.optimization.design_space",
+    ]
+    for module_name in module_names:
+        sys.modules.pop(module_name, None)
     parallel_ga_mod = importlib.import_module("src.optimization.parallel_ga")
-
-    importlib.reload(design_space_mod)
-    importlib.reload(surrogate_model_mod)
-    importlib.reload(evaluator_mod)
-    parallel_ga_mod = importlib.reload(parallel_ga_mod)
     return parallel_ga_mod.ParallelGAOptimizer
 
 
