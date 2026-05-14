@@ -83,6 +83,7 @@ with st.sidebar:
         1.5 if layout_mode == "engineering" else 3.0,
         min(max(float(defaults["beam_spacing"]), 0.5), 1.5 if layout_mode == "engineering" else 3.0),
         0.05,
+        key="beam_spacing",
     )
     add_brace = st.checkbox("添加支撑梁 (Brace)", value=defaults["add_brace"], key="add_brace")
 
@@ -223,21 +224,6 @@ with col2:
             f"梁 {len([b for b in model.beams.values() if not b.is_virtual])}/{len([b for b in meshed_model.beams.values() if not b.is_virtual])}，"
             f"板 {len(model.plates)}/{len(meshed_model.plates)}"
         )
-    if isinstance(params, EngineeringLayoutParameters):
-        st.divider()
-        st.caption(
-            f"前/后/右窗 spans: {params.window.front_spans} / {params.window.back_spans} / {params.window.right_spans}"
-        )
-    st.divider()
-    st.write("**图例说明:**")
-    st.markdown("<span style='color:#FF4B4B'>■</span> Frame (边框)", unsafe_allow_html=True)
-    st.markdown("<span style='color:#1E90FF'>■</span> Main (主梁)", unsafe_allow_html=True)
-    st.markdown("<span style='color:#FFA500'>■</span> Secondary (次梁)", unsafe_allow_html=True)
-    st.markdown("<span style='color:#27C344'>■</span> Brace (支撑)", unsafe_allow_html=True)
-    if show_plates:
-        st.markdown("<span style='color:#A9A9A9'>■</span> Steel Plate (钢板)", unsafe_allow_html=True)
-        st.markdown("<span style='color:#00B7C2'>■</span> Opening Panel (门窗封板)", unsafe_allow_html=True)
-
 
 class StreamlitLogBuffer(StringIO):
     def __init__(self, placeholder):
@@ -272,11 +258,11 @@ st.subheader("🧬 结构优化")
 with st.expander("优化参数", expanded=True):
     opt_col1, opt_col2, opt_col3 = st.columns(3)
     with opt_col1:
-        opt_pressure = st.number_input(
-            "优化压力 (Pa)",
-            value=float(session.analysis.pressure_pa),
-            step=1000.0,
-            key="opt_pressure",
+        opt_pressure_kpa = st.number_input(
+            "内压大小 (kPa)",
+            value=float(session.analysis.pressure_pa) / 1000.0,
+            step=1.0,
+            key="opt_pressure_kpa",
         )
         opt_eval_mode = st.selectbox(
             "评估方式",
@@ -291,27 +277,25 @@ with st.expander("优化参数", expanded=True):
         opt_n_jobs = st.number_input("并行进程数", min_value=1, max_value=32, value=4, step=1, key="opt_n_jobs")
         opt_seed = st.number_input("随机种子", min_value=0, max_value=999999, value=42, step=1, key="opt_seed")
 
-    opt_surrogate_path = st.text_input(
-        "代理模型路径",
-        value=r"results\surrogate_data\engineering_200k\engineering_model.pkl",
-        key="opt_surrogate_path",
-        disabled=opt_eval_mode != "surrogate",
-    )
-
 run_optimization = st.button("开始 GA 优化", type="primary", width="stretch")
 log_box = st.empty()
 summary_box = st.empty()
 
 if run_optimization:
-    geometry = {"L": float(length), "W": float(width), "H": float(height), "pressure": float(opt_pressure)}
-    session.analysis.pressure_pa = int(opt_pressure)
+    pressure_pa = float(opt_pressure_kpa) * 1000.0
+    geometry = {"L": float(length), "W": float(width), "H": float(height), "pressure": pressure_pa}
+    session.analysis.pressure_pa = int(pressure_pa)
     optimizer = ParallelGAOptimizer(
         pop_size=int(opt_pop_size),
         n_generations=int(opt_generations),
         n_jobs=int(opt_n_jobs),
         seed=int(opt_seed),
         eval_mode=opt_eval_mode,
-        surrogate_path=opt_surrogate_path if opt_eval_mode == "surrogate" else None,
+        surrogate_path=(
+            r"results\surrogate_data\engineering_200k\engineering_model.pkl"
+            if opt_eval_mode == "surrogate"
+            else None
+        ),
         layout_strategy="engineering",
         base_params=params,
     )
