@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 from contextlib import redirect_stdout
 from io import StringIO
+import importlib
 
 import streamlit as st
 
@@ -13,7 +14,6 @@ import src
 from src.app.model_visualization import build_structure_figure
 from src.app.parametric_helpers import build_engineering_preview, hydrate_defaults
 from src.app.session import AppSession
-from src.optimization.parallel_ga import ParallelGAOptimizer
 from src.structure.enums import BeamType
 from src.structure.layout.params import (
     EngineeringLayoutParameters,
@@ -252,6 +252,19 @@ def apply_optimization_result(result):
     }
 
 
+def load_ga_optimizer():
+    import src.analysis.evaluator as evaluator_mod
+    import src.analysis.surrogate_model as surrogate_model_mod
+    import src.optimization.design_space as design_space_mod
+    import src.optimization.parallel_ga as parallel_ga_mod
+
+    importlib.reload(design_space_mod)
+    importlib.reload(surrogate_model_mod)
+    importlib.reload(evaluator_mod)
+    parallel_ga_mod = importlib.reload(parallel_ga_mod)
+    return parallel_ga_mod.ParallelGAOptimizer
+
+
 st.divider()
 st.subheader("🧬 结构优化")
 
@@ -285,6 +298,7 @@ if run_optimization:
     pressure_pa = float(opt_pressure_kpa) * 1000.0
     geometry = {"L": float(length), "W": float(width), "H": float(height), "pressure": pressure_pa}
     session.analysis.pressure_pa = int(pressure_pa)
+    ParallelGAOptimizer = load_ga_optimizer()
     optimizer = ParallelGAOptimizer(
         pop_size=int(opt_pop_size),
         n_generations=int(opt_generations),
