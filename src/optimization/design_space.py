@@ -139,7 +139,6 @@ class ResearchLayoutAdapter(LayoutDesignAdapter):
         return ["num_secondary_width", "num_secondary_height", "add_support_beam"]
 
     def topology_feature_values(self, params: BaseLayoutParameters) -> list[float]:
-        assert isinstance(params, ResearchLayoutParameters)
         return [
             float(params.num_secondary_width),
             float(params.num_secondary_height),
@@ -179,7 +178,6 @@ class EngineeringLayoutAdapter(LayoutDesignAdapter):
         return ["support_beam_max_spacing", "add_support_beam"]
 
     def topology_feature_values(self, params: BaseLayoutParameters) -> list[float]:
-        assert isinstance(params, EngineeringLayoutParameters)
         return [float(params.support_beam_max_spacing), float(params.add_support_beam)]
 
     def _extra_param_kwargs(self, topology: dict[str, Any]) -> dict[str, Any]:
