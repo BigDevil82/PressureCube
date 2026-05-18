@@ -158,7 +158,7 @@ class EngineeringLayoutEngine:
         if span <= max_spacing:
             return []
 
-        division_count = int(math.ceil(span / max_spacing))
+        division_count = int(math.ceil(span / max_spacing - 1e-9))
         step = span / division_count
         return [start + i * step for i in range(1, division_count)]
 
@@ -212,39 +212,10 @@ class EngineeringLayoutEngine:
 
         return sorted(z for z in anchors if 0 < z < self.p.height)
 
-    def _expand_vertical_levels(self, anchors: list[float]) -> set[float]:
-        z_vals = set(anchors)
-        spacing = self.p.main_beam_spacing
-        threshold = self.p.min_edge_remainder
-
-        for anchor in anchors:
-            current = anchor - spacing
-            while current > 0:
-                z_vals.add(current)
-                current -= spacing
-
-            current = anchor + spacing
-            while current < self.p.height:
-                z_vals.add(current)
-                current += spacing
-
-        if z_vals:
-            sorted_vals = sorted(z_vals)
-            if sorted_vals[0] < threshold:
-                z_vals.discard(sorted_vals[0])
-            sorted_vals = sorted(z_vals)
-            if sorted_vals and self.p.height - sorted_vals[-1] < threshold:
-                z_vals.discard(sorted_vals[-1])
-
-        self.window_expanded_brace_zs = {
-            z for z in z_vals if all(not math.isclose(z, anchor, abs_tol=1e-4) for anchor in anchors)
-        }
-        return z_vals
-
     def _fill_secondary_z_grids_with_windows(self):
         anchors = self._collect_vertical_anchor_levels()
         if anchors:
-            z_vals = self._expand_vertical_levels(anchors)
+            z_vals = set(anchors)
         else:
             z_vals = set(
                 self._center_out_positions(self.p.height, self.p.main_beam_spacing, self.p.min_edge_remainder)
