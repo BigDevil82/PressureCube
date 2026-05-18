@@ -225,6 +225,7 @@ with col2:
             f"板 {len(model.plates)}/{len(meshed_model.plates)}"
         )
 
+
 class StreamlitLogBuffer(StringIO):
     def __init__(self, placeholder):
         super().__init__()
@@ -284,11 +285,19 @@ with st.expander("优化参数", expanded=True):
             key="opt_eval_mode",
         )
     with opt_col2:
-        opt_pop_size = st.number_input("种群规模", min_value=8, max_value=256, value=32, step=8, key="opt_pop_size")
-        opt_generations = st.number_input("迭代代数", min_value=1, max_value=100, value=10, step=1, key="opt_generations")
+        opt_pop_size = st.number_input(
+            "种群规模", min_value=8, max_value=256, value=32, step=8, key="opt_pop_size"
+        )
+        opt_generations = st.number_input(
+            "迭代代数", min_value=1, max_value=100, value=10, step=1, key="opt_generations"
+        )
     with opt_col3:
-        opt_n_jobs = st.number_input("并行进程数", min_value=1, max_value=32, value=4, step=1, key="opt_n_jobs")
-        opt_seed = st.number_input("随机种子", min_value=0, max_value=999999, value=42, step=1, key="opt_seed")
+        opt_n_jobs = st.number_input(
+            "并行进程数", min_value=1, max_value=32, value=4, step=1, key="opt_n_jobs"
+        )
+        opt_seed = st.number_input(
+            "随机种子", min_value=0, max_value=999999, value=42, step=1, key="opt_seed"
+        )
 
 run_optimization = st.button("开始 GA 优化", type="primary", width="stretch")
 log_box = st.empty()
@@ -305,11 +314,7 @@ if run_optimization:
         n_jobs=int(opt_n_jobs),
         seed=int(opt_seed),
         eval_mode=opt_eval_mode,
-        surrogate_path=(
-            r"results\surrogate_data\engineering_200k\engineering_model.pkl"
-            if opt_eval_mode == "surrogate"
-            else None
-        ),
+        surrogate_path=("src/data/engineering_model.pkl" if opt_eval_mode == "surrogate" else None),
         layout_strategy="engineering",
         base_params=params,
     )
