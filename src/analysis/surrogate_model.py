@@ -17,6 +17,16 @@ from src.optimization.design_space import design_to_feature_vector, get_section_
 from src.structure.structural_design import StructuralDesign
 
 
+def get_device(device: str = "auto") -> torch.device:
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
+
+
+def state_to_cpu(model: nn.Module) -> Dict:
+    return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+
 class ResidualBlock(nn.Module):
     """Residual block with skip connection."""
 
@@ -81,11 +91,7 @@ class KFoldTrainer:
 
     def __init__(self, config: KFoldConfig, device: str = "auto"):
         self.config = config
-
-        if device == "auto":
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = torch.device(device)
+        self.device = get_device(device)
 
         self.models_sigma: List[nn.Module] = []
         self.models_delta: List[nn.Module] = []
@@ -182,7 +188,7 @@ class KFoldTrainer:
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                best_state = state_to_cpu(model)
                 patience_counter = 0
             else:
                 patience_counter += 1
@@ -312,8 +318,8 @@ class KFoldTrainer:
                 "dropout": self.config.dropout,
                 "resnet_blocks": self.config.resnet_blocks,
             },
-            "models_sigma_state": [m.state_dict() for m in self.models_sigma],
-            "models_delta_state": [m.state_dict() for m in self.models_delta],
+            "models_sigma_state": [state_to_cpu(m) for m in self.models_sigma],
+            "models_delta_state": [state_to_cpu(m) for m in self.models_delta],
             "X_mean": self.X_mean,
             "X_std": self.X_std,
             "y_sigma_mean": self.y_sigma_mean,
