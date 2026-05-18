@@ -238,7 +238,7 @@ if __name__ == "__main__":
     parser.add_argument("--W", type=float, default=3.6)
     parser.add_argument("--H", type=float, default=3.6)
     parser.add_argument("--pressure", type=float, default=30000.0)
-    parser.add_argument("--mode", type=str, default="fea", choices=["fea", "surrogate"])
+    parser.add_argument("--eval_mode", type=str, default="fea", choices=["fea", "surrogate"])
     parser.add_argument("--surrogate", type=str, default=None, help="Path to surrogate model")
     parser.add_argument(
         "--layout-strategy", type=str, default="research", choices=["research", "engineering"]
@@ -253,7 +253,7 @@ if __name__ == "__main__":
     opt = JointBayesianOptimizer(
         n_trials=200,
         seed=42,
-        eval_mode=args.mode,
+        eval_mode=args.eval_mode,
         surrogate_path=args.surrogate,
         layout_strategy=args.layout_strategy,
         section_group_rules=args.section_group_rules,
@@ -271,4 +271,7 @@ if __name__ == "__main__":
         mode="fea",
     )
     check = evaluator.evaluate(design)
+    print("Optimal Topology:", result.optimal_topology)
+    print("Optimal Section Indices by Group:", result.optimal_section_indices_by_group)
     print("FEA Check - u_sigma: {:.3f}, u_delta: {:.3f}".format(check.u_sigma, check.u_delta))
+    print(f"Evaluations: {result.n_evaluations}, Time: {result.time_seconds:.1f}s")

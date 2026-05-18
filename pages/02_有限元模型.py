@@ -284,89 +284,89 @@ if analysis.analysis_done and analysis.analysis_type == "静力分析" and analy
     )
     st.plotly_chart(figure, width="stretch")
 
-    st.divider()
-    with st.expander("截面分组", expanded=True):
-        st.caption(
-            "这里使用当前静力分析结果作为一个代表样本发现稳定分组规则。"
-            "更严谨的优化规则建议离线选取多个代表模型，并分别使用强度组合和位移组合结果。"
-        )
-        group_cols = st.columns(4)
-        with group_cols[0]:
-            frame_groups = st.slider("框架梁组数", 1, 6, 2)
-        with group_cols[1]:
-            main_groups = st.slider("主梁组数", 1, 8, 3)
-        with group_cols[2]:
-            secondary_groups = st.slider("次梁组数", 1, 8, 3)
-        with group_cols[3]:
-            brace_groups = st.slider("支撑梁组数", 1, 8, 2)
+    # st.divider()
+    # with st.expander("截面分组", expanded=True):
+    #     st.caption(
+    #         "这里使用当前静力分析结果作为一个代表样本发现稳定分组规则。"
+    #         "更严谨的优化规则建议离线选取多个代表模型，并分别使用强度组合和位移组合结果。"
+    #     )
+    #     group_cols = st.columns(4)
+    #     with group_cols[0]:
+    #         frame_groups = st.slider("框架梁组数", 1, 6, 2)
+    #     with group_cols[1]:
+    #         main_groups = st.slider("主梁组数", 1, 8, 3)
+    #     with group_cols[2]:
+    #         secondary_groups = st.slider("次梁组数", 1, 8, 3)
+    #     with group_cols[3]:
+    #         brace_groups = st.slider("支撑梁组数", 1, 8, 2)
 
-        option_cols = st.columns(3)
-        with option_cols[0]:
-            stress_weight = st.slider("应力权重", 0.0, 2.0, 1.0, 0.05)
-        with option_cols[1]:
-            displacement_weight = st.slider("位移权重", 0.0, 2.0, 0.7, 0.05)
-        with option_cols[2]:
-            spatial_weight = st.slider("空间权重", 0.0, 1.0, 0.35, 0.05)
+    #     option_cols = st.columns(3)
+    #     with option_cols[0]:
+    #         stress_weight = st.slider("应力权重", 0.0, 2.0, 1.0, 0.05)
+    #     with option_cols[1]:
+    #         displacement_weight = st.slider("位移权重", 0.0, 2.0, 0.7, 0.05)
+    #     with option_cols[2]:
+    #         spatial_weight = st.slider("空间权重", 0.0, 1.0, 0.35, 0.05)
 
-        discovery_config = SectionGroupingDiscoveryConfig(
-            n_groups_by_type={
-                BeamType.FRAME: frame_groups,
-                BeamType.MAIN: main_groups,
-                BeamType.SECONDARY: secondary_groups,
-                BeamType.BRACE: brace_groups,
-            },
-            stress_weight=stress_weight,
-            displacement_weight=displacement_weight,
-            spatial_weight=spatial_weight,
-            description=f"Streamlit discovery from current case: {analysis.case_name}",
-        )
+    #     discovery_config = SectionGroupingDiscoveryConfig(
+    #         n_groups_by_type={
+    #             BeamType.FRAME: frame_groups,
+    #             BeamType.MAIN: main_groups,
+    #             BeamType.SECONDARY: secondary_groups,
+    #             BeamType.BRACE: brace_groups,
+    #         },
+    #         stress_weight=stress_weight,
+    #         displacement_weight=displacement_weight,
+    #         spatial_weight=spatial_weight,
+    #         description=f"Streamlit discovery from current case: {analysis.case_name}",
+    #     )
 
-        discovery = discover_section_group_rules_with_assignments(
-            [
-                RepresentativeAnalysis(
-                    model=meshed_model,
-                    strength_results=analysis.analysis_results,
-                    service_results=analysis.analysis_results,
-                )
-            ],
-            discovery_config,
-            layout_strategy=getattr(session.params, "layout_strategy", "research"),
-        )
-        ruleset = discovery.ruleset
-        st.plotly_chart(
-            build_section_grouping_figure(
-                meshed_model,
-                ruleset,
-                beam_to_group=discovery.sample_beam_to_group[0],
-            ),
-            width="stretch",
-        )
-        st.dataframe(
-            [
-                {
-                    "组": prototype.group_id,
-                    "类型": prototype.beam_type.name,
-                    "发现样本梁数": prototype.member_count,
-                    "应力比均值": f"{prototype.stress_ratio_mean:.3f}",
-                    "应力比P90": f"{prototype.stress_ratio_p90:.3f}",
-                    "应力比最大": f"{prototype.stress_ratio_max:.3f}",
-                    "位移均值(mm)": f"{prototype.displacement_mean_mm:.3f}",
-                    "位移P90(mm)": f"{prototype.displacement_p90_mm:.3f}",
-                    "位移最大(mm)": f"{prototype.displacement_max_mm:.3f}",
-                    "代表中心": "({:.2f}, {:.2f}, {:.2f})".format(*prototype.representative_center),
-                    "控制因素": prototype.control_factor,
-                }
-                for prototype in ruleset.prototypes
-            ],
-            width="stretch",
-        )
-        st.download_button(
-            "下载当前分组规则 JSON",
-            data=json.dumps(ruleset.to_dict(), ensure_ascii=False, indent=2),
-            file_name=f"{ruleset.layout_strategy}_section_group_rules.json",
-            mime="application/json",
-            use_container_width=True,
-        )
+    #     discovery = discover_section_group_rules_with_assignments(
+    #         [
+    #             RepresentativeAnalysis(
+    #                 model=meshed_model,
+    #                 strength_results=analysis.analysis_results,
+    #                 service_results=analysis.analysis_results,
+    #             )
+    #         ],
+    #         discovery_config,
+    #         layout_strategy=getattr(session.params, "layout_strategy", "research"),
+    #     )
+    #     ruleset = discovery.ruleset
+    #     st.plotly_chart(
+    #         build_section_grouping_figure(
+    #             meshed_model,
+    #             ruleset,
+    #             beam_to_group=discovery.sample_beam_to_group[0],
+    #         ),
+    #         width="stretch",
+    #     )
+    #     st.dataframe(
+    #         [
+    #             {
+    #                 "组": prototype.group_id,
+    #                 "类型": prototype.beam_type.name,
+    #                 "发现样本梁数": prototype.member_count,
+    #                 "应力比均值": f"{prototype.stress_ratio_mean:.3f}",
+    #                 "应力比P90": f"{prototype.stress_ratio_p90:.3f}",
+    #                 "应力比最大": f"{prototype.stress_ratio_max:.3f}",
+    #                 "位移均值(mm)": f"{prototype.displacement_mean_mm:.3f}",
+    #                 "位移P90(mm)": f"{prototype.displacement_p90_mm:.3f}",
+    #                 "位移最大(mm)": f"{prototype.displacement_max_mm:.3f}",
+    #                 "代表中心": "({:.2f}, {:.2f}, {:.2f})".format(*prototype.representative_center),
+    #                 "控制因素": prototype.control_factor,
+    #             }
+    #             for prototype in ruleset.prototypes
+    #         ],
+    #         width="stretch",
+    #     )
+    #     st.download_button(
+    #         "下载当前分组规则 JSON",
+    #         data=json.dumps(ruleset.to_dict(), ensure_ascii=False, indent=2),
+    #         file_name=f"{ruleset.layout_strategy}_section_group_rules.json",
+    #         mime="application/json",
+    #         use_container_width=True,
+    #     )
 
 elif analysis.analysis_done and analysis.analysis_type == "模态分析" and analysis.modal_results is not None:
     modal_results = analysis.modal_results
