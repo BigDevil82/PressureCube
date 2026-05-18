@@ -2,6 +2,7 @@
 Advanced surrogate model training with a single strategy: K-Fold + ResNet.
 """
 
+import io
 import pickle
 from dataclasses import dataclass, field, fields
 from typing import Dict, List, Optional, Tuple
@@ -25,6 +26,24 @@ def get_device(device: str = "auto") -> torch.device:
 
 def state_to_cpu(model: nn.Module) -> Dict:
     return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+
+def load_pickle(path: str):
+    if torch.cuda.is_available():
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+    load_from_bytes = torch.storage._load_from_bytes
+    torch.storage._load_from_bytes = lambda b: torch.load(
+        io.BytesIO(b),
+        map_location=torch.device("cpu"),
+        weights_only=False,
+    )
+    try:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    finally:
+        torch.storage._load_from_bytes = load_from_bytes
 
 
 class ResidualBlock(nn.Module):
@@ -459,8 +478,7 @@ class AdvancedSurrogateModel:
     @classmethod
     def load(cls, path: str) -> "AdvancedSurrogateModel":
         """Load model."""
-        with open(path, "rb") as f:
-            data = pickle.load(f)
+        data = load_pickle(path)
 
         strategy = data.get("strategy", "kfold_resnet")
         if strategy != "kfold_resnet":
