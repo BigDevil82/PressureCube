@@ -94,6 +94,7 @@ class EngineeringLayoutEngine:
         self._fill_secondary_x_grids_centered()
         self._fill_secondary_z_grids_with_windows()
         self._build_openings()
+        self._fill_front_back_window_support_y_grids()
 
         self.sorted_x = sorted(self.grids_x)
         self.sorted_y = sorted(self.grids_y)
@@ -149,20 +150,22 @@ class EngineeringLayoutEngine:
 
         return positions
 
-    def _insert_support_points(self, bounds: list[float], max_spacing: float, target_set: set[float]):
+    def _support_points_in_span(self, start: float, end: float, max_spacing: float) -> list[float]:
         if max_spacing <= 0:
-            return
+            return []
 
+        span = end - start
+        if span <= max_spacing:
+            return []
+
+        division_count = int(math.ceil(span / max_spacing))
+        step = span / division_count
+        return [start + i * step for i in range(1, division_count)]
+
+    def _insert_support_points(self, bounds: list[float], max_spacing: float, target_set: set[float]):
         for i in range(len(bounds) - 1):
             start, end = bounds[i], bounds[i + 1]
-            span = end - start
-            if span <= max_spacing:
-                continue
-
-            division_count = int(math.ceil(span / max_spacing))
-            step = span / division_count
-            for j in range(1, division_count):
-                target_set.add(start + j * step)
+            target_set.update(self._support_points_in_span(start, end, max_spacing))
 
     def _main_face_spans(self) -> list[tuple[float, float]]:
         ys = sorted(y for y in self.grids_y if y >= 0)
@@ -255,6 +258,22 @@ class EngineeringLayoutEngine:
             bounds = [0.0] + sorted(self.secondary_z_locs) + [self.p.height]
             self._insert_support_points(bounds, self.p.support_beam_max_spacing, self.brace_z_locs)
             self.grids_z.update(self.brace_z_locs)
+
+    def _spans_for_indices(self, indices: list[int]) -> list[tuple[float, float]]:
+        spans = self._main_face_spans()
+        return [span for idx in indices if (span := self._safe_span(spans, idx)) is not None]
+
+    def _fill_front_back_window_support_y_grids(self):
+        if not self.p.add_support_beam or not self.p.window.active:
+            return
+
+        for indices in (self.p.window.front_spans, self.p.window.back_spans):
+            window_spans = sorted(self._spans_for_indices(indices))
+            for left, right in zip(window_spans, window_spans[1:]):
+                bounds = sorted(y for y in self.grids_y if left[1] <= y <= right[0])
+                support_y: set[float] = set()
+                self._insert_support_points(bounds, self.p.support_beam_max_spacing, support_y)
+                self.grids_y.update(support_y)
 
     def _resolve_right_window_spans(self) -> list[tuple[float, float]]:
         spans = []
