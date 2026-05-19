@@ -93,6 +93,25 @@ class LayoutDesignAdapter:
             section_assignment=assignment,
         )
 
+    def build_design_with_model(
+        self,
+        *,
+        geometry: dict[str, float],
+        pressure: float,
+        topology: dict[str, Any],
+        section_group_rules: SectionGroupingRuleset,
+        section_indices_by_group: dict[str, int],
+        base_params: BaseLayoutParameters | None = None,
+    ) -> tuple[StructuralDesign, StructuralModel]:
+        params = self.build_params(geometry=geometry, topology=topology, base_params=base_params)
+        return build_design_with_model(
+            params,
+            pressure,
+            section_group_rules,
+            section_indices_by_group,
+            get_section_lib(params.layout_strategy),
+        )
+
     def build_design_from_sections(
         self,
         *,
@@ -216,6 +235,29 @@ def build_assignment_for_params(
         section_indices_by_group,
         beam_groups=assign_beam_groups(model, ruleset),
     )
+
+
+def build_design_with_model(
+    params: BaseLayoutParameters,
+    pressure: float,
+    ruleset: SectionGroupingRuleset,
+    section_indices_by_group: dict[str, int],
+    section_lib: SectionLibrary,
+) -> tuple[StructuralDesign, StructuralModel]:
+    model = StructuralModel(params, section_lib, section_assignment=zero_assignment())
+    model.generate()
+    assignment = SectionAssignment.from_group_indices(
+        ruleset.group_beam_types(),
+        section_indices_by_group,
+        beam_groups=assign_beam_groups(model, ruleset),
+    )
+    model.apply_section_assignment(assignment)
+    design = StructuralDesign(
+        params=params,
+        pressure=pressure,
+        section_assignment=assignment,
+    )
+    return design, model
 
 
 def design_to_feature_vector(design: StructuralDesign) -> np.ndarray:

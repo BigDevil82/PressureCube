@@ -17,6 +17,7 @@ from src.optimization.design_space import VariableSpec, get_layout_adapter, get_
 from src.structure.layout.params import BaseLayoutParameters
 from src.structure.section_grouping import SectionGroupingRuleset, section_counts_for_groups
 from src.structure.structural_design import StructuralDesign
+from src.structure.structural_model import StructuralModel
 
 
 @dataclass
@@ -42,6 +43,7 @@ class GAResult:
 @dataclass(frozen=True)
 class Candidate:
     design: StructuralDesign
+    model: StructuralModel
     topology: dict
     section_indices_by_group: dict[str, int]
 
@@ -125,7 +127,7 @@ def decode_candidate(
     section_start = len(topology_specs)
     section_indices_by_group = section_scheme.decode(genes[section_start:])
     adapter = get_layout_adapter(layout_strategy)
-    design = adapter.build_design(
+    design, model = adapter.build_design_with_model(
         geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
         pressure=geometry.get("pressure", 30000.0),
         topology=topology,
@@ -135,6 +137,7 @@ def decode_candidate(
     )
     return Candidate(
         design=design,
+        model=model,
         topology=topology,
         section_indices_by_group=section_indices_by_group,
     )
@@ -389,10 +392,13 @@ class ParallelGAOptimizer:
             )
             for ind in population
         ]
-        eval_results = self.surrogate_evaluator.evaluate_batch(
-            [candidate.design for candidate in candidates],
-        )
-        evals = [(result.mass, result.u_sigma, result.u_delta, result.feasible) for result in eval_results]
+        designs = [candidate.design for candidate in candidates]
+        masses = [candidate.model.calculate_mass_kg() for candidate in candidates]
+        sigmas, deltas = self.surrogate_evaluator.surrogate.predict_batch(designs)
+        evals = [
+            (mass, float(u_sigma), float(u_delta), bool(u_sigma <= 1.0 and u_delta <= 1.0))
+            for mass, u_sigma, u_delta in zip(masses, sigmas, deltas)
+        ]
         return [
             _fitness_from_eval(mass, u_sigma, u_delta, feasible, self.eval_mode)
             for mass, u_sigma, u_delta, feasible in evals
