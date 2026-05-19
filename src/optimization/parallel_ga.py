@@ -48,6 +48,14 @@ class Candidate:
     section_indices_by_group: dict[str, int]
 
 
+@dataclass(frozen=True)
+class CandidateEvalData:
+    design: StructuralDesign
+    topology: dict
+    section_indices_by_group: dict[str, int]
+    mass: float
+
+
 @dataclass
 class SectionScheme:
     """Maps section genes to beam-group section assignments."""
@@ -140,6 +148,30 @@ def decode_candidate(
         model=model,
         topology=topology,
         section_indices_by_group=section_indices_by_group,
+    )
+
+
+def decode_candidate_eval_data(
+    genes: np.ndarray,
+    geometry: dict,
+    topology_specs: list[VariableSpec],
+    layout_strategy: str,
+    section_scheme: SectionScheme,
+    base_params: BaseLayoutParameters | None = None,
+) -> CandidateEvalData:
+    candidate = decode_candidate(
+        genes,
+        geometry,
+        topology_specs,
+        layout_strategy,
+        section_scheme,
+        base_params,
+    )
+    return CandidateEvalData(
+        design=candidate.design,
+        topology=candidate.topology,
+        section_indices_by_group=candidate.section_indices_by_group,
+        mass=candidate.model.calculate_mass_kg(),
     )
 
 
@@ -381,19 +413,33 @@ class ParallelGAOptimizer:
         population: np.ndarray,
         geometry: dict,
     ) -> list[tuple[float, float, float, float, bool]]:
-        candidates = [
-            decode_candidate(
-                ind,
-                geometry,
-                self.topology_specs,
-                self.layout_strategy,
-                self.section_scheme,
-                self.base_params,
+        if self.n_jobs == 1:
+            candidates = [
+                decode_candidate_eval_data(
+                    ind,
+                    geometry,
+                    self.topology_specs,
+                    self.layout_strategy,
+                    self.section_scheme,
+                    self.base_params,
+                )
+                for ind in population
+            ]
+        else:
+            candidates = Parallel(n_jobs=self.n_jobs, backend="loky")(
+                delayed(decode_candidate_eval_data)(
+                    ind,
+                    geometry,
+                    self.topology_specs,
+                    self.layout_strategy,
+                    self.section_scheme,
+                    self.base_params,
+                )
+                for ind in population
             )
-            for ind in population
-        ]
+
         designs = [candidate.design for candidate in candidates]
-        masses = [candidate.model.calculate_mass_kg() for candidate in candidates]
+        masses = [candidate.mass for candidate in candidates]
         sigmas, deltas = self.surrogate_evaluator.surrogate.predict_batch(designs)
         evals = [
             (mass, float(u_sigma), float(u_delta), bool(u_sigma <= 1.0 and u_delta <= 1.0))
