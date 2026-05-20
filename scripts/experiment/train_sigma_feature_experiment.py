@@ -36,8 +36,11 @@ class SigmaExperimentConfig:
     val_ratio: float = 0.1
     test_ratio: float = 0.1
     seed: int = 42
+    split_seed: int | None = None
+    model_seed: int | None = None
     weight_decay: float = 1e-4
     train_samples: int | None = None
+    loss: str = "smooth_l1"
 
 
 def _idx(feature_names: list[str]) -> dict[str, int]:
@@ -59,6 +62,8 @@ def build_features(
 
     if feature_set == "base":
         return X.astype(np.float32), list(feature_names)
+    if feature_set == "group_interactions":
+        return build_group_interaction_features(X, feature_names)
     if feature_set != "stress_v1":
         raise ValueError(f"Unsupported feature_set: {feature_set}")
 
@@ -161,6 +166,82 @@ def build_features(
     return X_aug.astype(np.float32), list(feature_names) + names
 
 
+def build_group_interaction_features(
+    X: np.ndarray,
+    feature_names: list[str],
+    max_groups_per_type: int = 3,
+) -> tuple[np.ndarray, list[str]]:
+    index = _idx(feature_names)
+    extras = []
+    names = []
+
+    def add(name: str, value: np.ndarray):
+        extras.append(value.astype(np.float32))
+        names.append(name)
+
+    def stack(prefix: str, suffix: str) -> np.ndarray:
+        return np.column_stack([
+            _col(X, index, f"{prefix}_g{i}_{suffix}")
+            for i in range(1, max_groups_per_type + 1)
+        ])
+
+    for prefix in ["frame", "main", "sec", "brace"]:
+        active = stack(prefix, "active") > 0.5
+        weight = stack(prefix, "beam_count_norm")
+        weight = np.where(active, weight, 0.0)
+        weight_sum = weight.sum(axis=1, keepdims=True) + EPS
+
+        area = stack(prefix, "area")
+        ix = stack(prefix, "Ix")
+        iy = stack(prefix, "Iy")
+        z = stack(prefix, "z_mean")
+        edge = stack(prefix, "edge_proximity_mean")
+        corner = stack(prefix, "corner_proximity_mean")
+        length = stack(prefix, "length_sum_norm")
+
+        demand_names = [
+            "load_per_area",
+            "load_per_Ix",
+            "pressure_area_demand",
+            "length_per_area",
+            "length_per_Ix",
+            "pressure_length_per_area",
+        ]
+        for suffix in demand_names:
+            values = np.where(active, stack(prefix, suffix), np.nan)
+            add(f"{prefix}_{suffix}_max_group", np.nanmax(values, axis=1))
+            add(f"{prefix}_{suffix}_std_group", np.nan_to_num(np.nanstd(values, axis=1), nan=0.0))
+
+        for prop_name, prop in [("area", area), ("Ix", ix), ("Iy", iy)]:
+            prop = np.where(active, prop, 0.0)
+            mean = (prop * weight).sum(axis=1) / weight_sum[:, 0]
+            var = (((prop - mean[:, None]) ** 2) * weight).sum(axis=1) / weight_sum[:, 0]
+            std = np.sqrt(np.maximum(var, 0.0))
+            add(f"{prefix}_{prop_name}_beam_weighted_mean", mean)
+            add(f"{prefix}_{prop_name}_beam_weighted_cv", std / (mean + EPS))
+
+        weakest_idx = np.nanargmin(np.where(active, area, np.nan), axis=1)
+        strongest_idx = np.nanargmax(np.where(active, area, np.nan), axis=1)
+        rows = np.arange(len(X))
+        for label, idxs in [("weakest", weakest_idx), ("strongest", strongest_idx)]:
+            add(f"{prefix}_{label}_beam_count_norm", weight[rows, idxs])
+            add(f"{prefix}_{label}_length_sum_norm", length[rows, idxs])
+            add(f"{prefix}_{label}_z_mean", z[rows, idxs])
+            add(f"{prefix}_{label}_edge_proximity_mean", edge[rows, idxs])
+            add(f"{prefix}_{label}_corner_proximity_mean", corner[rows, idxs])
+
+        ix_mean = (ix * weight).sum(axis=1) / weight_sum[:, 0]
+        for geo_name, geo in [("z", z), ("edge", edge), ("corner", corner), ("length", length)]:
+            geo_mean = (geo * weight).sum(axis=1) / weight_sum[:, 0]
+            cov = ((ix - ix_mean[:, None]) * (geo - geo_mean[:, None]) * weight).sum(axis=1) / weight_sum[:, 0]
+            add(f"{prefix}_Ix_{geo_name}_weighted_cov", cov)
+
+    X_extra = np.column_stack(extras)
+    X_aug = np.concatenate([X, X_extra], axis=1)
+    X_aug = np.nan_to_num(X_aug, nan=0.0, posinf=1e8, neginf=-1e8)
+    return X_aug.astype(np.float32), list(feature_names) + names
+
+
 def train_sigma_resnet(
     X_train: np.ndarray,
     y_train_norm: np.ndarray,
@@ -178,7 +259,7 @@ def train_sigma_resnet(
 
     optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=8)
-    criterion = torch.nn.SmoothL1Loss()
+    criterion = torch.nn.MSELoss() if config.loss == "mse" else torch.nn.SmoothL1Loss()
 
     train_loader = DataLoader(
         TensorDataset(torch.FloatTensor(X_train), torch.FloatTensor(y_train_norm)),
@@ -242,7 +323,7 @@ def main():
     parser = argparse.ArgumentParser(description="Single-model u_sigma feature experiment.")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--feature-set", default="auto", choices=["auto", "base", "stress_v1"])
+    parser.add_argument("--feature-set", default="auto", choices=["auto", "base", "stress_v1", "group_interactions"])
     parser.add_argument("--hidden-dim", type=int, default=384)
     parser.add_argument("--resnet-blocks", type=int, default=4)
     parser.add_argument("--dropout", type=float, default=0.08)
@@ -253,7 +334,10 @@ def main():
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--test-ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--split-seed", type=int, default=None)
+    parser.add_argument("--model-seed", type=int, default=None)
     parser.add_argument("--train-samples", type=int, default=None)
+    parser.add_argument("--loss", default="smooth_l1", choices=["smooth_l1", "mse"])
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
 
@@ -269,11 +353,17 @@ def main():
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         seed=args.seed,
+        split_seed=args.split_seed,
+        model_seed=args.model_seed,
         train_samples=args.train_samples,
+        loss=args.loss,
     )
 
-    torch.manual_seed(config.seed)
-    np.random.seed(config.seed)
+    split_seed = config.split_seed if config.split_seed is not None else config.seed
+    model_seed = config.model_seed if config.model_seed is not None else config.seed
+
+    torch.manual_seed(model_seed)
+    np.random.seed(model_seed)
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -291,7 +381,7 @@ def main():
     y = data["y_sigma"].astype(np.float32)
 
     n = len(X)
-    rng = np.random.default_rng(config.seed)
+    rng = np.random.default_rng(split_seed)
     indices = rng.permutation(n)
     n_test = max(1, int(n * config.test_ratio))
     n_val = max(1, int(n * config.val_ratio))

@@ -69,7 +69,7 @@ def split_indices(n: int, config: dict, split: str) -> np.ndarray:
     if split == "all":
         return np.arange(n)
 
-    rng = np.random.default_rng(config.get("seed", 42))
+    rng = np.random.default_rng(config.get("split_seed") or config.get("seed", 42))
     indices = rng.permutation(n)
     n_test = max(1, int(n * config.get("test_ratio", 0.1)))
     n_val = max(1, int(n * config.get("val_ratio", 0.1)))
