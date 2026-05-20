@@ -55,7 +55,7 @@ def build_features(
     feature_format: str | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     if feature_set == "auto":
-        feature_set = "base" if feature_format == "group_v1" else "stress_v1"
+        feature_set = "base" if str(feature_format).startswith("group_v") else "stress_v1"
 
     if feature_set == "base":
         return X.astype(np.float32), list(feature_names)

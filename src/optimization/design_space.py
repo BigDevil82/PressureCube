@@ -455,6 +455,63 @@ def group_feature_names(layout_strategy: str, max_groups_per_type: int = 3) -> l
     return names
 
 
+def design_to_group_feature_vector_v2(
+    design: StructuralDesign,
+    max_groups_per_type: int = 3,
+) -> np.ndarray:
+    """Grouped feature vector with section-group geometry aggregates.
+
+    v1 describes which sections each group uses, but not which beams are
+    assigned to that group. Stress is often controlled by local members, so v2
+    appends fixed-slot geometric summaries for every section group.
+    """
+
+    lib = get_section_lib(design.layout_strategy)
+    model = StructuralModel(design.params, lib, section_assignment=design.section_assignment)
+    model.generate_beams()
+    base = design_to_group_feature_vector(design, max_groups_per_type)
+    geom = []
+    for beam_type in sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value)):
+        geom.extend(_group_geometry_features(model, beam_type, max_groups_per_type, design.pressure))
+    return np.concatenate([base, np.array(geom, dtype=np.float32)]).astype(np.float32)
+
+
+def group_feature_names_v2(layout_strategy: str, max_groups_per_type: int = 3) -> list[str]:
+    names = group_feature_names(layout_strategy, max_groups_per_type)
+    geom_names = [
+        "beam_count",
+        "beam_count_norm",
+        "length_sum_norm",
+        "length_mean_norm",
+        "length_max_norm",
+        "x_mean",
+        "y_mean",
+        "z_mean",
+        "x_std",
+        "y_std",
+        "z_std",
+        "edge_proximity_mean",
+        "edge_proximity_min",
+        "corner_proximity_mean",
+        "corner_proximity_min",
+        "ori_x_frac",
+        "ori_y_frac",
+        "ori_z_frac",
+        "face_horizontal_frac",
+        "face_longitudinal_frac",
+        "face_end_frac",
+        "face_other_frac",
+        "length_per_area",
+        "length_per_Ix",
+        "pressure_length_per_area",
+    ]
+    for beam_type in sorted(BEAM_SECTION_TYPES, key=lambda item: int(item.value)):
+        prefix = _beam_type_prefix(beam_type)
+        for slot in range(1, max_groups_per_type + 1):
+            names.extend([f"{prefix}_g{slot}_{name}" for name in geom_names])
+    return names
+
+
 def _section_feature_stats(assignment: SectionAssignment, lib: SectionLibrary) -> dict[str, list[float]]:
     groups_by_type: dict[BeamType, list[str]] = {beam_type: [] for beam_type in BEAM_SECTION_TYPES}
     for group_id, group in assignment.groups.items():
@@ -553,6 +610,101 @@ def _distribution_features(values: np.ndarray) -> list[float]:
         std,
         std / (mean + 1e-10),
         min_value / (max_value + 1e-10),
+    ]
+
+
+def _group_geometry_features(
+    model: StructuralModel,
+    beam_type: BeamType,
+    max_groups_per_type: int,
+    pressure: float,
+) -> list[float]:
+    from src.structure.section_grouping.features import make_geometry_context
+
+    context = make_geometry_context(model)
+    groups = [
+        group
+        for group in model.section_assignment.groups.values()
+        if group.beam_type == beam_type
+    ]
+    groups.sort(key=lambda group: group.group_id)
+
+    beam_ids_by_group = {group.group_id: [] for group in groups}
+    for beam_id, group_id in model.section_assignment.beam_groups.items():
+        beam = model.beams.get(beam_id)
+        if beam is not None and not beam.is_virtual and beam.beam_type == beam_type:
+            beam_ids_by_group.setdefault(group_id, []).append(beam_id)
+
+    type_beam_count = sum(len(ids) for ids in beam_ids_by_group.values())
+    features: list[float] = []
+    for slot in range(max_groups_per_type):
+        if slot >= len(groups):
+            features.extend([0.0] * 25)
+            continue
+
+        group = groups[slot]
+        beam_ids = beam_ids_by_group.get(group.group_id, [])
+        features.extend(_single_group_geometry_features(model, beam_ids, group, context, type_beam_count, pressure))
+    return features
+
+
+def _single_group_geometry_features(
+    model: StructuralModel,
+    beam_ids: list[int],
+    group,
+    context,
+    type_beam_count: int,
+    pressure: float,
+) -> list[float]:
+    from src.structure.section_grouping.beam_features import beam_orientation
+    from src.structure.section_grouping.features import normalize_face_family
+
+    if not beam_ids:
+        return [0.0] * 25
+
+    midpoints = []
+    lengths = []
+    orientations = []
+    faces = []
+    for beam_id in beam_ids:
+        beam = model.beams[beam_id]
+        p1 = model.points[beam.start_node].coordinates()
+        p2 = model.points[beam.end_node].coordinates()
+        midpoint = ((p1 + p2) / 2.0 - context.bounds_min) / context.span
+        length = np.linalg.norm(p2 - p1) / max(context.length_ref, 1e-10)
+        midpoints.append(midpoint)
+        lengths.append(float(length))
+        orientations.append(beam_orientation(p1, p2))
+        faces.append(normalize_face_family(beam.on_face))
+
+    midpoint_arr = np.array(midpoints, dtype=float)
+    length_arr = np.array(lengths, dtype=float)
+    boundary_dist = np.minimum(midpoint_arr, 1.0 - midpoint_arr)
+    edge_proximity = np.min(boundary_dist, axis=1)
+    corner_proximity = np.sum(boundary_dist, axis=1)
+    section = model.section_lib.get_section(group.section_type, group.section_index)
+    area = section.area * 1e4
+    ix = section.Ix * 1e8
+    length_sum = float(length_arr.sum())
+    pressure_kpa = pressure / 1000.0
+
+    return [
+        float(len(beam_ids)),
+        float(len(beam_ids) / max(type_beam_count, 1)),
+        length_sum,
+        float(length_arr.mean()),
+        float(length_arr.max()),
+        *[float(value) for value in midpoint_arr.mean(axis=0)],
+        *[float(value) for value in midpoint_arr.std(axis=0)],
+        float(edge_proximity.mean()),
+        float(edge_proximity.min()),
+        float(corner_proximity.mean()),
+        float(corner_proximity.min()),
+        *[float(np.mean([orientation == value for orientation in orientations])) for value in ("x", "y", "z")],
+        *[float(np.mean([face == value for face in faces])) for value in ("horizontal", "longitudinal_side", "end_side", "other")],
+        float(length_sum / (area + 1e-10)),
+        float(length_sum / (ix + 1e-10)),
+        float(pressure_kpa * length_sum / (area + 1e-10)),
     ]
 
 

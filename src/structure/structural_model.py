@@ -152,6 +152,18 @@ class StructuralModel:
         self.beams = self.beam_manager.beams
 
     def generate(self):
+        self.generate_beams()
+
+        engine = create_layout_engine(self.params)
+
+        # --- 4. 生成板 ---
+        self._generate_plates_from_grid(engine)
+        self._cleanup_orphans()
+
+        # --- 5. 应用截面分配 ---
+        self.apply_section_assignment(self.section_assignment)
+
+    def generate_beams(self):
         engine = create_layout_engine(self.params)
         xs, ys, zs = engine.sorted_x, engine.sorted_y, engine.sorted_z
 
@@ -188,11 +200,6 @@ class StructuralModel:
                     if b_type:
                         self._add_beam(p1, p2, b_type, face, is_virt)
 
-        # --- 4. 生成板 ---
-        self._generate_plates_from_grid(engine)
-        self._cleanup_orphans()
-
-        # --- 5. 应用截面分配 ---
         self.apply_section_assignment(self.section_assignment)
 
     def _add_beam(self, p1_arr, p2_arr, b_type, face, is_virtual_override=False):

@@ -439,6 +439,7 @@ class DataCollector:
             "masses": masses,
             "feature_names": group_feature_names(self.layout_strategy),
             "feature_format": "group_v1",
+            "sample_specs": sample_specs,
             "sample_spec_format": "structural_design_v1",
             "layout_strategy": self.layout_strategy,
             "n_samples": valid_count,
