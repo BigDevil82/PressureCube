@@ -37,6 +37,7 @@ class SigmaExperimentConfig:
     test_ratio: float = 0.1
     seed: int = 42
     weight_decay: float = 1e-4
+    train_samples: int | None = None
 
 
 def _idx(feature_names: list[str]) -> dict[str, int]:
@@ -252,6 +253,7 @@ def main():
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--test-ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train-samples", type=int, default=None)
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
 
@@ -267,6 +269,7 @@ def main():
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         seed=args.seed,
+        train_samples=args.train_samples,
     )
 
     torch.manual_seed(config.seed)
@@ -298,6 +301,8 @@ def main():
     test_idx = indices[:n_test]
     val_idx = indices[n_test : n_test + n_val]
     train_idx = indices[n_test + n_val :]
+    if config.train_samples is not None and config.train_samples < len(train_idx):
+        train_idx = rng.choice(train_idx, size=config.train_samples, replace=False)
 
     X_train, X_val, X_test = X[train_idx], X[val_idx], X[test_idx]
     y_train, y_val, y_test = y[train_idx], y[val_idx], y[test_idx]
