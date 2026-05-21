@@ -3,6 +3,7 @@ import sys
 from contextlib import redirect_stdout
 from io import StringIO
 import importlib
+import re
 
 import streamlit as st
 
@@ -233,8 +234,20 @@ class StreamlitLogBuffer(StringIO):
 
     def write(self, text):
         result = super().write(text)
-        self.placeholder.code(self.getvalue()[-12000:])
+        self.placeholder.code(format_optimization_log(self.getvalue()[-12000:]))
         return result
+
+
+def format_optimization_log(text: str) -> str:
+    text = text.replace("Initial mass (max sections)", "基准方案质量")
+    text = re.sub(
+        r"Gen\s+(\d+)/(\d+):\s+best mass=([0-9.]+)kg,\s+feasible=(\d+)/(\d+),\s+mean_fit=([0-9.]+)",
+        r"优化轮次 \1/\2：当前推荐质量=\3 kg，约束满足候选=\4/\5，综合评分=\6",
+        text,
+    )
+    text = text.replace("Model loaded", "智能评估模型已加载")
+    text = text.replace("Loaded surrogate model from", "评估模型来源")
+    return text
 
 
 def section_idx(result, beam_type: BeamType) -> int:
@@ -267,7 +280,7 @@ def load_ga_optimizer():
 
 
 st.divider()
-st.subheader("🧬 结构优化")
+st.subheader("结构智能优化")
 
 with st.expander("优化参数", expanded=True):
     opt_col1, opt_col2, opt_col3 = st.columns(3)
@@ -286,10 +299,10 @@ with st.expander("优化参数", expanded=True):
         )
     with opt_col2:
         opt_pop_size = st.number_input(
-            "种群规模", min_value=8, max_value=256, value=32, step=8, key="opt_pop_size"
+            "候选方案规模", min_value=8, max_value=256, value=32, step=8, key="opt_pop_size"
         )
         opt_generations = st.number_input(
-            "迭代代数", min_value=1, max_value=100, value=10, step=1, key="opt_generations"
+            "优化轮次", min_value=1, max_value=100, value=10, step=1, key="opt_generations"
         )
     with opt_col3:
         opt_n_jobs = st.number_input(
@@ -299,7 +312,7 @@ with st.expander("优化参数", expanded=True):
             "随机种子", min_value=0, max_value=999999, value=42, step=1, key="opt_seed"
         )
 
-run_optimization = st.button("开始 GA 优化", type="primary", width="stretch")
+run_optimization = st.button("开始智能优化", type="primary", width="stretch")
 log_box = st.empty()
 summary_box = st.empty()
 
@@ -320,7 +333,7 @@ if run_optimization:
     )
 
     log_buffer = StreamlitLogBuffer(log_box)
-    with st.spinner("正在执行 GA 优化..."):
+    with st.spinner("正在执行智能优化..."):
         with redirect_stdout(log_buffer):
             result = optimizer.optimize(geometry, verbose=True)
 
