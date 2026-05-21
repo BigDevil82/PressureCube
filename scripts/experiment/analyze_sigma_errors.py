@@ -29,7 +29,7 @@ def regression_metrics(y: np.ndarray, pred: np.ndarray) -> dict[str, float]:
     }
 
 
-def load_predictions(dataset_path: Path, model_path: Path, device: torch.device, batch_size: int):
+def load_predictions(dataset_path: Path, model_path: Path, device: torch.device, batch_size: int, target: str | None = None):
     with dataset_path.open("rb") as file:
         data = pickle.load(file)
     with model_path.open("rb") as file:
@@ -42,7 +42,9 @@ def load_predictions(dataset_path: Path, model_path: Path, device: torch.device,
         config.get("feature_set", "auto"),
         data.get("feature_format"),
     )
-    y = data["y_sigma"].astype(np.float32)
+    target = target or payload.get("config", {}).get("target", "sigma")
+    y_key = "y_sigma" if target == "sigma" else "y_delta"
+    y = data[y_key].astype(np.float32)
 
     model_cfg = payload.get("resnet_config", {})
     model = ResNetRegressor(
@@ -60,6 +62,8 @@ def load_predictions(dataset_path: Path, model_path: Path, device: torch.device,
         for start in range(0, len(X_norm), batch_size):
             batch = torch.FloatTensor(X_norm[start : start + batch_size]).to(device)
             pred = model(batch).cpu().numpy() * payload["y_std"] + payload["y_mean"]
+            if payload.get("config", {}).get("target_transform") == "log1p":
+                pred = np.expm1(pred)
             preds.append(pred)
 
     return X, y, np.concatenate(preds), feature_names, payload
@@ -163,7 +167,7 @@ def top_correlations(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Analyze u_sigma surrogate residuals without retraining.")
+    parser = argparse.ArgumentParser(description="Analyze surrogate residuals without retraining.")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--output", required=True)
@@ -172,6 +176,7 @@ def main():
     parser.add_argument("--n-bins", type=int, default=6)
     parser.add_argument("--top-k", type=int, default=25)
     parser.add_argument("--split", default="test", choices=["test", "val", "train", "all"])
+    parser.add_argument("--target", default=None, choices=["sigma", "delta"])
     args = parser.parse_args()
 
     if args.device == "auto":
@@ -184,6 +189,7 @@ def main():
         Path(args.model),
         device,
         args.batch_size,
+        args.target,
     )
     keep = split_indices(len(X), payload.get("config", {}), args.split)
     X = X[keep]

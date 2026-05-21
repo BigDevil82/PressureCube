@@ -42,6 +42,8 @@ class SigmaExperimentConfig:
     weight_decay: float = 1e-4
     train_samples: int | None = None
     loss: str = "smooth_l1"
+    target: str = "sigma"
+    target_transform: str = "none"
 
 
 def _idx(feature_names: list[str]) -> dict[str, int]:
@@ -602,7 +604,7 @@ def metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Single-model u_sigma feature experiment.")
+    parser = argparse.ArgumentParser(description="Single-model response feature experiment.")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument(
@@ -624,6 +626,8 @@ def main():
     parser.add_argument("--model-seed", type=int, default=None)
     parser.add_argument("--train-samples", type=int, default=None)
     parser.add_argument("--loss", default="smooth_l1", choices=["smooth_l1", "mse"])
+    parser.add_argument("--target", default="sigma", choices=["sigma", "delta"])
+    parser.add_argument("--target-transform", default="none", choices=["none", "log1p"])
     parser.add_argument("--importance-csv", default=None)
     parser.add_argument("--top-k-features", type=int, default=None)
     parser.add_argument("--device", default="auto")
@@ -645,6 +649,8 @@ def main():
         model_seed=args.model_seed,
         train_samples=args.train_samples,
         loss=args.loss,
+        target=args.target,
+        target_transform=args.target_transform,
     )
 
     split_seed = config.split_seed if config.split_seed is not None else config.seed
@@ -672,7 +678,9 @@ def main():
         args.importance_csv,
         args.top_k_features,
     )
-    y = data["y_sigma"].astype(np.float32)
+    y_key = "y_sigma" if config.target == "sigma" else "y_delta"
+    y = data[y_key].astype(np.float32)
+    y_model = np.log1p(y) if config.target_transform == "log1p" else y
 
     n = len(X)
     rng = np.random.default_rng(split_seed)
@@ -690,20 +698,21 @@ def main():
 
     X_train, X_val, X_test = X[train_idx], X[val_idx], X[test_idx]
     y_train, y_val, y_test = y[train_idx], y[val_idx], y[test_idx]
+    y_train_model, y_val_model = y_model[train_idx], y_model[val_idx]
 
     X_mean = X_train.mean(axis=0)
     X_std = X_train.std(axis=0) + 1e-8
-    y_mean = float(y_train.mean())
-    y_std = float(y_train.std() + 1e-8)
+    y_mean = float(y_train_model.mean())
+    y_std = float(y_train_model.std() + 1e-8)
 
     X_train_norm = (X_train - X_mean) / X_std
     X_val_norm = (X_val - X_mean) / X_std
     X_test_norm = (X_test - X_mean) / X_std
-    y_train_norm = (y_train - y_mean) / y_std
-    y_val_norm = (y_val - y_mean) / y_std
+    y_train_norm = (y_train_model - y_mean) / y_std
+    y_val_norm = (y_val_model - y_mean) / y_std
 
     print(
-        f"Training u_sigma only: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}, "
+        f"Training u_{config.target} only: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}, "
         f"features={X.shape[1]}, feature_set={config.feature_set}, device={device}"
     )
 
@@ -712,12 +721,15 @@ def main():
     with torch.no_grad():
         val_pred = model(torch.FloatTensor(X_val_norm).to(device)).cpu().numpy() * y_std + y_mean
         test_pred = model(torch.FloatTensor(X_test_norm).to(device)).cpu().numpy() * y_std + y_mean
+    if config.target_transform == "log1p":
+        val_pred = np.expm1(val_pred)
+        test_pred = np.expm1(test_pred)
 
     result = {
         "val": metrics(y_val, val_pred),
         "test": metrics(y_test, test_pred),
     }
-    print("\n=== u_sigma Results ===")
+    print(f"\n=== u_{config.target} Results ===")
     print(
         f"Val : MAE={result['val']['mae']:.4f}, RMSE={result['val']['rmse']:.4f}, R2={result['val']['r2']:.4f}"
     )
@@ -728,7 +740,7 @@ def main():
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "strategy": "sigma_feature_experiment_resnet",
+        "strategy": f"{config.target}_feature_experiment_resnet",
         "config": asdict(config),
         "dataset": args.dataset,
         "layout_strategy": data.get("layout_strategy"),
