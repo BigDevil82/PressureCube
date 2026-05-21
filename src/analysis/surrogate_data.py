@@ -29,7 +29,9 @@ from src.analysis.post_processor import ResultProcessor
 from src.optimization.design_space import (
     LayoutDesignAdapter,
     design_to_group_feature_vector,
+    design_to_group_feature_vector_v2,
     group_feature_names,
+    group_feature_names_v2,
     get_layout_adapter,
     get_section_lib,
     sample_spec_from_unit,
@@ -116,6 +118,7 @@ def _generate_design_chunk(
     geometry_ranges: dict,
     load_options: dict,
     group_count_range: tuple[int, int],
+    sampling_profile: str,
 ) -> list[SampleSpec]:
     adapter = get_layout_adapter(layout_strategy)
     section_lib = get_section_lib(layout_strategy)
@@ -129,22 +132,18 @@ def _generate_design_chunk(
     for local_index, sample in enumerate(samples):
         sample_index = start_index + local_index
 
-        L = geometry_ranges["L"][0] + sample[0] * (geometry_ranges["L"][1] - geometry_ranges["L"][0])
-        W = geometry_ranges["W"][0] + sample[1] * (geometry_ranges["W"][1] - geometry_ranges["W"][0])
-        H = geometry_ranges["H"][0] + sample[2] * (geometry_ranges["H"][1] - geometry_ranges["H"][0])
+        L, W, H = _sample_geometry(sample[:3], geometry_ranges, sampling_profile)
 
         offset = 3
         topology = {
-            spec.name: sample_spec_from_unit(spec, sample[offset + idx])
+            spec.name: _sample_topology_value(spec, sample[offset + idx], sampling_profile)
             for idx, spec in enumerate(topology_specs)
         }
         offset += len(topology_specs)
 
-        group_counts = _sample_group_counts(
-            sample[offset : offset + n_group_count_dims],
-            beam_types,
-            group_count_range,
-        )
+        group_counts = _sample_group_counts(sample[offset : offset + n_group_count_dims], beam_types, group_count_range)
+        if sampling_profile == "sigma_tail":
+            group_counts = _sample_sigma_tail_group_counts(sample[offset : offset + n_group_count_dims], beam_types)
         offset += n_group_count_dims
 
         section_indices_by_group = _sample_group_section_indices(
@@ -156,9 +155,7 @@ def _generate_design_chunk(
         )
         offset += n_section_dims
 
-        pressure = load_options["pressure_range"][0] + sample[offset] * (
-            load_options["pressure_range"][1] - load_options["pressure_range"][0]
-        )
+        pressure = _sample_pressure(sample[offset], load_options, sampling_profile)
 
         specs.append(
             SampleSpec(
@@ -171,6 +168,59 @@ def _generate_design_chunk(
             )
         )
     return specs
+
+
+def _sample_geometry(values: np.ndarray, ranges: dict, sampling_profile: str) -> tuple[float, float, float]:
+    if sampling_profile != "sigma_tail":
+        return tuple(
+            ranges[name][0] + value * (ranges[name][1] - ranges[name][0])
+            for name, value in zip(["L", "W", "H"], values)
+        )
+
+    L = _scale(values[0], 6.0, 8.0)
+    W = _scale(values[1], 3.8, 4.0)
+    H = _scale(values[2], 3.25, 3.6)
+    return L, W, H
+
+
+def _sample_pressure(value: float, load_options: dict, sampling_profile: str) -> float:
+    if sampling_profile == "sigma_tail":
+        return _scale(value, 34.0, 40.0)
+    low, high = load_options["pressure_range"]
+    return _scale(value, low, high)
+
+
+def _sample_topology_value(spec, value: float, sampling_profile: str):
+    if sampling_profile != "sigma_tail" or spec.name != "main_beam_spacing":
+        return sample_spec_from_unit(spec, value)
+
+    choices = list(spec.choices or [])
+    low_tail = [item for item in choices if item <= 0.8]
+    high_tail = [item for item in choices if item >= 1.2]
+    mid = [item for item in choices if item not in low_tail and item not in high_tail]
+    if value < 0.25 and low_tail:
+        return low_tail[min(int(value / 0.25 * len(low_tail)), len(low_tail) - 1)]
+    if value < 0.45 and mid:
+        local = (value - 0.25) / 0.20
+        return mid[min(int(local * len(mid)), len(mid) - 1)]
+    local = (value - 0.45) / 0.55
+    return high_tail[min(int(local * len(high_tail)), len(high_tail) - 1)]
+
+
+def _sample_sigma_tail_group_counts(values: np.ndarray, beam_types: list[BeamType]) -> dict[BeamType, int]:
+    counts = {}
+    for beam_type, value in zip(beam_types, values):
+        if value < 0.05:
+            counts[beam_type] = 1
+        elif value < 0.25:
+            counts[beam_type] = 2
+        else:
+            counts[beam_type] = 3
+    return counts
+
+
+def _scale(value: float, low: float, high: float) -> float:
+    return low + value * (high - low)
 
 
 def _sample_group_counts(
@@ -271,6 +321,22 @@ def _run_single_spec_fea(
     return _run_single_fea(model, design.pressure)
 
 
+def _design_to_feature_vector(design: StructuralDesign, feature_format: str) -> np.ndarray:
+    if feature_format == "group_v1":
+        return design_to_group_feature_vector(design)
+    if feature_format == "group_v2":
+        return design_to_group_feature_vector_v2(design)
+    raise ValueError(f"Unsupported feature_format: {feature_format}")
+
+
+def _feature_names(layout_strategy: str, feature_format: str) -> list[str]:
+    if feature_format == "group_v1":
+        return group_feature_names(layout_strategy)
+    if feature_format == "group_v2":
+        return group_feature_names_v2(layout_strategy)
+    raise ValueError(f"Unsupported feature_format: {feature_format}")
+
+
 class DataCollector:
     """
     Collect training data for surrogate model using Latin Hypercube Sampling.
@@ -294,11 +360,15 @@ class DataCollector:
         n_jobs: int = 4,
         seed: int = 42,
         layout_strategy: str = "research",
+        sampling_profile: str = "uniform",
+        feature_format: str = "group_v1",
     ):
         self.n_samples = n_samples
         self.n_jobs = n_jobs
         self.seed = seed
         self.layout_strategy = layout_strategy
+        self.sampling_profile = sampling_profile
+        self.feature_format = feature_format
         self.adapter = get_layout_adapter(layout_strategy)
 
         self.section_lib = get_section_lib(layout_strategy)
@@ -340,6 +410,7 @@ class DataCollector:
                         self.GEOMETRY_RANGES,
                         self.LOAD_OPTIONS,
                         self.GROUP_COUNT_RANGE,
+                        self.sampling_profile,
                     )
                     specs.extend(chunk_specs)
                     pbar.update(len(chunk_specs))
@@ -354,6 +425,7 @@ class DataCollector:
                 self.GEOMETRY_RANGES,
                 self.LOAD_OPTIONS,
                 self.GROUP_COUNT_RANGE,
+                self.sampling_profile,
             )
             for start_index, chunk in chunks
         )
@@ -417,7 +489,7 @@ class DataCollector:
             u_sigma, u_delta, mass, success = res
             if success:
                 design = spec.build_design()
-                X.append(design_to_group_feature_vector(design))
+                X.append(_design_to_feature_vector(design, self.feature_format))
                 y_sigma.append(u_sigma)
                 y_delta.append(u_delta)
                 masses.append(mass)
@@ -437,10 +509,11 @@ class DataCollector:
             "y_sigma": y_sigma,
             "y_delta": y_delta,
             "masses": masses,
-            "feature_names": group_feature_names(self.layout_strategy),
-            "feature_format": "group_v1",
+            "feature_names": _feature_names(self.layout_strategy, self.feature_format),
+            "feature_format": self.feature_format,
             "sample_specs": sample_specs,
             "sample_spec_format": "structural_design_v1",
+            "sampling_profile": self.sampling_profile,
             "layout_strategy": self.layout_strategy,
             "n_samples": valid_count,
             "collection_time": elapsed,
@@ -458,9 +531,10 @@ class DataCollector:
                 "geometry_ranges": self.GEOMETRY_RANGES,
                 "load_options": self.LOAD_OPTIONS,
                 "group_count_range": self.GROUP_COUNT_RANGE,
+                "sampling_profile": self.sampling_profile,
             },
-            "feature_names": group_feature_names(self.layout_strategy),
-            "feature_format": "group_v1",
+            "feature_names": _feature_names(self.layout_strategy, self.feature_format),
+            "feature_format": self.feature_format,
             "sample_spec_format": "structural_design_v1",
             "layout_strategy": self.layout_strategy,
             "y_sigma_stats": {
@@ -506,6 +580,20 @@ def main():
         help="Layout strategy to use for data collection",
     )
     collect_parser.add_argument("--seed", type=int, default=42)
+    collect_parser.add_argument(
+        "--sampling_profile",
+        type=str,
+        default="uniform",
+        choices=["uniform", "sigma_tail"],
+        help="Sampling profile: uniform LHS or targeted high-error sigma tail.",
+    )
+    collect_parser.add_argument(
+        "--feature_format",
+        type=str,
+        default="group_v1",
+        choices=["group_v1", "group_v2"],
+        help="Feature format saved in dataset.pkl.",
+    )
 
     args = parser.parse_args()
 
@@ -515,6 +603,8 @@ def main():
             n_jobs=args.n_jobs,
             seed=args.seed,
             layout_strategy=args.layout_strategy,
+            sampling_profile=args.sampling_profile,
+            feature_format=args.feature_format,
         )
         collector.collect(output_dir=args.output_dir)
 
