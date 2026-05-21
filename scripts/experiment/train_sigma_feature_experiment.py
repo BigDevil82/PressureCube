@@ -62,6 +62,12 @@ def build_features(
 
     if feature_set == "base":
         return X.astype(np.float32), list(feature_names)
+    if feature_set == "reduced_v1":
+        return build_reduced_v1_features(X, feature_names)
+    if feature_set == "reduced_v2":
+        return build_reduced_v2_features(X, feature_names)
+    if feature_set == "reduced_v3":
+        return build_reduced_v3_features(X, feature_names)
     if feature_set == "group_interactions":
         return build_group_interaction_features(X, feature_names)
     if feature_set != "stress_v1":
@@ -164,6 +170,258 @@ def build_features(
     X_aug = np.concatenate([X, X_extra], axis=1)
     X_aug = np.nan_to_num(X_aug, nan=0.0, posinf=1e8, neginf=-1e8)
     return X_aug.astype(np.float32), list(feature_names) + names
+
+
+def build_reduced_v1_features(X: np.ndarray, feature_names: list[str]) -> tuple[np.ndarray, list[str]]:
+    keep = []
+    keep.extend(_names(feature_names, [
+        "L",
+        "W",
+        "H",
+        "volume",
+        "floor_area",
+        "aspect_ratio",
+        "pressure_kPa",
+        "total_load_MN",
+        "main_beam_spacing",
+        "support_beam_max_spacing",
+        "add_support_beam",
+        "n_main_beams",
+    ]))
+
+    keep.extend(_type_reduced_cols(feature_names, "main", include_stats=True, include_slots=True, include_geometry=True))
+    keep.extend(_type_reduced_cols(feature_names, "sec", include_stats=True, include_slots=True, include_geometry=True))
+    keep.extend(_type_reduced_cols(feature_names, "brace", include_stats=False, include_slots=True, include_geometry=True))
+    keep.extend(_type_reduced_cols(feature_names, "frame", include_stats=True, include_slots=False, include_geometry=False))
+
+    keep = sorted(set(keep))
+    return X[:, keep].astype(np.float32), [feature_names[i] for i in keep]
+
+
+def build_reduced_v2_features(X: np.ndarray, feature_names: list[str]) -> tuple[np.ndarray, list[str]]:
+    keep = []
+    keep.extend(_names(feature_names, [
+        "L",
+        "W",
+        "H",
+        "floor_area",
+        "aspect_ratio",
+        "pressure_kPa",
+        "total_load_MN",
+        "main_beam_spacing",
+        "support_beam_max_spacing",
+        "add_support_beam",
+        "n_main_beams",
+    ]))
+    keep.extend(_type_compact_cols(feature_names, "main", include_stats=True, include_slots=True, include_geometry=True))
+    keep.extend(_type_compact_cols(feature_names, "sec", include_stats=True, include_slots=True, include_geometry=True))
+    keep.extend(_type_compact_cols(feature_names, "brace", include_stats=False, include_slots=True, include_geometry=True))
+    keep.extend(_type_compact_cols(feature_names, "frame", include_stats=True, include_slots=False, include_geometry=False))
+
+    keep = sorted(set(keep))
+    return X[:, keep].astype(np.float32), [feature_names[i] for i in keep]
+
+
+def build_reduced_v3_features(X: np.ndarray, feature_names: list[str]) -> tuple[np.ndarray, list[str]]:
+    keep = []
+    keep.extend(_names(feature_names, [
+        "L",
+        "W",
+        "H",
+        "floor_area",
+        "aspect_ratio",
+        "pressure_kPa",
+        "total_load_MN",
+        "main_beam_spacing",
+        "support_beam_max_spacing",
+        "add_support_beam",
+        "n_main_beams",
+    ]))
+    keep.extend(_type_minimal_cols(feature_names, "main", stats_level="strong", slots_level="strong", geom_level="strong"))
+    keep.extend(_type_minimal_cols(feature_names, "sec", stats_level="weak", slots_level="weak", geom_level="weak"))
+    keep.extend(_type_minimal_cols(feature_names, "brace", stats_level="none", slots_level="weak", geom_level="weak"))
+    keep.extend(_names(feature_names, [
+        "frame_area_min",
+        "frame_area_cv",
+        "frame_Ix_min",
+        "frame_Ix_cv",
+        "frame_weakest_load_per_area",
+        "frame_weakest_load_per_Ix",
+    ]))
+
+    keep = sorted(set(keep))
+    return X[:, keep].astype(np.float32), [feature_names[i] for i in keep]
+
+
+def _names(feature_names: list[str], names: list[str]) -> list[int]:
+    index = _idx(feature_names)
+    return [index[name] for name in names if name in index]
+
+
+def _type_reduced_cols(
+    feature_names: list[str],
+    prefix: str,
+    *,
+    include_stats: bool,
+    include_slots: bool,
+    include_geometry: bool,
+) -> list[int]:
+    cols = _names(feature_names, [f"{prefix}_n_groups", f"{prefix}_n_groups_norm"])
+
+    if include_slots:
+        slot_suffixes = [
+            "active",
+            "area",
+            "Ix",
+            "Iy",
+            "load_per_area",
+            "load_per_Ix",
+            "pressure_area_demand",
+        ]
+        cols.extend(_slot_cols(feature_names, prefix, slot_suffixes))
+
+    if include_stats:
+        stat_suffixes = [
+            "area_min",
+            "area_max",
+            "area_cv",
+            "area_min_to_max",
+            "Ix_min",
+            "Ix_max",
+            "Ix_cv",
+            "Ix_min_to_max",
+            "Iy_min",
+            "Iy_max",
+            "Iy_cv",
+            "Iy_min_to_max",
+            "weakest_load_per_area",
+            "weakest_load_per_Ix",
+            "weakest_pressure_area_demand",
+        ]
+        cols.extend(_names(feature_names, [f"{prefix}_{suffix}" for suffix in stat_suffixes]))
+
+    if include_geometry:
+        geom_suffixes = [
+            "beam_count_norm",
+            "length_sum_norm",
+            "length_mean_norm",
+            "x_mean",
+            "y_mean",
+            "z_mean",
+            "edge_proximity_mean",
+            "corner_proximity_mean",
+            "ori_x_frac",
+            "ori_y_frac",
+            "ori_z_frac",
+            "face_horizontal_frac",
+            "face_longitudinal_frac",
+            "face_end_frac",
+            "length_per_area",
+            "length_per_Ix",
+            "pressure_length_per_area",
+        ]
+        cols.extend(_slot_cols(feature_names, prefix, geom_suffixes))
+    return cols
+
+
+def _type_compact_cols(
+    feature_names: list[str],
+    prefix: str,
+    *,
+    include_stats: bool,
+    include_slots: bool,
+    include_geometry: bool,
+) -> list[int]:
+    cols = _names(feature_names, [f"{prefix}_n_groups"])
+    if include_slots:
+        cols.extend(_slot_cols(
+            feature_names,
+            prefix,
+            ["active", "area", "Ix", "load_per_area", "load_per_Ix", "pressure_area_demand"],
+        ))
+    if include_stats:
+        cols.extend(_names(feature_names, [
+            f"{prefix}_area_min",
+            f"{prefix}_area_cv",
+            f"{prefix}_area_min_to_max",
+            f"{prefix}_Ix_min",
+            f"{prefix}_Ix_cv",
+            f"{prefix}_Ix_min_to_max",
+            f"{prefix}_Iy_min",
+            f"{prefix}_Iy_cv",
+            f"{prefix}_weakest_load_per_area",
+            f"{prefix}_weakest_load_per_Ix",
+            f"{prefix}_weakest_pressure_area_demand",
+        ]))
+    if include_geometry:
+        cols.extend(_slot_cols(
+            feature_names,
+            prefix,
+            [
+                "beam_count_norm",
+                "length_sum_norm",
+                "x_mean",
+                "y_mean",
+                "z_mean",
+                "edge_proximity_mean",
+                "corner_proximity_mean",
+                "ori_x_frac",
+                "face_horizontal_frac",
+                "length_per_area",
+                "length_per_Ix",
+                "pressure_length_per_area",
+            ],
+        ))
+    return cols
+
+
+def _type_minimal_cols(
+    feature_names: list[str],
+    prefix: str,
+    *,
+    stats_level: str,
+    slots_level: str,
+    geom_level: str,
+) -> list[int]:
+    cols = _names(feature_names, [f"{prefix}_n_groups"])
+    if slots_level != "none":
+        suffixes = ["active", "area", "Ix", "load_per_area", "load_per_Ix", "pressure_area_demand"]
+        if slots_level == "weak":
+            suffixes = ["active", "area", "Ix", "load_per_area", "load_per_Ix"]
+        cols.extend(_slot_cols(feature_names, prefix, suffixes))
+
+    if stats_level != "none":
+        suffixes = [
+            "area_min",
+            "area_cv",
+            "Ix_min",
+            "Ix_cv",
+            "weakest_load_per_area",
+            "weakest_load_per_Ix",
+            "weakest_pressure_area_demand",
+        ]
+        if stats_level == "strong":
+            suffixes.extend(["area_min_to_max", "Ix_min_to_max", "Iy_min", "Iy_cv"])
+        cols.extend(_names(feature_names, [f"{prefix}_{suffix}" for suffix in suffixes]))
+
+    if geom_level != "none":
+        suffixes = [
+            "length_sum_norm",
+            "z_mean",
+            "edge_proximity_mean",
+            "length_per_area",
+        ]
+        if geom_level == "strong":
+            suffixes.extend(["x_mean", "y_mean", "corner_proximity_mean", "length_per_Ix", "pressure_length_per_area"])
+        cols.extend(_slot_cols(feature_names, prefix, suffixes))
+    return cols
+
+
+def _slot_cols(feature_names: list[str], prefix: str, suffixes: list[str], max_groups: int = 3) -> list[int]:
+    return _names(
+        feature_names,
+        [f"{prefix}_g{group_idx}_{suffix}" for group_idx in range(1, max_groups + 1) for suffix in suffixes],
+    )
 
 
 def build_group_interaction_features(
@@ -323,7 +581,11 @@ def main():
     parser = argparse.ArgumentParser(description="Single-model u_sigma feature experiment.")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--feature-set", default="auto", choices=["auto", "base", "stress_v1", "group_interactions"])
+    parser.add_argument(
+        "--feature-set",
+        default="auto",
+        choices=["auto", "base", "stress_v1", "group_interactions", "reduced_v1", "reduced_v2", "reduced_v3"],
+    )
     parser.add_argument("--hidden-dim", type=int, default=384)
     parser.add_argument("--resnet-blocks", type=int, default=4)
     parser.add_argument("--dropout", type=float, default=0.08)
