@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import pickle
 import sys
@@ -170,6 +171,29 @@ def build_features(
     X_aug = np.concatenate([X, X_extra], axis=1)
     X_aug = np.nan_to_num(X_aug, nan=0.0, posinf=1e8, neginf=-1e8)
     return X_aug.astype(np.float32), list(feature_names) + names
+
+
+def select_features_from_importance(
+    X: np.ndarray,
+    feature_names: list[str],
+    importance_csv: str | None,
+    top_k: int | None,
+) -> tuple[np.ndarray, list[str]]:
+    if not importance_csv or top_k is None:
+        return X, feature_names
+
+    name_to_col = {name: i for i, name in enumerate(feature_names)}
+    selected = []
+    with open(importance_csv, newline="", encoding="utf-8") as file:
+        for row in csv.DictReader(file):
+            name = row["feature"]
+            if name in name_to_col:
+                selected.append(name_to_col[name])
+            if len(selected) >= top_k:
+                break
+    if len(selected) != top_k:
+        raise ValueError(f"Only found {len(selected)} matching features from {importance_csv}; requested {top_k}.")
+    return X[:, selected].astype(np.float32), [feature_names[i] for i in selected]
 
 
 def build_reduced_v1_features(X: np.ndarray, feature_names: list[str]) -> tuple[np.ndarray, list[str]]:
@@ -600,6 +624,8 @@ def main():
     parser.add_argument("--model-seed", type=int, default=None)
     parser.add_argument("--train-samples", type=int, default=None)
     parser.add_argument("--loss", default="smooth_l1", choices=["smooth_l1", "mse"])
+    parser.add_argument("--importance-csv", default=None)
+    parser.add_argument("--top-k-features", type=int, default=None)
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
 
@@ -639,6 +665,12 @@ def main():
         data["feature_names"],
         config.feature_set,
         data.get("feature_format"),
+    )
+    X, feature_names = select_features_from_importance(
+        X,
+        feature_names,
+        args.importance_csv,
+        args.top_k_features,
     )
     y = data["y_sigma"].astype(np.float32)
 
