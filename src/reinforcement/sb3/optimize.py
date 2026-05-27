@@ -221,6 +221,7 @@ def validate_with_fea(
     H: float,
     pressure: float = 30000.0,
     layout_strategy: str = "research",
+    mesh_size: float = 0.5,
 ) -> dict:
     """
     Validate optimization result with real FEA.
@@ -250,7 +251,7 @@ def validate_with_fea(
         topology=topology,
         sections=result.sections,
     )
-    evaluator = StructuralEvaluator(mode="fea")
+    evaluator = StructuralEvaluator(mode="fea", mesh_size=mesh_size)
     result_fea = evaluator.evaluate(design)
 
     return {
@@ -335,6 +336,7 @@ def main():
             H=args.H,
             pressure=args.pressure,
             layout_strategy=args.layout_strategy,
+            mesh_size=0.5,
         )
         print("FEA validation:")
         print(f"  Mass: {fea_result['mass']:.1f}kg")
