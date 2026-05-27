@@ -14,8 +14,8 @@ import numpy as np
 from gymnasium import spaces
 
 from src.analysis.evaluator import StructuralEvaluator
-from src.optimization.design_space import get_layout_adapter
-from src.structure.section_library import SectionLibrary, SectionType
+from src.optimization.design_space import get_layout_adapter, get_section_lib
+from src.structure.section_library import SectionType
 
 
 class SteelSectionOptEnvSB3(gym.Env):
@@ -40,6 +40,8 @@ class SteelSectionOptEnvSB3(gym.Env):
         super().__init__()
         config = config or {}
 
+        self.layout_strategy = config.get("layout_strategy", "research")
+
         # Evaluation mode
         eval_mode = config.get("eval_mode", "fea")
         surrogate_path = config.get("surrogate_path", None)
@@ -50,16 +52,20 @@ class SteelSectionOptEnvSB3(gym.Env):
             surrogate_path=surrogate_path,
         )
 
-        # Section library
-        self.section_lib = SectionLibrary("src/data/steel_sections_large.json")
-        self.adapter = get_layout_adapter("research")
+        # Layout and section library
+        self.adapter = get_layout_adapter(self.layout_strategy)
+        self.section_lib = get_section_lib(self.layout_strategy)
         self.sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
         self.sec_counts = [self.section_lib.section_counts[t] for t in self.sec_types]
         self.max_indices = np.array(self.sec_counts, dtype=np.int64) - 1
 
-        # Topology discrete options
-        self.spacing_options = np.array([0.7, 0.8, 0.9, 1.0, 1.1, 1.2], dtype=np.float64)
-        self.num_secondary_range = (2, 6)  # min, max (inclusive)
+        specs = {spec.name: spec for spec in self.adapter.topology_specs()}
+        self.spacing_options = np.array(list(specs["main_beam_spacing"].choices), dtype=np.float64)
+        self.support_spacing_options = np.array(
+            list(specs["support_beam_max_spacing"].choices),
+            dtype=np.float64,
+        ) if "support_beam_max_spacing" in specs else np.array([0.0], dtype=np.float64)
+        self.num_secondary_range = self._int_range(specs, "num_secondary_width", default=(0, 0))
 
         # Precompute normalization ranges for section properties
         self._compute_section_ranges()
@@ -94,6 +100,7 @@ class SteelSectionOptEnvSB3(gym.Env):
         # Runtime state
         self.idx: np.ndarray = None  # Section indices [4]
         self.spacing_idx: int = 0  # Index into spacing_options
+        self.support_spacing_idx: int = 0
         self.num_secondary_width: int = 4
         self.num_secondary_height: int = 4
         self.add_support_beam: bool = True
@@ -133,6 +140,10 @@ class SteelSectionOptEnvSB3(gym.Env):
     def main_beam_spacing(self) -> float:
         """Current main beam spacing value."""
         return float(self.spacing_options[self.spacing_idx])
+
+    @property
+    def support_beam_max_spacing(self) -> float:
+        return float(self.support_spacing_options[self.support_spacing_idx])
 
     # ==================== Action Encoding ====================
 
@@ -185,19 +196,29 @@ class SteelSectionOptEnvSB3(gym.Env):
                 mask[offset + delta_choice] = False
         offset += nvec[4]
 
-        # num_secondary_width mask (dimension 5, size 3)
+        # Layout-specific topology slot 1.
         for delta_choice in range(3):
             delta = delta_choice - 1
-            new_val = self.num_secondary_width + delta
-            if new_val < self.num_secondary_range[0] or new_val > self.num_secondary_range[1]:
+            if self.layout_strategy == "research":
+                new_val = self.num_secondary_width + delta
+                invalid = new_val < self.num_secondary_range[0] or new_val > self.num_secondary_range[1]
+            else:
+                new_val = self.support_spacing_idx + delta
+                invalid = new_val < 0 or new_val >= len(self.support_spacing_options)
+            if invalid:
                 mask[offset + delta_choice] = False
         offset += nvec[5]
 
-        # num_secondary_height mask (dimension 6, size 3)
+        # Layout-specific topology slot 2. Engineering has no third topology
+        # delta while preserving the old 8-dim action space.
         for delta_choice in range(3):
             delta = delta_choice - 1
-            new_val = self.num_secondary_height + delta
-            if new_val < self.num_secondary_range[0] or new_val > self.num_secondary_range[1]:
+            if self.layout_strategy == "research":
+                new_val = self.num_secondary_height + delta
+                invalid = new_val < self.num_secondary_range[0] or new_val > self.num_secondary_range[1]
+            else:
+                invalid = delta != 0
+            if invalid:
                 mask[offset + delta_choice] = False
         offset += nvec[6]
 
@@ -233,12 +254,7 @@ class SteelSectionOptEnvSB3(gym.Env):
         return self.adapter.build_design_from_sections(
             geometry={"L": self.L, "W": self.W, "H": self.H},
             pressure=self.pressure,
-            topology={
-                "main_beam_spacing": self.main_beam_spacing,
-                "num_secondary_width": self.num_secondary_width,
-                "num_secondary_height": self.num_secondary_height,
-                "add_support_beam": self.add_support_beam,
-            },
+            topology=self._topology_for_design(),
             sections=sections,
         )
 
@@ -275,14 +291,16 @@ class SteelSectionOptEnvSB3(gym.Env):
         Ixs_norm = [ix / (self.max_Ix + 1e-12) for ix in Ixs]
         Iys_norm = [iy / (self.max_Iy + 1e-12) for iy in Iys]
 
-        # Topology normalization
+        # Topology normalization. The shape stays fixed for old policies:
+        # research = spacing, num_w, num_h, support
+        # engineering = spacing, support spacing, placeholder, support
         spacing_norm = self.spacing_idx / (len(self.spacing_options) - 1)
-        num_w_norm = (self.num_secondary_width - self.num_secondary_range[0]) / (
-            self.num_secondary_range[1] - self.num_secondary_range[0]
-        )
-        num_h_norm = (self.num_secondary_height - self.num_secondary_range[0]) / (
-            self.num_secondary_range[1] - self.num_secondary_range[0]
-        )
+        if self.layout_strategy == "research":
+            num_w_norm = self._norm_int(self.num_secondary_width, self.num_secondary_range)
+            num_h_norm = self._norm_int(self.num_secondary_height, self.num_secondary_range)
+        else:
+            num_w_norm = self._norm_index(self.support_spacing_idx, len(self.support_spacing_options))
+            num_h_norm = 0.0
 
         obs = np.array(
             [
@@ -353,23 +371,35 @@ class SteelSectionOptEnvSB3(gym.Env):
         # Initialize topology
         if options.get("init_topology") is not None:
             topo = options["init_topology"]
-            self.spacing_idx = int(topo.get("spacing_idx", rng.integers(0, len(self.spacing_options))))
-            self.num_secondary_width = int(
-                topo.get("num_secondary_width", rng.integers(*self.num_secondary_range) + 1)
+            self.spacing_idx = self._choice_idx(
+                self.spacing_options,
+                topo.get("main_beam_spacing", topo.get("spacing")),
+                topo.get("spacing_idx"),
+                rng,
             )
-            self.num_secondary_height = int(
-                topo.get("num_secondary_height", rng.integers(*self.num_secondary_range) + 1)
-            )
+            if self.layout_strategy == "research":
+                self.num_secondary_width = int(
+                    topo.get("num_secondary_width", self._sample_int(rng, self.num_secondary_range))
+                )
+                self.num_secondary_height = int(
+                    topo.get("num_secondary_height", self._sample_int(rng, self.num_secondary_range))
+                )
+            else:
+                self.support_spacing_idx = self._choice_idx(
+                    self.support_spacing_options,
+                    topo.get("support_beam_max_spacing"),
+                    topo.get("support_spacing_idx"),
+                    rng,
+                )
             self.add_support_beam = bool(topo.get("add_support_beam", True))
         else:
             # Random topology initialization
             self.spacing_idx = int(rng.integers(0, len(self.spacing_options)))
-            self.num_secondary_width = int(
-                rng.integers(self.num_secondary_range[0], self.num_secondary_range[1] + 1)
-            )
-            self.num_secondary_height = int(
-                rng.integers(self.num_secondary_range[0], self.num_secondary_range[1] + 1)
-            )
+            if self.layout_strategy == "research":
+                self.num_secondary_width = self._sample_int(rng, self.num_secondary_range)
+                self.num_secondary_height = self._sample_int(rng, self.num_secondary_range)
+            else:
+                self.support_spacing_idx = int(rng.integers(0, len(self.support_spacing_options)))
             self.add_support_beam = bool(rng.choice([True, False]))
 
         # Geometry
@@ -405,12 +435,7 @@ class SteelSectionOptEnvSB3(gym.Env):
             "mnorm": self.prev_mnorm,
             "violation": self.prev_v,
             "action_mask": self.action_masks(),
-            "topology": {
-                "spacing": self.main_beam_spacing,
-                "num_secondary_width": self.num_secondary_width,
-                "num_secondary_height": self.num_secondary_height,
-                "add_support_beam": self.add_support_beam,
-            },
+            "topology": self._topology_info(),
         }
         return obs, info
 
@@ -435,13 +460,17 @@ class SteelSectionOptEnvSB3(gym.Env):
         new_spacing_idx = int(np.clip(new_spacing_idx, 0, len(self.spacing_options) - 1))
         self.spacing_idx = new_spacing_idx
 
-        new_num_w = self.num_secondary_width + topology_deltas[1]
-        new_num_w = int(np.clip(new_num_w, self.num_secondary_range[0], self.num_secondary_range[1]))
-        self.num_secondary_width = new_num_w
+        if self.layout_strategy == "research":
+            new_num_w = self.num_secondary_width + topology_deltas[1]
+            new_num_w = int(np.clip(new_num_w, self.num_secondary_range[0], self.num_secondary_range[1]))
+            self.num_secondary_width = new_num_w
 
-        new_num_h = self.num_secondary_height + topology_deltas[2]
-        new_num_h = int(np.clip(new_num_h, self.num_secondary_range[0], self.num_secondary_range[1]))
-        self.num_secondary_height = new_num_h
+            new_num_h = self.num_secondary_height + topology_deltas[2]
+            new_num_h = int(np.clip(new_num_h, self.num_secondary_range[0], self.num_secondary_range[1]))
+            self.num_secondary_height = new_num_h
+        else:
+            new_support_idx = self.support_spacing_idx + topology_deltas[1]
+            self.support_spacing_idx = int(np.clip(new_support_idx, 0, len(self.support_spacing_options) - 1))
 
         if support_toggle == 1:
             self.add_support_beam = not self.add_support_beam
@@ -496,15 +525,73 @@ class SteelSectionOptEnvSB3(gym.Env):
             "mnorm": mnorm,
             "violation": v,
             "action_mask": self.action_masks(),
-            "topology": {
+            "topology": self._topology_info(),
+        }
+
+        return obs, float(r), terminated, truncated, info
+
+    @staticmethod
+    def _int_range(specs: dict, name: str, default: tuple[int, int]) -> tuple[int, int]:
+        spec = specs.get(name)
+        if spec is None:
+            return default
+        return int(spec.low), int(spec.high)
+
+    @staticmethod
+    def _sample_int(rng: np.random.Generator, value_range: tuple[int, int]) -> int:
+        return int(rng.integers(value_range[0], value_range[1] + 1))
+
+    @staticmethod
+    def _norm_index(index: int, count: int) -> float:
+        return float(index / max(count - 1, 1))
+
+    @staticmethod
+    def _norm_int(value: int, value_range: tuple[int, int]) -> float:
+        low, high = value_range
+        return float((value - low) / max(high - low, 1))
+
+    @staticmethod
+    def _choice_idx(
+        choices: np.ndarray,
+        value,
+        index,
+        rng: np.random.Generator,
+    ) -> int:
+        if index is not None:
+            return int(np.clip(index, 0, len(choices) - 1))
+        if value is None:
+            return int(rng.integers(0, len(choices)))
+        return int(np.argmin(np.abs(choices - float(value))))
+
+    def _topology_for_design(self) -> dict:
+        topology = {
+            "main_beam_spacing": self.main_beam_spacing,
+            "add_support_beam": self.add_support_beam,
+        }
+        if self.layout_strategy == "research":
+            topology.update(
+                {
+                    "num_secondary_width": self.num_secondary_width,
+                    "num_secondary_height": self.num_secondary_height,
+                }
+            )
+        else:
+            topology["support_beam_max_spacing"] = self.support_beam_max_spacing
+        return topology
+
+    def _topology_info(self) -> dict:
+        if self.layout_strategy == "research":
+            return {
                 "spacing": self.main_beam_spacing,
                 "num_secondary_width": self.num_secondary_width,
                 "num_secondary_height": self.num_secondary_height,
                 "add_support_beam": self.add_support_beam,
-            },
+            }
+        return {
+            "main_beam_spacing": self.main_beam_spacing,
+            "support_beam_max_spacing": self.support_beam_max_spacing,
+            "add_support_beam": self.add_support_beam,
         }
-
-        return obs, float(r), terminated, truncated, info
 
     def render(self):
         pass

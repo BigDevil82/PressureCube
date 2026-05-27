@@ -52,6 +52,7 @@ def optimize_structure(
     init_topology: Optional[Dict] = None,
     eval_mode: str = "fea",
     surrogate_path: Optional[str] = None,
+    layout_strategy: str = "research",
     max_steps: int = 50,
     deterministic: bool = True,
     verbose: bool = True,
@@ -67,6 +68,7 @@ def optimize_structure(
         init_topology: Initial topology dict or None for random
         eval_mode: "fea" for real analysis, "surrogate" for fast prediction
         surrogate_path: Path to surrogate model (required if eval_mode="surrogate")
+        layout_strategy: "research" or "engineering"
         max_steps: Maximum optimization steps
         deterministic: Use deterministic policy (no exploration)
         verbose: Print progress
@@ -83,6 +85,7 @@ def optimize_structure(
     env_config = {
         "eval_mode": eval_mode,
         "surrogate_path": surrogate_path,
+        "layout_strategy": layout_strategy,
         "fixed_geometry": (L, W, H),
         "pressure": pressure,
         "T": max_steps,
@@ -103,6 +106,7 @@ def optimize_structure(
 
     if verbose:
         print(f"\nStructure: L={L}m, W={W}m, H={H}m, pressure={pressure/1000:.1f}kPa")
+        print(f"Layout: {layout_strategy}")
         print(f"Initial sections: {env.unwrapped.idx.tolist()}")
         print(f"Initial topology: {info.get('topology', {})}")
         print(
@@ -214,6 +218,7 @@ def validate_with_fea(
     W: float,
     H: float,
     pressure: float = 30000.0,
+    layout_strategy: str = "research",
 ) -> dict:
     """
     Validate optimization result with real FEA.
@@ -222,16 +227,25 @@ def validate_with_fea(
     Uses the topology from the optimization result.
     """
     topo = result.topology
-    adapter = get_layout_adapter("research")
+    adapter = get_layout_adapter(layout_strategy)
+    topology = {
+        "main_beam_spacing": topo.get("main_beam_spacing", topo.get("spacing", 0.7)),
+        "add_support_beam": topo.get("add_support_beam", True),
+    }
+    if layout_strategy == "research":
+        topology.update(
+            {
+                "num_secondary_width": topo.get("num_secondary_width", 4),
+                "num_secondary_height": topo.get("num_secondary_height", 4),
+            }
+        )
+    else:
+        topology["support_beam_max_spacing"] = topo.get("support_beam_max_spacing", 0.5)
+
     design = adapter.build_design_from_sections(
         geometry={"L": L, "W": W, "H": H},
         pressure=pressure,
-        topology={
-            "main_beam_spacing": topo.get("main_beam_spacing", topo.get("spacing", 0.7)),
-            "num_secondary_width": topo.get("num_secondary_width", 4),
-            "num_secondary_height": topo.get("num_secondary_height", 4),
-            "add_support_beam": topo.get("add_support_beam", True),
-        },
+        topology=topology,
         sections=result.sections,
     )
     evaluator = StructuralEvaluator(mode="fea")
@@ -268,6 +282,13 @@ def main():
     # Evaluation mode
     parser.add_argument("--eval_mode", type=str, default="fea", choices=["fea", "surrogate"])
     parser.add_argument("--surrogate_path", type=str, default=None)
+    parser.add_argument(
+        "--layout_strategy",
+        type=str,
+        default="research",
+        choices=["research", "engineering"],
+        help="Layout strategy used by the RL environment.",
+    )
 
     # Optimization settings
     parser.add_argument("--max_steps", type=int, default=30)
@@ -294,6 +315,7 @@ def main():
         init_sections=init_sections,
         eval_mode=args.eval_mode,
         surrogate_path=args.surrogate_path,
+        layout_strategy=args.layout_strategy,
         max_steps=args.max_steps,
         deterministic=not args.stochastic,
         verbose=not args.quiet,
@@ -308,6 +330,7 @@ def main():
             W=args.W,
             H=args.H,
             pressure=args.pressure,
+            layout_strategy=args.layout_strategy,
         )
         print("FEA validation:")
         print(f"  Mass: {fea_result['mass']:.1f}kg")

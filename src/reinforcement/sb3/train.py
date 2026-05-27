@@ -144,6 +144,7 @@ def train(
     n_envs: int = 4,
     eval_mode: str = "surrogate",
     surrogate_path: Optional[str] = None,
+    layout_strategy: str = "research",
     resume_path: Optional[str] = None,
     output_dir: Optional[str] = None,
     learning_rate: float = 3e-4,
@@ -164,6 +165,7 @@ def train(
         n_envs: Number of parallel environments
         eval_mode: "fea" or "surrogate"
         surrogate_path: Path to surrogate model (required for surrogate mode)
+        layout_strategy: "research" or "engineering"
         output_dir: Output directory for logs and checkpoints
         resume_path: Path to resume model
         learning_rate: Learning rate
@@ -184,12 +186,13 @@ def train(
     os.makedirs(f"{output_dir}/checkpoints", exist_ok=True)
 
     print(f"Output directory: {output_dir}")
-    print(f"Eval mode: {eval_mode}, n_envs: {n_envs}")
+    print(f"Eval mode: {eval_mode}, layout: {layout_strategy}, n_envs: {n_envs}")
 
     # Environment config
     env_config = {
         "eval_mode": eval_mode,
         "surrogate_path": surrogate_path,
+        "layout_strategy": layout_strategy,
         "fixed_geometry": fixed_geometry,
         "T": 30,
         "K_no_improve": 5,
@@ -272,6 +275,13 @@ def main():
     parser.add_argument("--n_envs", type=int, default=4, help="Number of parallel environments")
     parser.add_argument("--eval_mode", type=str, default="surrogate", choices=["fea", "surrogate"])
     parser.add_argument("--surrogate_path", type=str, default=None, help="Path to surrogate model")
+    parser.add_argument(
+        "--layout_strategy",
+        type=str,
+        default="research",
+        choices=["research", "engineering"],
+        help="Layout strategy used by the RL environment.",
+    )
     parser.add_argument("--resume_path", type=str, default=None, help="Path to resume model")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
@@ -302,6 +312,7 @@ def main():
         n_envs=args.n_envs,
         eval_mode=args.eval_mode,
         surrogate_path=args.surrogate_path,
+        layout_strategy=args.layout_strategy,
         output_dir=args.output_dir,
         resume_path=args.resume_path,
         learning_rate=args.lr,
