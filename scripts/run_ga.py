@@ -1,9 +1,64 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from src.analysis.evaluator import evaluate_design
 from src.optimization.design_space import get_layout_adapter
 from src.optimization.parallel_ga import GAResult, ParallelGAOptimizer
+from src.structure.enums import BeamType
+from src.structure.section_grouping.discovery import (
+    SectionGroupingDiscoveryConfig,
+    build_rules_from_random_topology_samples,
+)
 from src.structure.section_grouping.models import SectionGroupingRuleset
+
+
+DEFAULT_GROUPS = {
+    BeamType.FRAME: 2,
+    BeamType.MAIN: 2,
+    BeamType.SECONDARY: 3,
+    BeamType.BRACE: 2,
+}
+
+
+def discover_rules_for_optimization(
+    *,
+    geometry: dict,
+    sections: list[int],
+    layout_strategy: str,
+    n_samples: int,
+    n_jobs: int,
+    mesh_size: float,
+    seed: int,
+) -> SectionGroupingRuleset:
+    print("=" * 70)
+    print("SECTION GROUPING DISCOVERY")
+    print("=" * 70)
+    print(f"Samples: {n_samples}, Workers: {n_jobs}, Mesh size: {mesh_size}")
+    print(f"Base sections: {sections}")
+    config = SectionGroupingDiscoveryConfig(
+        n_groups_by_type=DEFAULT_GROUPS,
+        description=f"{layout_strategy} grouping discovered from sampled topology designs",
+    )
+    rules = build_rules_from_random_topology_samples(
+        geometry={"L": geometry["L"], "W": geometry["W"], "H": geometry["H"]},
+        pressure=geometry["pressure"],
+        sections=sections,
+        layout_strategy=layout_strategy,
+        discovery_config=config,
+        n_samples=n_samples,
+        seed=seed,
+        mesh_size=mesh_size,
+        n_jobs=n_jobs,
+    )
+    print(f"Discovered groups: {rules.group_ids()}")
+    print()
+    return rules
 
 
 def compare_methods(
@@ -12,14 +67,30 @@ def compare_methods(
     eval_mode: str = "fea",
     surrogate_path: str = None,
     layout_strategy: str = "research",
-    section_group_rules: SectionGroupingRuleset | str | None = None,
+    grouped: bool = False,
+    grouping_samples: int = 12,
+    grouping_n_jobs: int | None = None,
+    grouping_mesh_size: float = 0.5,
+    grouping_sections: list[int] | None = None,
 ):
     """Compare GA with different configurations."""
+    section_group_rules = None
+    if grouped:
+        section_group_rules = discover_rules_for_optimization(
+            geometry=geometry,
+            sections=grouping_sections or [2, 8, 7, 14],
+            layout_strategy=layout_strategy,
+            n_samples=grouping_samples,
+            n_jobs=grouping_n_jobs or n_jobs,
+            mesh_size=grouping_mesh_size,
+            seed=42,
+        )
+
     print("=" * 70)
     print("OPTIMIZATION METHOD COMPARISON")
     print("=" * 70)
     print(f"Geometry: L={geometry['L']}, W={geometry['W']}, H={geometry['H']}")
-    print(f"Workers: {n_jobs}, Eval mode: {eval_mode}, Layout: {layout_strategy}")
+    print(f"Workers: {n_jobs}, Eval mode: {eval_mode}, Layout: {layout_strategy}, Grouped: {grouped}")
     print()
 
     results = []
@@ -68,10 +139,25 @@ def run_ga_optimization(
     eval_mode: str = "fea",
     surrogate_path: str = None,
     layout_strategy: str = "research",
-    section_group_rules: SectionGroupingRuleset | str | None = None,
+    grouped: bool = False,
+    grouping_samples: int = 12,
+    grouping_n_jobs: int | None = None,
+    grouping_mesh_size: float = 0.5,
+    grouping_sections: list[int] | None = None,
 ) -> GAResult:
     """Run GA optimization with given parameters."""
     geometry = {"L": L, "W": W, "H": H, "pressure": pressure}
+    section_group_rules = None
+    if grouped:
+        section_group_rules = discover_rules_for_optimization(
+            geometry=geometry,
+            sections=grouping_sections or [2, 8, 7, 14],
+            layout_strategy=layout_strategy,
+            n_samples=grouping_samples,
+            n_jobs=grouping_n_jobs or n_jobs,
+            mesh_size=grouping_mesh_size,
+            seed=seed,
+        )
 
     print("=" * 70)
     print("PARALLEL GENETIC ALGORITHM OPTIMIZATION")
@@ -79,7 +165,7 @@ def run_ga_optimization(
     print(f"INPUT: L={L}, W={W}, H={H}, Pressure={pressure}")
     print(f"Population: {pop_size}, Generations: {n_generations}")
     print(f"Total evaluations: {pop_size * n_generations}")
-    print(f"Workers: {n_jobs}, Eval mode: {eval_mode}, Layout: {layout_strategy}")
+    print(f"Workers: {n_jobs}, Eval mode: {eval_mode}, Layout: {layout_strategy}, Grouped: {grouped}")
     print()
 
     opt = ParallelGAOptimizer(
@@ -123,7 +209,11 @@ def random_structures_opt_test(
     eval_mode: str = "surrogate",
     surrogate_path: str = None,
     layout_strategy: str = "research",
-    section_group_rules: SectionGroupingRuleset | str | None = None,
+    grouped: bool = False,
+    grouping_samples: int = 12,
+    grouping_n_jobs: int | None = None,
+    grouping_mesh_size: float = 0.5,
+    grouping_sections: list[int] | None = None,
 ):
     """Test optimization on random structures."""
     import random
@@ -148,7 +238,11 @@ def random_structures_opt_test(
             eval_mode=eval_mode,
             surrogate_path=surrogate_path,
             layout_strategy=layout_strategy,
-            section_group_rules=section_group_rules,
+            grouped=grouped,
+            grouping_samples=grouping_samples,
+            grouping_n_jobs=grouping_n_jobs,
+            grouping_mesh_size=grouping_mesh_size,
+            grouping_sections=grouping_sections,
         )
 
 
@@ -170,11 +264,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--layout-strategy", type=str, default="research", choices=["research", "engineering"]
     )
-    parser.add_argument(
-        "--section-group-rules", type=str, default=None, help="Path to section grouping ruleset JSON"
-    )
+    parser.add_argument("--grouped", action="store_true", help="Discover and use section-grouping rules before GA")
+    parser.add_argument("--grouping-samples", type=int, default=12, help="Representative designs for rule discovery")
+    parser.add_argument("--grouping-n-jobs", type=int, default=None, help="Workers for grouping discovery")
+    parser.add_argument("--grouping-mesh-size", type=float, default=0.5, help="FEA mesh size for grouping discovery")
+    parser.add_argument("--group-frame", type=int, default=2, help="Base frame section for discovery")
+    parser.add_argument("--group-main", type=int, default=8, help="Base main section for discovery")
+    parser.add_argument("--group-sec", type=int, default=7, help="Base secondary section for discovery")
+    parser.add_argument("--group-brace", type=int, default=14, help="Base brace section for discovery")
 
     args = parser.parse_args()
+    grouping_sections = [args.group_frame, args.group_main, args.group_sec, args.group_brace]
 
     if args.mode == "run":
         run_ga_optimization(
@@ -189,7 +289,11 @@ if __name__ == "__main__":
             eval_mode=args.eval_mode,
             surrogate_path=args.surrogate,
             layout_strategy=args.layout_strategy,
-            section_group_rules=args.section_group_rules,
+            grouped=args.grouped,
+            grouping_samples=args.grouping_samples,
+            grouping_n_jobs=args.grouping_n_jobs,
+            grouping_mesh_size=args.grouping_mesh_size,
+            grouping_sections=grouping_sections,
         )
     elif args.mode == "compare":
         geometry = {"L": args.L, "W": args.W, "H": args.H, "pressure": args.pressure}
@@ -199,12 +303,20 @@ if __name__ == "__main__":
             eval_mode=args.eval_mode,
             surrogate_path=args.surrogate,
             layout_strategy=args.layout_strategy,
-            section_group_rules=args.section_group_rules,
+            grouped=args.grouped,
+            grouping_samples=args.grouping_samples,
+            grouping_n_jobs=args.grouping_n_jobs,
+            grouping_mesh_size=args.grouping_mesh_size,
+            grouping_sections=grouping_sections,
         )
     elif args.mode == "random_test":
         random_structures_opt_test(
             eval_mode=args.eval_mode,
             surrogate_path=args.surrogate,
             layout_strategy=args.layout_strategy,
-            section_group_rules=args.section_group_rules,
+            grouped=args.grouped,
+            grouping_samples=args.grouping_samples,
+            grouping_n_jobs=args.grouping_n_jobs,
+            grouping_mesh_size=args.grouping_mesh_size,
+            grouping_sections=grouping_sections,
         )
