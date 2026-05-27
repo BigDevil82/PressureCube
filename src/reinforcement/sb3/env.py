@@ -50,6 +50,7 @@ class SteelSectionOptEnvSB3(gym.Env):
         self.evaluator = StructuralEvaluator(
             mode=eval_mode,
             surrogate_path=surrogate_path,
+            mesh_size=config.get("mesh_size", 0.5),
         )
 
         # Layout and section library

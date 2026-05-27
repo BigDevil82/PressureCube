@@ -412,6 +412,12 @@ with rl_tab:
                 step=1.0,
                 key="rl_pressure_kpa",
             )
+            rl_eval_mode = st.selectbox(
+                "评估方式",
+                options=["surrogate", "fea"],
+                format_func=lambda value: "代理模型" if value == "surrogate" else "有限元",
+                key="rl_eval_mode",
+            )
             rl_max_steps = st.number_input(
                 "推荐步数", min_value=1, max_value=100, value=30, step=1, key="rl_max_steps"
             )
@@ -435,9 +441,10 @@ with rl_tab:
             "add_support_beam": bool(add_brace),
         }
         init_sections = [int(frame_idx), int(main_idx), int(sec_idx), int(brace_idx)]
+        eval_name = "代理模型" if rl_eval_mode == "surrogate" else "有限元"
 
         log_buffer = StreamlitLogBuffer(rl_log_box)
-        with st.spinner("正在执行策略推荐并进行有限元校核..."):
+        with st.spinner(f"正在基于{eval_name}执行策略推荐并进行有限元校核..."):
             with redirect_stdout(log_buffer):
                 rl_result = rl_mod.optimize_structure(
                     model_path=PPO_ENGINEER_PATH,
@@ -447,10 +454,11 @@ with rl_tab:
                     pressure=pressure_pa,
                     init_sections=init_sections,
                     init_topology=init_topology,
-                    eval_mode="surrogate",
-                    surrogate_path=ENGINEERING_SURROGATE_PATH,
+                    eval_mode=rl_eval_mode,
+                    surrogate_path=(ENGINEERING_SURROGATE_PATH if rl_eval_mode == "surrogate" else None),
                     layout_strategy="engineering",
                     max_steps=int(rl_max_steps),
+                    mesh_size=float(rl_fea_mesh_size),
                     seed=int(rl_seed),
                     deterministic=True,
                     verbose=True,
@@ -471,6 +479,7 @@ with rl_tab:
             "surrogate_u_sigma": rl_result.u_sigma,
             "surrogate_u_delta": rl_result.u_delta,
             "surrogate_feasible": rl_result.feasible,
+            "eval_mode": rl_eval_mode,
             "fea_mass": fea_result["mass"],
             "fea_u_sigma": fea_result["u_sigma"],
             "fea_u_delta": fea_result["u_delta"],
@@ -491,8 +500,9 @@ with rl_tab:
         r_col3.metric("位移比", f"{last_rl_result['fea_u_delta']:.3f}")
         r_col4.metric("校核结果", "满足" if last_rl_result["fea_feasible"] else "不满足")
 
+        eval_label = "代理预测" if last_rl_result.get("eval_mode") == "surrogate" else "策略评估"
         st.write(
-            f"代理预测：质量={last_rl_result['surrogate_mass']:.0f} kg，"
+            f"{eval_label}：质量={last_rl_result['surrogate_mass']:.0f} kg，"
             f"u_sigma={last_rl_result['surrogate_u_sigma']:.3f}，"
             f"u_delta={last_rl_result['surrogate_u_delta']:.3f}，"
             f"可行性={'满足' if last_rl_result['surrogate_feasible'] else '不满足'}。"

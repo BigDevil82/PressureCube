@@ -54,6 +54,7 @@ def optimize_structure(
     surrogate_path: Optional[str] = None,
     layout_strategy: str = "research",
     max_steps: int = 50,
+    mesh_size: float = 0.5,
     seed: Optional[int] = None,
     deterministic: bool = True,
     verbose: bool = True,
@@ -71,6 +72,7 @@ def optimize_structure(
         surrogate_path: Path to surrogate model (required if eval_mode="surrogate")
         layout_strategy: "research" or "engineering"
         max_steps: Maximum optimization steps
+        mesh_size: FEA mesh size, used when eval_mode="fea"
         seed: Random seed for initial sections/topology. None keeps random starts.
         deterministic: Use deterministic policy (no exploration)
         verbose: Print progress
@@ -92,6 +94,7 @@ def optimize_structure(
         "pressure": pressure,
         "T": max_steps,
         "K_no_improve": max_steps,  # Disable early stopping
+        "mesh_size": mesh_size,
     }
 
     env = SteelSectionOptEnvSB3(env_config)
@@ -295,6 +298,7 @@ def main():
 
     # Optimization settings
     parser.add_argument("--max_steps", type=int, default=30)
+    parser.add_argument("--mesh_size", type=float, default=0.5, help="FEA mesh size")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for initial state")
     parser.add_argument("--stochastic", action="store_true", help="Use stochastic policy")
     parser.add_argument(
@@ -321,6 +325,7 @@ def main():
         surrogate_path=args.surrogate_path,
         layout_strategy=args.layout_strategy,
         max_steps=args.max_steps,
+        mesh_size=args.mesh_size,
         seed=args.seed,
         deterministic=not args.stochastic,
         verbose=not args.quiet,
@@ -336,7 +341,7 @@ def main():
             H=args.H,
             pressure=args.pressure,
             layout_strategy=args.layout_strategy,
-            mesh_size=0.5,
+            mesh_size=args.mesh_size,
         )
         print("FEA validation:")
         print(f"  Mass: {fea_result['mass']:.1f}kg")
