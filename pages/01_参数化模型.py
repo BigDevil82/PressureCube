@@ -475,10 +475,10 @@ with rl_tab:
 
         apply_rl_result(fea_result["sections"], fea_result["topology"])
         st.session_state["last_rl_optimization_result"] = {
-            "surrogate_mass": rl_result.mass,
-            "surrogate_u_sigma": rl_result.u_sigma,
-            "surrogate_u_delta": rl_result.u_delta,
-            "surrogate_feasible": rl_result.feasible,
+            "eval_mass": rl_result.mass,
+            "eval_u_sigma": rl_result.u_sigma,
+            "eval_u_delta": rl_result.u_delta,
+            "eval_feasible": rl_result.feasible,
             "eval_mode": rl_eval_mode,
             "fea_mass": fea_result["mass"],
             "fea_u_sigma": fea_result["u_sigma"],
@@ -500,12 +500,12 @@ with rl_tab:
         r_col3.metric("位移比", f"{last_rl_result['fea_u_delta']:.3f}")
         r_col4.metric("校核结果", "满足" if last_rl_result["fea_feasible"] else "不满足")
 
-        eval_label = "代理预测" if last_rl_result.get("eval_mode") == "surrogate" else "策略评估"
+        eval_label = "代理模型评估" if last_rl_result.get("eval_mode") == "surrogate" else "有限元评估"
         st.write(
-            f"{eval_label}：质量={last_rl_result['surrogate_mass']:.0f} kg，"
-            f"u_sigma={last_rl_result['surrogate_u_sigma']:.3f}，"
-            f"u_delta={last_rl_result['surrogate_u_delta']:.3f}，"
-            f"可行性={'满足' if last_rl_result['surrogate_feasible'] else '不满足'}。"
+            f"{eval_label}：质量={last_rl_result['eval_mass']:.0f} kg，"
+            f"u_sigma={last_rl_result['eval_u_sigma']:.3f}，"
+            f"u_delta={last_rl_result['eval_u_delta']:.3f}，"
+            f"可行性={'满足' if last_rl_result['eval_feasible'] else '不满足'}。"
         )
         st.write(f"拓扑参数：{last_rl_result['topology']}")
         st.write(f"截面索引：[frame, main, secondary, brace] = {last_rl_result['sections']}")
