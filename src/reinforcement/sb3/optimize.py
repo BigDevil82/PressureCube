@@ -54,6 +54,7 @@ def optimize_structure(
     surrogate_path: Optional[str] = None,
     layout_strategy: str = "research",
     max_steps: int = 50,
+    seed: Optional[int] = None,
     deterministic: bool = True,
     verbose: bool = True,
 ) -> OptimizationResult:
@@ -70,6 +71,7 @@ def optimize_structure(
         surrogate_path: Path to surrogate model (required if eval_mode="surrogate")
         layout_strategy: "research" or "engineering"
         max_steps: Maximum optimization steps
+        seed: Random seed for initial sections/topology. None keeps random starts.
         deterministic: Use deterministic policy (no exploration)
         verbose: Print progress
 
@@ -102,7 +104,7 @@ def optimize_structure(
     if init_topology is not None:
         reset_options["init_topology"] = init_topology
 
-    obs, info = env.reset(options=reset_options)
+    obs, info = env.reset(seed=seed, options=reset_options)
 
     if verbose:
         print(f"\nStructure: L={L}m, W={W}m, H={H}m, pressure={pressure/1000:.1f}kPa")
@@ -292,6 +294,7 @@ def main():
 
     # Optimization settings
     parser.add_argument("--max_steps", type=int, default=30)
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for initial state")
     parser.add_argument("--stochastic", action="store_true", help="Use stochastic policy")
     parser.add_argument(
         "--validate_fea", action="store_true", help="Validate with FEA after surrogate optimization"
@@ -317,6 +320,7 @@ def main():
         surrogate_path=args.surrogate_path,
         layout_strategy=args.layout_strategy,
         max_steps=args.max_steps,
+        seed=args.seed,
         deterministic=not args.stochastic,
         verbose=not args.quiet,
     )
