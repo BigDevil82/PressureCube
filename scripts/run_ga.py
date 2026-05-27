@@ -17,12 +17,11 @@ from src.structure.section_grouping.discovery import (
 )
 from src.structure.section_grouping.models import SectionGroupingRuleset
 
-
 DEFAULT_GROUPS = {
-    BeamType.FRAME: 2,
+    BeamType.FRAME: 1,
     BeamType.MAIN: 2,
-    BeamType.SECONDARY: 3,
-    BeamType.BRACE: 2,
+    BeamType.SECONDARY: 2,
+    BeamType.BRACE: 1,
 }
 
 
@@ -264,10 +263,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--layout-strategy", type=str, default="research", choices=["research", "engineering"]
     )
-    parser.add_argument("--grouped", action="store_true", help="Discover and use section-grouping rules before GA")
-    parser.add_argument("--grouping-samples", type=int, default=12, help="Representative designs for rule discovery")
+    parser.add_argument(
+        "--grouped", action="store_true", help="Discover and use section-grouping rules before GA"
+    )
+    parser.add_argument(
+        "--grouping-samples", type=int, default=12, help="Representative designs for rule discovery"
+    )
     parser.add_argument("--grouping-n-jobs", type=int, default=None, help="Workers for grouping discovery")
-    parser.add_argument("--grouping-mesh-size", type=float, default=0.5, help="FEA mesh size for grouping discovery")
+    parser.add_argument(
+        "--grouping-mesh-size", type=float, default=0.5, help="FEA mesh size for grouping discovery"
+    )
     parser.add_argument("--group-frame", type=int, default=2, help="Base frame section for discovery")
     parser.add_argument("--group-main", type=int, default=8, help="Base main section for discovery")
     parser.add_argument("--group-sec", type=int, default=7, help="Base secondary section for discovery")

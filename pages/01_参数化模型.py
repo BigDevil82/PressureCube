@@ -244,8 +244,8 @@ class StreamlitLogBuffer(StringIO):
 def format_optimization_log(text: str) -> str:
     text = text.replace("Initial mass (max sections)", "基准方案质量")
     text = re.sub(
-        r"Gen\s+(\d+)/(\d+):\s+best mass=([0-9.]+)kg,\s+feasible=(\d+)/(\d+),\s+mean_fit=([0-9.]+)",
-        r"优化轮次 \1/\2：当前推荐质量=\3 kg，约束满足候选=\4/\5，综合评分=\6",
+        r"Gen\s+(\d+)/(\d+):\s+best mass=([0-9.]+)kg,\s+feasible=(\d+)/(\d+)",
+        r"优化轮次 \1/\2：当前推荐质量=\3 kg，约束满足候选=\4/\5",
         text,
     )
     text = text.replace("Model loaded", "智能评估模型已加载")
