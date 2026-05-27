@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
+from joblib import Parallel, delayed
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.preprocessing import RobustScaler
 
 from src.analysis.opensees_analysis import OpenSeesSolver
 from src.analysis.results import AnalysisResults
-from src.optimization.design_space import get_layout_adapter, get_section_lib
+from src.optimization.design_space import VariableSpec, get_layout_adapter, get_section_lib
 from src.structure.section_grouping.beam_features import (
     BeamFeature,
     extract_beam_features,
@@ -135,6 +136,7 @@ def build_rules_from_designs(
     *,
     mesh_size: float = 0.5,
     section_lib_path: str | None = None,
+    n_jobs: int = 1,
 ) -> SectionGroupingRuleset:
     """从若干 StructuralDesign 自动建模、分析并发现分组规则。
 
@@ -149,24 +151,172 @@ def build_rules_from_designs(
     if any(design.layout_strategy != layout_strategy for design in design_list):
         raise ValueError("Representative designs must use the same layout strategy.")
 
-    section_lib = get_section_lib(layout_strategy, section_lib_path)
-    samples = []
-    for design in design_list:
-        model = design.build_model(section_lib)
-        model = MeshGenerator(model, mesh_size).generate()
-
-        solver = OpenSeesSolver(model)
-        strength_results = solver.run_load_combination(
-            discovery_config.strength_combo,
-            pressure_pa=design.pressure,
-        )
-        service_results = solver.run_load_combination(
-            discovery_config.service_combo,
-            pressure_pa=design.pressure,
-        )
-        samples.append(RepresentativeAnalysis(model, strength_results, service_results))
+    samples = analyze_representative_designs(
+        design_list,
+        discovery_config,
+        mesh_size=mesh_size,
+        section_lib_path=section_lib_path,
+        n_jobs=n_jobs,
+    )
 
     return discover_section_group_rules(samples, discovery_config, layout_strategy=layout_strategy)
+
+
+def sample_representative_designs(
+    *,
+    geometry: dict[str, float],
+    pressure: float,
+    sections: list[int],
+    layout_strategy: str,
+    n_samples: int,
+    seed: int = 42,
+    include_default: bool = True,
+) -> list[StructuralDesign]:
+    """Sample representative topology designs for discovering grouping rules.
+
+    The section scheme is fixed by `sections`; only topology variables are
+    sampled. This is intended for the one-time offline discovery step before an
+    optimization run for a fixed structure geometry and load.
+    """
+
+    adapter = get_layout_adapter(layout_strategy)
+    rng = np.random.default_rng(seed)
+    designs = []
+
+    if include_default:
+        designs.append(
+            adapter.build_design_from_sections(
+                geometry=geometry,
+                pressure=pressure,
+                topology=adapter.default_topology(),
+                sections=sections,
+            )
+        )
+
+    while len(designs) < n_samples:
+        topology = {
+            spec.name: _sample_topology_spec(spec, rng)
+            for spec in adapter.topology_specs()
+        }
+        designs.append(
+            adapter.build_design_from_sections(
+                geometry=geometry,
+                pressure=pressure,
+                topology=topology,
+                sections=sections,
+            )
+        )
+    return designs
+
+
+def build_rules_from_random_topology_samples(
+    *,
+    geometry: dict[str, float],
+    pressure: float,
+    sections: list[int],
+    layout_strategy: str,
+    discovery_config: SectionGroupingDiscoveryConfig,
+    n_samples: int = 12,
+    seed: int = 42,
+    mesh_size: float = 0.5,
+    n_jobs: int = 1,
+    section_lib_path: str | None = None,
+    include_default: bool = True,
+) -> SectionGroupingRuleset:
+    """Build grouping rules by sampling topology variables for one structure.
+
+    Use this before grouped optimization when no existing ruleset is available
+    for the current structure family. The geometry, pressure, and base section
+    indices stay fixed; topology variables are randomly sampled to produce
+    representative analyzed designs.
+    """
+
+    designs = sample_representative_designs(
+        geometry=geometry,
+        pressure=pressure,
+        sections=sections,
+        layout_strategy=layout_strategy,
+        n_samples=n_samples,
+        seed=seed,
+        include_default=include_default,
+    )
+    return build_rules_from_designs(
+        designs,
+        discovery_config,
+        mesh_size=mesh_size,
+        section_lib_path=section_lib_path,
+        n_jobs=n_jobs,
+    )
+
+
+def analyze_representative_designs(
+    designs: Iterable[StructuralDesign],
+    discovery_config: SectionGroupingDiscoveryConfig,
+    *,
+    mesh_size: float = 0.5,
+    section_lib_path: str | None = None,
+    n_jobs: int = 1,
+) -> list[RepresentativeAnalysis]:
+    design_list = list(designs)
+    if n_jobs == 1:
+        return [
+            _analyze_representative_design(
+                design,
+                discovery_config.strength_combo,
+                discovery_config.service_combo,
+                mesh_size,
+                section_lib_path,
+            )
+            for design in design_list
+        ]
+    return Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(_analyze_representative_design)(
+            design,
+            discovery_config.strength_combo,
+            discovery_config.service_combo,
+            mesh_size,
+            section_lib_path,
+        )
+        for design in design_list
+    )
+
+
+def _analyze_representative_design(
+    design: StructuralDesign,
+    strength_combo: dict[str, float],
+    service_combo: dict[str, float],
+    mesh_size: float,
+    section_lib_path: str | None,
+) -> RepresentativeAnalysis:
+    section_lib = get_section_lib(design.layout_strategy, section_lib_path)
+    model = design.build_model(section_lib)
+    model = MeshGenerator(model, mesh_size).generate()
+
+    solver = OpenSeesSolver(model)
+    strength_results = solver.run_load_combination(
+        strength_combo,
+        pressure_pa=design.pressure,
+    )
+    service_results = solver.run_load_combination(
+        service_combo,
+        pressure_pa=design.pressure,
+    )
+    return RepresentativeAnalysis(model, strength_results, service_results)
+
+
+def _sample_topology_spec(spec: VariableSpec, rng: np.random.Generator) -> Any:
+    if spec.kind in {"categorical", "bool"}:
+        choices = list(spec.choices or [])
+        return choices[int(rng.integers(0, len(choices)))]
+    if spec.kind == "int":
+        return int(rng.integers(int(spec.low), int(spec.high) + 1))
+    if spec.kind == "float":
+        value = float(rng.uniform(float(spec.low), float(spec.high)))
+        if spec.step:
+            steps = round((value - float(spec.low)) / float(spec.step))
+            value = float(spec.low) + steps * float(spec.step)
+        return value
+    raise ValueError(f"Unsupported variable spec kind: {spec.kind}")
 
 
 def _collect_orbit_records(
@@ -304,21 +454,15 @@ if __name__ == "__main__":
         description="engineering baseline grouping",
     )
 
-    adapter = get_layout_adapter("engineering")
-    design = adapter.build_design_from_sections(
+    rules = build_rules_from_random_topology_samples(
         geometry={"L": 8.9, "W": 3.7, "H": 3.3},
         pressure=30000.0,
-        topology={
-            "main_beam_spacing": 0.95,
-            "support_beam_max_spacing": 0.75,
-            "add_support_beam": True,
-        },
         sections=[2, 8, 7, 14],
-    )
-
-    rules = build_rules_from_designs(
-        [design],
-        discovery_config,
+        layout_strategy="engineering",
+        discovery_config=discovery_config,
+        n_samples=8,
+        seed=42,
         mesh_size=0.5,
+        n_jobs=4,
     )
     rules.save_json("results/section_grouping/engineering_rules.json")
