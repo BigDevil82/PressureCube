@@ -200,6 +200,7 @@ def evaluate_individual(
     eval_mode: str = "fea",
     surrogate_path: Optional[str] = None,
     base_params: BaseLayoutParameters | None = None,
+    mesh_size: float = 0.5,
 ) -> tuple[float, float, float, float, bool]:
     """
     Evaluate fitness of an individual.
@@ -220,6 +221,7 @@ def evaluate_individual(
         design=candidate.design,
         mode=eval_mode,
         surrogate_path=surrogate_path,
+        mesh_size=mesh_size,
     )
 
     return _fitness_from_eval(mass, u_sigma, u_delta, feasible, eval_mode)
@@ -352,6 +354,7 @@ class ParallelGAOptimizer:
         layout_strategy: str = "research",
         section_group_rules: SectionGroupingRuleset | str | None = None,
         base_params: BaseLayoutParameters | None = None,
+        mesh_size: float = 0.5,
     ):
         self.pop_size = pop_size
         self.n_generations = n_generations
@@ -365,6 +368,7 @@ class ParallelGAOptimizer:
         self.surrogate_path = surrogate_path
         self.layout_strategy = layout_strategy
         self.base_params = base_params
+        self.mesh_size = mesh_size
         self.adapter = get_layout_adapter(layout_strategy)
         self.topology_specs = self.adapter.topology_specs()
         self.section_group_rules = (
@@ -468,6 +472,7 @@ class ParallelGAOptimizer:
                 self.eval_mode,
                 self.surrogate_path,
                 self.base_params,
+                self.mesh_size,
             )
         initial_mass = initial_result[0]
         if verbose:
@@ -499,6 +504,7 @@ class ParallelGAOptimizer:
                         self.eval_mode,
                         self.surrogate_path,
                         self.base_params,
+                        self.mesh_size,
                     )
                     for ind in population
                 )

@@ -297,6 +297,11 @@ with st.expander("优化参数", expanded=True):
             format_func=lambda value: "代理模型" if value == "surrogate" else "有限元",
             key="opt_eval_mode",
         )
+        opt_mesh_size = (
+            st.slider("有限元网格大小 (m)", 0.1, 1.0, 0.5, 0.05, key="opt_mesh_size")
+            if opt_eval_mode == "fea"
+            else 0.5
+        )
     with opt_col2:
         opt_pop_size = st.number_input(
             "候选方案规模", min_value=8, max_value=256, value=32, step=8, key="opt_pop_size"
@@ -330,6 +335,7 @@ if run_optimization:
         surrogate_path=("src/data/engineering_model.pkl" if opt_eval_mode == "surrogate" else None),
         layout_strategy="engineering",
         base_params=params,
+        mesh_size=float(opt_mesh_size),
     )
 
     log_buffer = StreamlitLogBuffer(log_box)

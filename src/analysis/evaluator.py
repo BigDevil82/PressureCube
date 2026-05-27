@@ -122,7 +122,8 @@ def evaluate_design(
     design: StructuralDesign,
     mode: str = "fea",
     surrogate_path: Optional[str] = None,
+    mesh_size: float = 0.5,
 ) -> Tuple[float, float, float, bool]:
-    evaluator = StructuralEvaluator(mode=mode, surrogate_path=surrogate_path)
+    evaluator = StructuralEvaluator(mode=mode, surrogate_path=surrogate_path, mesh_size=mesh_size)
     result = evaluator.evaluate(design)
     return result.mass, result.u_sigma, result.u_delta, result.feasible
