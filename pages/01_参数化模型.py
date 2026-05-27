@@ -463,15 +463,25 @@ with rl_tab:
                     deterministic=True,
                     verbose=True,
                 )
-                fea_result = rl_mod.validate_with_fea(
-                    result=rl_result,
-                    L=float(length),
-                    W=float(width),
-                    H=float(height),
-                    pressure=pressure_pa,
-                    layout_strategy="engineering",
-                    mesh_size=float(rl_fea_mesh_size),
-                )
+                if rl_eval_mode == "surrogate":
+                    fea_result = rl_mod.validate_with_fea(
+                        result=rl_result,
+                        L=float(length),
+                        W=float(width),
+                        H=float(height),
+                        pressure=pressure_pa,
+                        layout_strategy="engineering",
+                        mesh_size=float(rl_fea_mesh_size),
+                    )
+                else:
+                    fea_result = {
+                        "sections": rl_result.sections,
+                        "topology": rl_result.topology,
+                        "mass": rl_result.mass,
+                        "u_sigma": rl_result.u_sigma,
+                        "u_delta": rl_result.u_delta,
+                        "feasible": rl_result.feasible,
+                    }
 
         apply_rl_result(fea_result["sections"], fea_result["topology"])
         st.session_state["last_rl_optimization_result"] = {
