@@ -11,6 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+ENGINEERING_SURROGATE_PATH = "src/data/engineering_model.pkl"
+PPO_ENGINEER_PATH = "src/data/ppo_engineer.zip"
+
 import src
 from src.app.model_visualization import build_structure_figure
 from src.app.parametric_helpers import build_engineering_preview, hydrate_defaults
@@ -324,11 +327,7 @@ with ga_tab:
                 format_func=lambda value: "代理模型" if value == "surrogate" else "有限元",
                 key="opt_eval_mode",
             )
-            opt_mesh_size = (
-                st.slider("有限元网格大小 (m)", 0.1, 1.0, 0.5, 0.05, key="opt_mesh_size")
-                if opt_eval_mode == "fea"
-                else 0.5
-            )
+            opt_mesh_size = st.slider("有限元网格大小 (m)", 0.1, 1.0, 0.5, 0.05, key="opt_mesh_size")
         with opt_col2:
             opt_pop_size = st.number_input(
                 "候选方案规模", min_value=8, max_value=256, value=32, step=8, key="opt_pop_size"
@@ -359,7 +358,7 @@ with ga_tab:
             n_jobs=int(opt_n_jobs),
             seed=int(opt_seed),
             eval_mode=opt_eval_mode,
-            surrogate_path=("src/data/engineering_model.pkl" if opt_eval_mode == "surrogate" else None),
+            surrogate_path=(ENGINEERING_SURROGATE_PATH if opt_eval_mode == "surrogate" else None),
             layout_strategy="engineering",
             base_params=params,
             mesh_size=float(opt_mesh_size),
@@ -405,7 +404,7 @@ with ga_tab:
 
 with rl_tab:
     with st.expander("推荐参数", expanded=True):
-        rl_col1, rl_col2, rl_col3 = st.columns(3)
+        rl_col1, rl_col2 = st.columns(2)
         with rl_col1:
             rl_pressure_kpa = st.number_input(
                 "内压大小 (kPa)",
@@ -421,11 +420,6 @@ with rl_tab:
                 "随机种子", min_value=0, max_value=999999, value=42, step=1, key="rl_seed"
             )
             rl_fea_mesh_size = st.slider("校核网格大小 (m)", 0.1, 1.0, 0.5, 0.05, key="rl_fea_mesh_size")
-        with rl_col3:
-            rl_model_path = st.text_input("策略模型", value="src/data/ppo_engineer.zip", key="rl_model_path")
-            rl_surrogate_path = st.text_input(
-                "评估模型", value="src/data/engineering_model.pkl", key="rl_surrogate_path"
-            )
 
     run_rl = st.button("开始策略推荐", type="primary", width="stretch", key="run_rl_optimization")
     rl_log_box = st.empty()
@@ -446,7 +440,7 @@ with rl_tab:
         with st.spinner("正在执行策略推荐并进行有限元校核..."):
             with redirect_stdout(log_buffer):
                 rl_result = rl_mod.optimize_structure(
-                    model_path=rl_model_path,
+                    model_path=PPO_ENGINEER_PATH,
                     L=float(length),
                     W=float(width),
                     H=float(height),
@@ -454,7 +448,7 @@ with rl_tab:
                     init_sections=init_sections,
                     init_topology=init_topology,
                     eval_mode="surrogate",
-                    surrogate_path=rl_surrogate_path,
+                    surrogate_path=ENGINEERING_SURROGATE_PATH,
                     layout_strategy="engineering",
                     max_steps=int(rl_max_steps),
                     seed=int(rl_seed),
