@@ -160,9 +160,9 @@ with st.sidebar:
     st.header("👁️ 视图设置")
     show_plates = st.checkbox("显示蒙皮 (Plates)", value=True, key="show_plates")
     show_nodes = st.checkbox("显示节点 (Nodes)", value=False, key="show_nodes")
-    st.subheader("🧪 调试")
-    show_meshed_debug = st.checkbox("显示网格划分结果", value=False, key="show_meshed_debug")
-    mesh_size_debug = st.slider("调试网格尺寸 (m)", 0.1, 1.0, 0.5, 0.05, key="mesh_size_debug")
+    # st.subheader("🧪 调试")
+    # show_meshed_debug = st.checkbox("显示网格划分结果", value=False, key="show_meshed_debug")
+    # mesh_size_debug = st.slider("调试网格尺寸 (m)", 0.1, 1.0, 0.5, 0.05, key="mesh_size_debug")
 
 params = EngineeringLayoutParameters(
     length=length,
@@ -190,11 +190,11 @@ model.generate()
 display_model = model
 display_label = "原始模型"
 meshed_model = None
-if show_meshed_debug:
-    with st.spinner("正在生成调试网格..."):
-        meshed_model = MeshGenerator(model, mesh_size_debug).generate()
-    display_model = meshed_model
-    display_label = "网格模型"
+# if show_meshed_debug:
+#     with st.spinner("正在生成调试网格..."):
+#         meshed_model = MeshGenerator(model, mesh_size_debug).generate()
+#     display_model = meshed_model
+#     display_label = "网格模型"
 
 session.set_model_bundle(params, model, section_library)
 figure = build_structure_figure(
