@@ -27,9 +27,18 @@ class AnalysisState:
     case_name: str = ""
 
 
+@dataclass
+class GroupingDesignState:
+    ruleset: Any = None
+    optimization_result: Any = None
+    discovery_signature: str = ""
+    discovery_pressure_pa: float = 0.0
+
+
 class AppSession:
     _MODEL_BUNDLE_KEY = "app_model_bundle"
     _ANALYSIS_STATE_KEY = "app_analysis_state"
+    _GROUPING_STATE_KEY = "app_grouping_design_state"
 
     def __init__(self):
         self._state = st.session_state
@@ -37,6 +46,7 @@ class AppSession:
     def ensure_defaults(self):
         self._state.setdefault(self._MODEL_BUNDLE_KEY, {})
         self._state.setdefault(self._ANALYSIS_STATE_KEY, AnalysisState())
+        self._state.setdefault(self._GROUPING_STATE_KEY, GroupingDesignState())
 
     @property
     def model_bundle(self) -> dict[str, Any]:
@@ -48,6 +58,11 @@ class AppSession:
         self.ensure_defaults()
         return self._state[self._ANALYSIS_STATE_KEY]
 
+    @property
+    def grouping(self) -> GroupingDesignState:
+        self.ensure_defaults()
+        return self._state[self._GROUPING_STATE_KEY]
+
     def has_model(self) -> bool:
         bundle = self.model_bundle
         return bundle.get("model") is not None and bundle.get("params") is not None
@@ -55,7 +70,13 @@ class AppSession:
     def set_model_bundle(
         self, params: BaseLayoutParameters, model: StructuralModel, section_library: SectionLibrary
     ):
-        signature = f"{repr(params)}|section_lib={getattr(section_library, 'file_path', '')}"
+        sections = tuple(
+            sorted((group_id, group.section_index) for group_id, group in model.section_assignment.groups.items())
+        )
+        signature = (
+            f"{repr(params)}|section_lib={getattr(section_library, 'file_path', '')}"
+            f"|sections={sections}"
+        )
         previous_signature = self.model_bundle.get("signature")
         self._state[self._MODEL_BUNDLE_KEY] = {
             "params": params,
@@ -68,9 +89,13 @@ class AppSession:
         self._state["section_library"] = section_library
         if previous_signature != signature:
             self.reset_analysis()
+            self.reset_grouping()
 
     def reset_analysis(self):
         self._state[self._ANALYSIS_STATE_KEY] = AnalysisState()
+
+    def reset_grouping(self):
+        self._state[self._GROUPING_STATE_KEY] = GroupingDesignState()
 
     @property
     def params(self) -> BaseLayoutParameters | None:

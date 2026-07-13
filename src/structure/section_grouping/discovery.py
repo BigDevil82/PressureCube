@@ -24,6 +24,7 @@ from src.structure.section_grouping.features import (
 )
 from src.structure.section_grouping.models import BeamGroupPrototype, SectionGroupingRuleset
 from src.structure.enums import BeamType
+from src.structure.layout.params import BaseLayoutParameters
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.structural_design import StructuralDesign
 from src.structure.structural_model import StructuralModel
@@ -171,6 +172,7 @@ def sample_representative_designs(
     n_samples: int,
     seed: int = 42,
     include_default: bool = True,
+    base_params: BaseLayoutParameters | None = None,
 ) -> list[StructuralDesign]:
     """Sample representative topology designs for discovering grouping rules.
 
@@ -184,12 +186,20 @@ def sample_representative_designs(
     designs = []
 
     if include_default:
+        default_topology = adapter.default_topology()
+        if base_params is not None:
+            default_topology = {
+                spec.name: getattr(base_params, spec.name)
+                for spec in adapter.topology_specs()
+            }
         designs.append(
-            adapter.build_design_from_sections(
-                geometry=geometry,
-                pressure=pressure,
-                topology=adapter.default_topology(),
-                sections=sections,
+            _build_representative_design(
+                adapter,
+                geometry,
+                pressure,
+                default_topology,
+                sections,
+                base_params,
             )
         )
 
@@ -199,14 +209,35 @@ def sample_representative_designs(
             for spec in adapter.topology_specs()
         }
         designs.append(
-            adapter.build_design_from_sections(
-                geometry=geometry,
-                pressure=pressure,
-                topology=topology,
-                sections=sections,
+            _build_representative_design(
+                adapter,
+                geometry,
+                pressure,
+                topology,
+                sections,
+                base_params,
             )
         )
     return designs
+
+
+def _build_representative_design(
+    adapter,
+    geometry: dict[str, float],
+    pressure: float,
+    topology: dict[str, Any],
+    sections: list[int],
+    base_params: BaseLayoutParameters | None,
+) -> StructuralDesign:
+    rules = SectionGroupingRuleset.by_beam_type(adapter.layout_strategy)
+    return adapter.build_design(
+        geometry=geometry,
+        pressure=pressure,
+        topology=topology,
+        section_group_rules=rules,
+        section_indices_by_group=dict(zip(rules.group_ids(), sections)),
+        base_params=base_params,
+    )
 
 
 def build_rules_from_random_topology_samples(
@@ -222,6 +253,7 @@ def build_rules_from_random_topology_samples(
     n_jobs: int = 1,
     section_lib_path: str | None = None,
     include_default: bool = True,
+    base_params: BaseLayoutParameters | None = None,
 ) -> SectionGroupingRuleset:
     """Build grouping rules by sampling topology variables for one structure.
 
@@ -239,6 +271,7 @@ def build_rules_from_random_topology_samples(
         n_samples=n_samples,
         seed=seed,
         include_default=include_default,
+        base_params=base_params,
     )
     return build_rules_from_designs(
         designs,

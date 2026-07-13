@@ -24,13 +24,21 @@ class EvalResult:
     u_sigma: float
     u_delta: float
     feasible: bool
+    max_stress_mpa: float | None = None
+    max_stress_pos: tuple[str, int] | None = None
+    max_deflection_mm: float | None = None
+    max_deflection_pos: int | None = None
 
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> Dict[str, object]:
         return {
             "mass": self.mass,
             "u_sigma": self.u_sigma,
             "u_delta": self.u_delta,
             "feasible": self.feasible,
+            "max_stress_mpa": self.max_stress_mpa,
+            "max_stress_pos": self.max_stress_pos,
+            "max_deflection_mm": self.max_deflection_mm,
+            "max_deflection_pos": self.max_deflection_pos,
         }
 
 
@@ -84,6 +92,10 @@ class StructuralEvaluator:
             u_sigma=u_sigma,
             u_delta=u_delta,
             feasible=u_sigma <= 1.0 and u_delta <= 1.0,
+            max_stress_mpa=strength_check.max_stress,
+            max_stress_pos=strength_check.max_stress_pos,
+            max_deflection_mm=disp_check.max_deflection,
+            max_deflection_pos=disp_check.max_deflection_pos,
         )
 
     def _evaluate_surrogate(self, design: StructuralDesign) -> EvalResult:

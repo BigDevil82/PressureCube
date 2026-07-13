@@ -14,7 +14,12 @@ import torch.optim as optim
 from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.optimization.design_space import design_to_feature_vector, get_section_lib
+from src.optimization.design_space import (
+    design_to_feature_vector,
+    design_to_group_feature_vector,
+    design_to_group_feature_vector_v2,
+    get_section_lib,
+)
 from src.structure.structural_design import StructuralDesign
 
 
@@ -456,14 +461,29 @@ class AdvancedSurrogateModel:
 
     def predict(self, design: StructuralDesign) -> Tuple[float, float]:
         """Predict for a single design."""
-        X = design_to_feature_vector(design).reshape(1, -1)
+        X = self._feature_vector(design).reshape(1, -1)
         pred_sigma, pred_delta = self.trainer.predict(X)
         return float(pred_sigma[0]), float(pred_delta[0])
 
     def predict_batch(self, designs: List[StructuralDesign]) -> Tuple[np.ndarray, np.ndarray]:
         """Batch prediction."""
-        X = np.array([design_to_feature_vector(design) for design in designs])
+        X = np.array([self._feature_vector(design) for design in designs])
         return self.trainer.predict(X)
+
+    def _feature_vector(self, design: StructuralDesign) -> np.ndarray:
+        """Select the feature schema used when the loaded model was trained."""
+
+        input_dim = int(self.trainer.X_mean.shape[0])
+        builders = (
+            design_to_feature_vector,
+            design_to_group_feature_vector,
+            design_to_group_feature_vector_v2,
+        )
+        for builder in builders:
+            values = builder(design)
+            if len(values) == input_dim:
+                return values
+        raise ValueError(f"No feature schema matches surrogate input dimension {input_dim}.")
 
     def save(self, path: str):
         """Save model."""
