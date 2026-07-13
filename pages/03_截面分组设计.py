@@ -21,7 +21,6 @@ from src.structure.section_grouping.discovery import (
     build_rules_from_random_topology_samples,
 )
 
-
 GROUPED_SURROGATE_PATH = "results/surrogate_data/engineering_200k_group/engineering_model_group_reproduce.pkl"
 MESH_SIZE = 0.5
 
@@ -123,7 +122,9 @@ summary_cols[3].metric("支撑梁", "开启" if params.add_support_beam else "�
 
 st.divider()
 st.subheader("1. 离线分组规则发现")
-st.caption("随机生成若干代表性拓扑，分别完成强度和位移分析，再根据受力响应、空间位置及对称关系发现稳定分组规则。")
+st.caption(
+    "随机生成若干代表性拓扑，分别完成强度和位移分析，再根据受力响应、空间位置及对称关系发现稳定分组规则。"
+)
 
 with st.expander("规则发现参数", expanded=grouping.ruleset is None):
     group_cols = st.columns(4)
@@ -176,7 +177,7 @@ pressure_matches_rules = abs(grouping.discovery_pressure_pa - pressure_kpa * 100
 if not pressure_matches_rules:
     st.warning("设计内压已改变。请重新运行离线分组后再进行优化。")
 
-view_col, data_col = st.columns([1, 1.7])
+view_col, data_col = st.columns([1.7, 1.7])
 with view_col:
     grouping_figure = build_section_grouping_figure(model, ruleset)
     grouping_figure.update_layout(height=420, margin=dict(l=0, r=0, t=45, b=0))
@@ -185,19 +186,21 @@ with data_col:
     st.dataframe(_prototype_rows(ruleset), use_container_width=True, hide_index=True)
 
 st.divider()
-st.subheader("2. 分组截面与拓扑 GA 优化")
-with st.expander("GA 参数", expanded=grouping.optimization_result is None):
+st.subheader("2. 分组截面与拓扑迭代优化")
+with st.expander("优化参数", expanded=grouping.optimization_result is None):
     ga_cols = st.columns(5)
     eval_mode = ga_cols[0].selectbox(
-        "评估方式", ["surrogate", "fea"], format_func=lambda value: "代理模型" if value == "surrogate" else "有限元"
+        "评估方式",
+        ["surrogate", "fea"],
+        format_func=lambda value: "代理模型" if value == "surrogate" else "有限元",
     )
-    pop_size = ga_cols[1].number_input("种群规模", 8, 256, 32, 8)
-    generations = ga_cols[2].number_input("迭代代数", 1, 100, 10, 1)
+    pop_size = ga_cols[1].number_input("候选方案规模", 8, 256, 32, 8)
+    generations = ga_cols[2].number_input("优化轮次", 1, 100, 10, 1)
     ga_jobs = ga_cols[3].number_input("并行进程数", 1, 16, 4, 1, key="group_ga_jobs")
     ga_seed = ga_cols[4].number_input("随机种子", 0, 999999, 42, 1, key="group_ga_seed")
 
 run_optimization = st.button(
-    "开始分组 GA 优化",
+    "开始迭代优化",
     type="primary",
     use_container_width=True,
     disabled=not pressure_matches_rules,
@@ -228,7 +231,7 @@ if run_optimization:
         "pressure": pressure_kpa * 1000.0,
     }
     log_buffer = StreamlitLogBuffer(log_box)
-    with st.spinner("正在执行分组 GA 优化..."):
+    with st.spinner("正在执行分组迭代优化..."):
         with redirect_stdout(log_buffer):
             ga_result = optimizer.optimize(geometry, verbose=True)
 
@@ -261,7 +264,7 @@ detail_cols[1].metric("最大位移", f"{result.fea_result.max_deflection_mm:.2f
 detail_cols[1].write(f"位置：节点 {result.fea_result.max_deflection_pos}")
 
 if not result.fea_result.feasible:
-    st.error("最终方案未通过 FEA 校核，请扩大 GA 搜索规模后重新优化。")
+    st.error("最终方案未通过 FEA 校核，请扩大候选方案规模或增加优化轮次后重新优化。")
 
 result_cols = st.columns(2)
 with result_cols[0]:

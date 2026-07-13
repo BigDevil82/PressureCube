@@ -99,7 +99,8 @@ def section_result_rows(result: GroupedOptimizationResult) -> list[dict]:
             {
                 "分组": group_id,
                 "构件类型": type_names[group.beam_type.name],
-                "截面索引": index,
+                # Streamlit right-aligns numeric columns; display indices as labels.
+                "截面索引": str(index),
                 "截面名称": section.name,
             }
         )
