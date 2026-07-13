@@ -1,4 +1,3 @@
-import json
 import re
 import sys
 from contextlib import redirect_stdout
@@ -24,6 +23,7 @@ from src.structure.section_grouping.discovery import (
 
 
 GROUPED_SURROGATE_PATH = "results/surrogate_data/engineering_200k_group/engineering_model_group_reproduce.pkl"
+MESH_SIZE = 0.5
 
 st.set_page_config(layout="wide", page_title="截面分组设计")
 st.title("截面分组设计与优化")
@@ -70,12 +70,17 @@ def _current_sections() -> list[int]:
 
 
 def _prototype_rows(ruleset):
+    type_names = {
+        BeamType.FRAME: "框架梁",
+        BeamType.MAIN: "主梁",
+        BeamType.SECONDARY: "次梁",
+        BeamType.BRACE: "支撑梁",
+    }
     return [
         {
             "分组": item.group_id,
-            "类型": item.beam_type.name,
+            "类型": type_names[item.beam_type],
             "样本梁数": item.member_count,
-            "应力比均值": round(item.stress_ratio_mean, 3),
             "应力比P90": round(item.stress_ratio_p90, 3),
             "位移P90(mm)": round(item.displacement_p90_mm, 3),
             "控制因素": "应力" if item.control_factor == "stress" else "位移",
@@ -107,7 +112,6 @@ with st.sidebar:
     pressure_kpa = st.number_input(
         "设计内压 (kPa)", min_value=0.0, value=float(session.analysis.pressure_pa) / 1000.0, step=1.0
     )
-    mesh_size = st.slider("FEA 网格大小 (m)", 0.1, 1.0, 0.5, 0.05)
     session.analysis.pressure_pa = int(pressure_kpa * 1000)
 
 st.subheader("当前参数化模型")
@@ -123,21 +127,15 @@ st.caption("随机生成若干代表性拓扑，分别完成强度和位移分�
 
 with st.expander("规则发现参数", expanded=grouping.ruleset is None):
     group_cols = st.columns(4)
-    frame_groups = group_cols[0].slider("框架梁组数", 1, 3, 2)
+    frame_groups = group_cols[0].slider("框架梁组数", 1, 3, 1)
     main_groups = group_cols[1].slider("主梁组数", 1, 3, 2)
-    secondary_groups = group_cols[2].slider("次梁组数", 1, 3, 3)
+    secondary_groups = group_cols[2].slider("次梁组数", 1, 3, 2)
     brace_groups = group_cols[3].slider("支撑梁组数", 1, 3, 2)
 
-    sample_cols = st.columns(4)
-    n_samples = sample_cols[0].number_input("代表模型数量", 2, 30, 8, 1)
-    discovery_jobs = sample_cols[1].number_input("并行进程数", 1, 16, 4, 1, key="group_discovery_jobs")
+    sample_cols = st.columns(3)
+    n_samples = sample_cols[0].number_input("代表模型数量", 2, 50, 24, 1)
+    discovery_jobs = sample_cols[1].number_input("并行进程数", 1, 16, 8, 1, key="group_discovery_jobs")
     discovery_seed = sample_cols[2].number_input("随机种子", 0, 999999, 42, 1, key="group_discovery_seed")
-    discovery_mesh = sample_cols[3].slider("发现阶段网格 (m)", 0.2, 1.0, 0.5, 0.05)
-
-    weight_cols = st.columns(3)
-    stress_weight = weight_cols[0].slider("应力权重", 0.0, 2.0, 1.0, 0.05)
-    displacement_weight = weight_cols[1].slider("位移权重", 0.0, 2.0, 0.7, 0.05)
-    spatial_weight = weight_cols[2].slider("空间权重", 0.0, 1.0, 0.35, 0.05)
 
 run_discovery = st.button("运行离线分组", type="primary", use_container_width=True)
 if run_discovery:
@@ -148,9 +146,6 @@ if run_discovery:
             BeamType.SECONDARY: secondary_groups,
             BeamType.BRACE: brace_groups,
         },
-        stress_weight=stress_weight,
-        displacement_weight=displacement_weight,
-        spatial_weight=spatial_weight,
         description="Streamlit offline grouping discovery",
     )
     geometry = {"L": params.length, "W": params.width, "H": params.height}
@@ -163,7 +158,7 @@ if run_discovery:
             discovery_config=config,
             n_samples=int(n_samples),
             seed=int(discovery_seed),
-            mesh_size=float(discovery_mesh),
+            mesh_size=MESH_SIZE,
             n_jobs=int(discovery_jobs),
             base_params=params,
         )
@@ -181,18 +176,13 @@ pressure_matches_rules = abs(grouping.discovery_pressure_pa - pressure_kpa * 100
 if not pressure_matches_rules:
     st.warning("设计内压已改变。请重新运行离线分组后再进行优化。")
 
-view_col, data_col = st.columns([3, 2])
+view_col, data_col = st.columns([1, 1.7])
 with view_col:
-    st.plotly_chart(build_section_grouping_figure(model, ruleset), use_container_width=True)
+    grouping_figure = build_section_grouping_figure(model, ruleset)
+    grouping_figure.update_layout(height=420, margin=dict(l=0, r=0, t=45, b=0))
+    st.plotly_chart(grouping_figure, use_container_width=True)
 with data_col:
     st.dataframe(_prototype_rows(ruleset), use_container_width=True, hide_index=True)
-    st.download_button(
-        "下载分组规则 JSON",
-        data=json.dumps(ruleset.to_dict(), ensure_ascii=False, indent=2),
-        file_name=f"{layout_strategy}_section_group_rules.json",
-        mime="application/json",
-        use_container_width=True,
-    )
 
 st.divider()
 st.subheader("2. 分组截面与拓扑 GA 优化")
@@ -205,7 +195,6 @@ with st.expander("GA 参数", expanded=grouping.optimization_result is None):
     generations = ga_cols[2].number_input("迭代代数", 1, 100, 10, 1)
     ga_jobs = ga_cols[3].number_input("并行进程数", 1, 16, 4, 1, key="group_ga_jobs")
     ga_seed = ga_cols[4].number_input("随机种子", 0, 999999, 42, 1, key="group_ga_seed")
-    repair_steps = st.number_input("代理结果最大微调次数", 1, 100, 24, 1)
 
 run_optimization = st.button(
     "开始分组 GA 优化",
@@ -230,7 +219,7 @@ if run_optimization:
         layout_strategy=layout_strategy,
         section_group_rules=ruleset,
         base_params=params,
-        mesh_size=float(mesh_size),
+        mesh_size=MESH_SIZE,
     )
     geometry = {
         "L": params.length,
@@ -243,14 +232,13 @@ if run_optimization:
         with redirect_stdout(log_buffer):
             ga_result = optimizer.optimize(geometry, verbose=True)
 
-    with st.spinner("正在进行真实有限元校核及必要的截面微调..."):
+    with st.spinner("正在进行最终方案有限元校核..."):
         grouping.optimization_result = validate_and_repair(
             ga_result,
             ruleset,
             params,
             pressure_kpa * 1000.0,
-            float(mesh_size),
-            max_steps=int(repair_steps),
+            MESH_SIZE,
         )
     st.success("分组优化与有限元校核完成。")
 
@@ -260,55 +248,20 @@ if result is None:
 
 st.divider()
 st.subheader("3. 最终设计与 FEA 校核")
-metric_cols = st.columns(5)
-metric_cols[0].metric("GA 候选质量", f"{result.ga_result.optimal_mass:.1f} kg")
-metric_cols[1].metric("最终质量", f"{result.fea_result.mass:.1f} kg")
-metric_cols[2].metric("应力利用率", f"{result.fea_result.u_sigma:.3f}")
-metric_cols[3].metric("位移利用率", f"{result.fea_result.u_delta:.3f}")
-metric_cols[4].metric("FEA 校核", "通过" if result.fea_result.feasible else "未通过")
+metric_cols = st.columns(4)
+metric_cols[0].metric("最终质量", f"{result.fea_result.mass:.1f} kg")
+metric_cols[1].metric("应力利用率", f"{result.fea_result.u_sigma:.3f}")
+metric_cols[2].metric("位移利用率", f"{result.fea_result.u_delta:.3f}")
+metric_cols[3].metric("FEA 校核", "通过" if result.fea_result.feasible else "未通过")
 
 detail_cols = st.columns(2)
-detail_cols[0].caption(
-    f"最大应力：{result.fea_result.max_stress_mpa:.2f} MPa；"
-    f"位置：{result.fea_result.max_stress_pos}"
-)
-detail_cols[1].caption(
-    f"最大位移：{result.fea_result.max_deflection_mm:.2f} mm；"
-    f"位置：节点 {result.fea_result.max_deflection_pos}"
-)
+detail_cols[0].metric("最大应力", f"{result.fea_result.max_stress_mpa:.2f} MPa")
+detail_cols[0].write(f"位置：{result.fea_result.max_stress_pos}")
+detail_cols[1].metric("最大位移", f"{result.fea_result.max_deflection_mm:.2f} mm")
+detail_cols[1].write(f"位置：节点 {result.fea_result.max_deflection_pos}")
 
-st.dataframe(
-    [
-        {
-            "结果阶段": "GA 评估",
-            "质量 (kg)": round(result.ga_result.optimal_mass, 2),
-            "应力利用率": round(result.ga_result.u_sigma, 3),
-            "位移利用率": round(result.ga_result.u_delta, 3),
-            "是否满足": "是" if result.ga_result.is_feasible else "否",
-        },
-        {
-            "结果阶段": "候选方案 FEA",
-            "质量 (kg)": round(result.initial_fea_result.mass, 2),
-            "应力利用率": round(result.initial_fea_result.u_sigma, 3),
-            "位移利用率": round(result.initial_fea_result.u_delta, 3),
-            "是否满足": "是" if result.initial_fea_result.feasible else "否",
-        },
-        {
-            "结果阶段": "微调后 FEA",
-            "质量 (kg)": round(result.fea_result.mass, 2),
-            "应力利用率": round(result.fea_result.u_sigma, 3),
-            "位移利用率": round(result.fea_result.u_delta, 3),
-            "是否满足": "是" if result.fea_result.feasible else "否",
-        },
-    ],
-    use_container_width=True,
-    hide_index=True,
-)
-
-if result.was_repaired:
-    st.warning(f"代理模型候选未直接通过真实 FEA，已执行 {len(result.repair_steps)} 次截面微调。")
 if not result.fea_result.feasible:
-    st.error("在设定的最大微调次数内仍未满足约束，请增加微调次数或扩大 GA 搜索规模。")
+    st.error("最终方案未通过 FEA 校核，请扩大 GA 搜索规模后重新优化。")
 
 result_cols = st.columns(2)
 with result_cols[0]:
@@ -317,28 +270,3 @@ with result_cols[0]:
 with result_cols[1]:
     st.markdown("#### 各分组最终截面")
     st.dataframe(section_result_rows(result), use_container_width=True, hide_index=True)
-
-if result.repair_steps:
-    with st.expander("查看截面微调记录"):
-        st.dataframe(
-            [
-                {
-                    "调整分组": step.group_id,
-                    "新截面索引": step.section_index,
-                    "应力利用率": round(step.u_sigma, 3),
-                    "位移利用率": round(step.u_delta, 3),
-                }
-                for step in result.repair_steps
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-st.plotly_chart(
-    build_section_grouping_figure(
-        result.model,
-        ruleset,
-        beam_to_group=result.design.section_assignment.beam_groups,
-    ),
-    use_container_width=True,
-)

@@ -84,6 +84,12 @@ def validate_and_repair(
 def section_result_rows(result: GroupedOptimizationResult) -> list[dict]:
     lib = get_section_lib(result.design.layout_strategy)
     group_types = result.design.section_assignment.groups
+    type_names = {
+        "FRAME": "框架梁",
+        "MAIN": "主梁",
+        "SECONDARY": "次梁",
+        "BRACE": "支撑梁",
+    }
     rows = []
     for group_id in result.design.section_assignment.groups:
         group = group_types[group_id]
@@ -92,7 +98,7 @@ def section_result_rows(result: GroupedOptimizationResult) -> list[dict]:
         rows.append(
             {
                 "分组": group_id,
-                "构件类型": group.beam_type.name,
+                "构件类型": type_names[group.beam_type.name],
                 "截面索引": index,
                 "截面名称": section.name,
             }
