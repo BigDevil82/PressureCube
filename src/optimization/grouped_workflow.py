@@ -5,10 +5,14 @@ from dataclasses import dataclass
 from src.analysis.evaluator import EvalResult, StructuralEvaluator
 from src.optimization.design_space import get_layout_adapter, get_section_lib
 from src.optimization.parallel_ga import GAResult
+from src.structure.enums import BeamType
 from src.structure.section_assignment import BEAM_SECTION_TYPES
 from src.structure.section_grouping.models import SectionGroupingRuleset
 from src.structure.structural_design import StructuralDesign
 from src.structure.structural_model import StructuralModel
+
+
+MIN_FRAME_SECTION_INDEX = 2  # BOX-150x6
 
 
 @dataclass(frozen=True)
@@ -46,7 +50,10 @@ def validate_and_repair(
     """Validate a grouped GA candidate and enlarge sections until FEA passes."""
 
     topology = dict(ga_result.optimal_topology)
-    sections = dict(ga_result.optimal_section_indices_by_group)
+    sections = apply_final_section_constraints(
+        ga_result.optimal_section_indices_by_group,
+        ruleset,
+    )
     evaluator = StructuralEvaluator(mode="fea", mesh_size=mesh_size)
     design, model = _build_design(topology, sections, ruleset, base_params, pressure)
     fea = evaluator.evaluate(design)
@@ -79,6 +86,19 @@ def validate_and_repair(
         model=model,
         repair_steps=steps,
     )
+
+
+def apply_final_section_constraints(
+    sections: dict[str, int],
+    ruleset: SectionGroupingRuleset,
+) -> dict[str, int]:
+    """Apply engineering minimum sections before final FEA verification."""
+
+    constrained = dict(sections)
+    for group_id, beam_type in ruleset.group_beam_types().items():
+        if beam_type == BeamType.FRAME:
+            constrained[group_id] = max(constrained[group_id], MIN_FRAME_SECTION_INDEX)
+    return constrained
 
 
 def section_result_rows(result: GroupedOptimizationResult) -> list[dict]:

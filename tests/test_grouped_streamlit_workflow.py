@@ -5,8 +5,11 @@ from unittest.mock import patch
 import numpy as np
 
 from src.analysis.surrogate_model import AdvancedSurrogateModel
+from src.optimization.grouped_workflow import apply_final_section_constraints
+from src.structure.enums import BeamType
 from src.structure.layout.params import EngineeringLayoutParameters, WindowParameters
 from src.structure.section_grouping.discovery import sample_representative_designs
+from src.structure.section_grouping.models import SectionGroupingRuleset
 
 
 class SurrogateFeatureSchemaTest(unittest.TestCase):
@@ -49,6 +52,28 @@ class RepresentativeDesignTest(unittest.TestCase):
         self.assertEqual(sampled.main_beam_spacing, 1.05)
         self.assertEqual(sampled.support_beam_max_spacing, 0.65)
         self.assertEqual(sampled.window.right_spans, [1, 2])
+
+
+class FinalSectionConstraintTest(unittest.TestCase):
+    def test_frame_groups_use_at_least_box_150x6(self):
+        rules = SectionGroupingRuleset(
+            layout_strategy="engineering",
+            n_groups_by_type={BeamType.FRAME: 2, BeamType.MAIN: 1},
+            prototypes=[],
+            feature_schema=[],
+            created_from_samples=0,
+        )
+        sections = {
+            "FRAME-SG1": 0,
+            "FRAME-SG2": 3,
+            "MAIN-SG1": 1,
+        }
+
+        constrained = apply_final_section_constraints(sections, rules)
+
+        self.assertEqual(constrained["FRAME-SG1"], 2)
+        self.assertEqual(constrained["FRAME-SG2"], 3)
+        self.assertEqual(constrained["MAIN-SG1"], 1)
 
 
 if __name__ == "__main__":
