@@ -21,7 +21,7 @@ from src.structure.section_grouping.discovery import (
     build_rules_from_random_topology_samples,
 )
 
-GROUPED_SURROGATE_PATH = "results/surrogate_data/engineering_200k_group/engineering_model_group_reproduce.pkl"
+GROUPED_SURROGATE_PATH = "src/data/engineering_group_model.pkl"
 MESH_SIZE = 0.5
 
 st.set_page_config(layout="wide", page_title="截面分组设计")
