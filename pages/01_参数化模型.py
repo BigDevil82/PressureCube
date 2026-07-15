@@ -24,7 +24,7 @@ from src.structure.layout.params import (
     WindowParameters,
 )
 from src.structure.mesh_generator import MeshGenerator
-from src.structure.section_assignment import SectionAssignment
+from src.structure.section_assignment import BEAM_SECTION_TYPES, SectionAssignment
 from src.structure.section_library import SectionLibrary, SectionType
 from src.structure.structural_model import StructuralModel
 
@@ -292,6 +292,44 @@ def finalize_ungrouped_result(params, pressure, topology, sections, mesh_size):
     )
 
 
+def topology_result_rows(topology):
+    labels = {
+        "main_beam_spacing": "主梁间距",
+        "support_beam_max_spacing": "支撑梁最大间距",
+        "add_support_beam": "设置支撑梁",
+    }
+    rows = []
+    for key, value in topology.items():
+        if isinstance(value, bool):
+            value = "是" if value else "否"
+        elif isinstance(value, float):
+            value = f"{value:.2f} m"
+        rows.append({"拓扑参数": labels.get(key, key), "优化结果": value})
+    return rows
+
+
+def section_result_rows(sections):
+    beam_types = [BeamType.FRAME, BeamType.MAIN, BeamType.SECONDARY, BeamType.BRACE]
+    type_names = {
+        BeamType.FRAME: "框架梁",
+        BeamType.MAIN: "主梁",
+        BeamType.SECONDARY: "次梁",
+        BeamType.BRACE: "支撑梁",
+    }
+    if isinstance(sections, dict):
+        indices = [sections[f"{beam_type.name}-SG1"] for beam_type in beam_types]
+    else:
+        indices = sections
+    return [
+        {
+            "构件类型": type_names[beam_type],
+            "截面索引": str(index),
+            "截面名称": section_library.get_section(BEAM_SECTION_TYPES[beam_type], index).name,
+        }
+        for beam_type, index in zip(beam_types, indices)
+    ]
+
+
 def load_ga_optimizer():
     module_names = [
         "src.optimization.parallel_ga",
@@ -418,18 +456,24 @@ with ga_tab:
     if last_result:
         st.markdown("#### 最近一次迭代优化结果")
         r_col1, r_col2, r_col3, r_col4 = st.columns(4)
-        r_col1.metric("初始质量", f"{last_result['initial_mass']:.0f} kg")
-        r_col2.metric("最优质量", f"{last_result['optimal_mass']:.0f} kg")
+        r_col1.metric("基准质量", f"{last_result['initial_mass']:.0f} kg")
+        r_col2.metric("优化后质量", f"{last_result['optimal_mass']:.0f} kg")
         r_col3.metric("材料节省率", f"{last_result['mass_reduction_pct']:.1f}%")
-        r_col4.metric("可行性", "满足" if last_result["is_feasible"] else "不满足")
+        r_col4.metric("FEA 校核", "通过" if last_result["is_feasible"] else "未通过")
 
-        st.write(
-            f"控制指标：u_sigma={last_result['u_sigma']:.3f}，"
-            f"u_delta={last_result['u_delta']:.3f}；"
-            f"评估次数：{last_result['n_evaluations']}，耗时：{last_result['time_seconds']:.1f}s。"
-        )
-        st.write(f"拓扑参数：{last_result['topology']}")
-        st.write(f"截面分组：{last_result['sections']}")
+        detail_col1, detail_col2, detail_col3, detail_col4 = st.columns(4)
+        detail_col1.metric("应力利用率", f"{last_result['u_sigma']:.3f}")
+        detail_col2.metric("位移利用率", f"{last_result['u_delta']:.3f}")
+        detail_col3.metric("方案评估次数", f"{last_result['n_evaluations']} 次")
+        detail_col4.metric("优化耗时", f"{last_result['time_seconds']:.1f} s")
+
+        topology_col, section_col = st.columns([1, 1.5])
+        with topology_col:
+            st.markdown("##### 最终拓扑布置")
+            st.dataframe(topology_result_rows(last_result["topology"]), width="stretch", hide_index=True)
+        with section_col:
+            st.markdown("##### 最终构件截面")
+            st.dataframe(section_result_rows(last_result["sections"]), width="stretch", hide_index=True)
 
 with rl_tab:
     with st.expander("推荐参数", expanded=True):
@@ -523,16 +567,19 @@ with rl_tab:
         st.markdown("#### 最近一次策略推荐结果")
         r_col1, r_col2, r_col3, r_col4 = st.columns(4)
         r_col1.metric("推荐质量", f"{last_rl_result['fea_mass']:.0f} kg")
-        r_col2.metric("应力比", f"{last_rl_result['fea_u_sigma']:.3f}")
-        r_col3.metric("位移比", f"{last_rl_result['fea_u_delta']:.3f}")
-        r_col4.metric("校核结果", "满足" if last_rl_result["fea_feasible"] else "不满足")
+        r_col2.metric("应力利用率", f"{last_rl_result['fea_u_sigma']:.3f}")
+        r_col3.metric("位移利用率", f"{last_rl_result['fea_u_delta']:.3f}")
+        r_col4.metric("FEA 校核", "通过" if last_rl_result["fea_feasible"] else "未通过")
 
-        eval_label = "代理模型评估" if last_rl_result.get("eval_mode") == "surrogate" else "有限元评估"
-        st.write(
-            f"{eval_label}：质量={last_rl_result['eval_mass']:.0f} kg，"
-            f"u_sigma={last_rl_result['eval_u_sigma']:.3f}，"
-            f"u_delta={last_rl_result['eval_u_delta']:.3f}，"
-            f"可行性={'满足' if last_rl_result['eval_feasible'] else '不满足'}。"
-        )
-        st.write(f"拓扑参数：{last_rl_result['topology']}")
-        st.write(f"截面索引：[frame, main, secondary, brace] = {last_rl_result['sections']}")
+        eval_label = "代理模型" if last_rl_result.get("eval_mode") == "surrogate" else "有限元"
+        info_col1, info_col2 = st.columns(2)
+        info_col1.metric("推荐评估方式", eval_label)
+        info_col2.metric("策略执行步数", f"{last_rl_result['steps']} 步")
+
+        topology_col, section_col = st.columns([1, 1.5])
+        with topology_col:
+            st.markdown("##### 最终拓扑布置")
+            st.dataframe(topology_result_rows(last_rl_result["topology"]), width="stretch", hide_index=True)
+        with section_col:
+            st.markdown("##### 最终构件截面")
+            st.dataframe(section_result_rows(last_rl_result["sections"]), width="stretch", hide_index=True)
