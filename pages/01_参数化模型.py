@@ -281,6 +281,17 @@ def apply_rl_result(sections, topology):
     }
 
 
+def finalize_ungrouped_result(params, pressure, topology, sections, mesh_size):
+    finalization = importlib.import_module("src.optimization.finalization")
+    return finalization.finalize_ungrouped_design(
+        params=params,
+        pressure=pressure,
+        topology=topology,
+        sections=sections,
+        mesh_size=mesh_size,
+    )
+
+
 def load_ga_optimizer():
     module_names = [
         "src.optimization.parallel_ga",
@@ -368,6 +379,24 @@ with ga_tab:
         with st.spinner("正在执行迭代优化..."):
             with redirect_stdout(log_buffer):
                 result = optimizer.optimize(geometry, verbose=True)
+
+        beam_types = [BeamType.FRAME, BeamType.MAIN, BeamType.SECONDARY, BeamType.BRACE]
+        final = finalize_ungrouped_result(
+            params,
+            pressure_pa,
+            result.optimal_topology,
+            [section_idx(result, beam_type) for beam_type in beam_types],
+            float(opt_mesh_size),
+        )
+        result.optimal_section_indices_by_group = {
+            f"{beam_type.name}-SG1": section_index
+            for beam_type, section_index in zip(beam_types, final["sections"])
+        }
+        result.optimal_mass = final["mass"]
+        result.mass_reduction_pct = (result.initial_mass - final["mass"]) / result.initial_mass * 100
+        result.u_sigma = final["u_sigma"]
+        result.u_delta = final["u_delta"]
+        result.is_feasible = final["feasible"]
 
         apply_optimization_result(result)
         st.session_state["last_optimization_result"] = {
@@ -463,25 +492,13 @@ with rl_tab:
                     deterministic=True,
                     verbose=True,
                 )
-                if rl_eval_mode == "surrogate":
-                    fea_result = rl_mod.validate_with_fea(
-                        result=rl_result,
-                        L=float(length),
-                        W=float(width),
-                        H=float(height),
-                        pressure=pressure_pa,
-                        layout_strategy="engineering",
-                        mesh_size=float(rl_fea_mesh_size),
-                    )
-                else:
-                    fea_result = {
-                        "sections": rl_result.sections,
-                        "topology": rl_result.topology,
-                        "mass": rl_result.mass,
-                        "u_sigma": rl_result.u_sigma,
-                        "u_delta": rl_result.u_delta,
-                        "feasible": rl_result.feasible,
-                    }
+                fea_result = finalize_ungrouped_result(
+                    params,
+                    pressure_pa,
+                    rl_result.topology,
+                    rl_result.sections,
+                    float(rl_fea_mesh_size),
+                )
 
         apply_rl_result(fea_result["sections"], fea_result["topology"])
         st.session_state["last_rl_optimization_result"] = {

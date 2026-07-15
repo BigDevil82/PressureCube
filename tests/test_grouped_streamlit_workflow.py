@@ -5,7 +5,10 @@ from unittest.mock import patch
 import numpy as np
 
 from src.analysis.surrogate_model import AdvancedSurrogateModel
-from src.optimization.grouped_workflow import apply_final_section_constraints
+from src.optimization.section_constraints import (
+    apply_group_section_constraints,
+    apply_ungrouped_section_constraints,
+)
 from src.structure.enums import BeamType
 from src.structure.layout.params import EngineeringLayoutParameters, WindowParameters
 from src.structure.section_grouping.discovery import sample_representative_designs
@@ -69,11 +72,15 @@ class FinalSectionConstraintTest(unittest.TestCase):
             "MAIN-SG1": 1,
         }
 
-        constrained = apply_final_section_constraints(sections, rules)
+        constrained = apply_group_section_constraints(sections, rules.group_beam_types())
 
         self.assertEqual(constrained["FRAME-SG1"], 2)
         self.assertEqual(constrained["FRAME-SG2"], 3)
         self.assertEqual(constrained["MAIN-SG1"], 1)
+
+    def test_ungrouped_frame_uses_at_least_box_150x6(self):
+        self.assertEqual(apply_ungrouped_section_constraints([0, 8, 7, 14]), [2, 8, 7, 14])
+        self.assertEqual(apply_ungrouped_section_constraints([3, 8, 7, 14]), [3, 8, 7, 14])
 
 
 if __name__ == "__main__":
