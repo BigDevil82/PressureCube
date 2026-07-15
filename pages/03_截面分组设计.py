@@ -1,5 +1,7 @@
 import re
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -150,8 +152,10 @@ if run_discovery:
         description="Streamlit offline grouping discovery",
     )
     geometry = {"L": params.length, "W": params.width, "H": params.height}
-    with st.spinner("正在分析代表性拓扑并发现分组规则..."):
-        grouping.ruleset = build_rules_from_random_topology_samples(
+    progress = st.progress(0, text="正在准备代表模型...")
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            build_rules_from_random_topology_samples,
             geometry=geometry,
             pressure=pressure_kpa * 1000.0,
             sections=_current_sections(),
@@ -163,6 +167,15 @@ if run_discovery:
             n_jobs=int(discovery_jobs),
             base_params=params,
         )
+        progress_value = 5
+        while not future.done():
+            progress.progress(progress_value, text="正在分析代表模型并发现分组规则...")
+            progress_value = min(progress_value + 3, 90)
+            time.sleep(0.4)
+        grouping.ruleset = future.result()
+    progress.progress(100, text="离线分组完成")
+    time.sleep(0.3)
+    progress.empty()
     grouping.optimization_result = None
     grouping.discovery_signature = session.model_bundle["signature"]
     grouping.discovery_pressure_pa = pressure_kpa * 1000.0
