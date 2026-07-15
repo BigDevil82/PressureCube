@@ -462,8 +462,8 @@ with ga_tab:
         r_col4.metric("FEA 校核", "通过" if last_result["is_feasible"] else "未通过")
 
         detail_col1, detail_col2, detail_col3, detail_col4 = st.columns(4)
-        detail_col1.metric("应力利用率", f"{last_result['u_sigma']:.3f}")
-        detail_col2.metric("位移利用率", f"{last_result['u_delta']:.3f}")
+        detail_col1.metric("应力利用率", f"{last_result['u_sigma'] * 100:.1f}%")
+        detail_col2.metric("位移利用率", f"{last_result['u_delta'] * 100:.1f}%")
         detail_col3.metric("方案评估次数", f"{last_result['n_evaluations']} 次")
         detail_col4.metric("优化耗时", f"{last_result['time_seconds']:.1f} s")
 
@@ -567,8 +567,8 @@ with rl_tab:
         st.markdown("#### 最近一次策略推荐结果")
         r_col1, r_col2, r_col3, r_col4 = st.columns(4)
         r_col1.metric("推荐质量", f"{last_rl_result['fea_mass']:.0f} kg")
-        r_col2.metric("应力利用率", f"{last_rl_result['fea_u_sigma']:.3f}")
-        r_col3.metric("位移利用率", f"{last_rl_result['fea_u_delta']:.3f}")
+        r_col2.metric("应力利用率", f"{last_rl_result['fea_u_sigma'] * 100:.1f}%")
+        r_col3.metric("位移利用率", f"{last_rl_result['fea_u_delta'] * 100:.1f}%")
         r_col4.metric("FEA 校核", "通过" if last_rl_result["fea_feasible"] else "未通过")
 
         eval_label = "代理模型" if last_rl_result.get("eval_mode") == "surrogate" else "有限元"
