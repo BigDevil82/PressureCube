@@ -12,7 +12,7 @@ Usage:
 
 import argparse
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from sb3_contrib import MaskablePPO
@@ -20,6 +20,7 @@ from sb3_contrib.common.wrappers import ActionMasker
 
 from src.analysis.evaluator import StructuralEvaluator
 from src.optimization.design_space import get_layout_adapter
+from src.optimization.section_constraints import apply_ungrouped_section_constraints
 from src.reinforcement.sb3.env import SteelSectionOptEnvSB3
 
 
@@ -84,6 +85,7 @@ def optimize_structure(
     mesh_size: float = 0.5,
     seed: Optional[int] = None,
     deterministic: bool = True,
+    base_params: Optional[Any] = None,
     verbose: bool = True,
 ) -> OptimizationResult:
     """
@@ -102,6 +104,7 @@ def optimize_structure(
         mesh_size: FEA mesh size, used when eval_mode="fea"
         seed: Random seed for initial sections/topology. None keeps random starts.
         deterministic: Use deterministic policy (no exploration)
+        base_params: Existing layout parameters to preserve engineering details such as openings
         verbose: Print progress
 
     Returns:
@@ -122,13 +125,15 @@ def optimize_structure(
         "T": max_steps,
         "K_no_improve": max_steps,  # Disable early stopping
         "mesh_size": mesh_size,
+        "base_params": base_params,
+        "min_section_indices": apply_ungrouped_section_constraints([0, 0, 0, 0]),
     }
 
     env = SteelSectionOptEnvSB3(env_config)
     env = ActionMasker(env, mask_fn)
 
     # Reset with optional initial state
-    reset_options = {}
+    reset_options = {"pressure": pressure}
     if init_sections is not None:
         reset_options["init_sections"] = init_sections
     if init_topology is not None:
@@ -244,6 +249,7 @@ def validate_with_fea(
     pressure: float = 30000.0,
     layout_strategy: str = "research",
     mesh_size: float = 0.5,
+    base_params: Optional[Any] = None,
 ) -> dict:
     """
     Validate optimization result with real FEA.
@@ -271,13 +277,14 @@ def validate_with_fea(
         geometry={"L": L, "W": W, "H": H},
         pressure=pressure,
         topology=topology,
-        sections=result.sections,
+        sections=apply_ungrouped_section_constraints(result.sections),
+        base_params=base_params,
     )
     evaluator = StructuralEvaluator(mode="fea", mesh_size=mesh_size)
     result_fea = evaluator.evaluate(design)
 
     return {
-        "sections": result.sections,
+        "sections": apply_ungrouped_section_constraints(result.sections),
         "topology": result.topology,
         "mass": result_fea.mass,
         "u_sigma": result_fea.u_sigma,

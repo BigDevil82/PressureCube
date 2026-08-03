@@ -18,7 +18,7 @@ class AnalysisState:
     analysis_type: str = "静力分析"
     mesh_size: float = 0.5
     pressure_pa: int = 30000
-    load_case: str = "内压 (PL)"
+    load_case: str = "应力校核(1.3DL + 1.5LL + 1.25PL)"
     num_modes: int = 6
     meshed_model: StructuralModel | None = None
     analysis_results: AnalysisResults | None = None
@@ -71,11 +71,12 @@ class AppSession:
         self, params: BaseLayoutParameters, model: StructuralModel, section_library: SectionLibrary
     ):
         sections = tuple(
-            sorted((group_id, group.section_index) for group_id, group in model.section_assignment.groups.items())
+            sorted(
+                (group_id, group.section_index) for group_id, group in model.section_assignment.groups.items()
+            )
         )
         signature = (
-            f"{repr(params)}|section_lib={getattr(section_library, 'file_path', '')}"
-            f"|sections={sections}"
+            f"{repr(params)}|section_lib={getattr(section_library, 'file_path', '')}" f"|sections={sections}"
         )
         previous_signature = self.model_bundle.get("signature")
         self._state[self._MODEL_BUNDLE_KEY] = {

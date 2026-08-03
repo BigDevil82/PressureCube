@@ -55,9 +55,11 @@ class SteelSectionOptEnvSB3(gym.Env):
 
         # Layout and section library
         self.adapter = get_layout_adapter(self.layout_strategy)
+        self.base_params = config.get("base_params")
         self.section_lib = get_section_lib(self.layout_strategy)
         self.sec_types = [SectionType.BOX, SectionType.H_MAIN, SectionType.H_SEC, SectionType.CHANNEL]
         self.sec_counts = [self.section_lib.section_counts[t] for t in self.sec_types]
+        self.min_indices = np.asarray(config.get("min_section_indices", [0, 0, 0, 0]), dtype=np.int64)
         self.max_indices = np.array(self.sec_counts, dtype=np.int64) - 1
 
         specs = {spec.name: spec for spec in self.adapter.topology_specs()}
@@ -96,7 +98,8 @@ class SteelSectionOptEnvSB3(gym.Env):
 
         # Geometry config (fixed or randomized)
         self.fixed_geometry = config.get("fixed_geometry", None)  # (L, W, H) or None
-        self.pressure = float(config.get("pressure", 30000.0))
+        self.fixed_pressure = config.get("pressure", None)
+        self.pressure = float(self.fixed_pressure if self.fixed_pressure is not None else 30000.0)
 
         # Runtime state
         self.idx: np.ndarray = None  # Section indices [4]
@@ -185,7 +188,7 @@ class SteelSectionOptEnvSB3(gym.Env):
             for delta_choice in range(3):  # 0,1,2 -> -1,0,+1
                 delta = delta_choice - 1
                 new_idx = self.idx[i] + delta
-                if new_idx < 0 or new_idx > self.max_indices[i]:
+                if new_idx < self.min_indices[i] or new_idx > self.max_indices[i]:
                     mask[offset + delta_choice] = False
             offset += nvec[i]
 
@@ -257,6 +260,7 @@ class SteelSectionOptEnvSB3(gym.Env):
             pressure=self.pressure,
             topology=self._topology_for_design(),
             sections=sections,
+            base_params=self.base_params,
         )
 
     def _get_section_properties(self) -> Tuple[List[float], List[float], List[float]]:
@@ -362,10 +366,11 @@ class SteelSectionOptEnvSB3(gym.Env):
         # Initialize sections
         if options.get("init_sections") is not None:
             self.idx = np.asarray(options["init_sections"], dtype=np.int64).copy()
+            self.idx = np.clip(self.idx, self.min_indices, self.max_indices)
         else:
             # Random initialization
             self.idx = np.array(
-                [rng.integers(0, self.sec_counts[i]) for i in range(4)],
+                [rng.integers(self.min_indices[i], self.sec_counts[i]) for i in range(4)],
                 dtype=np.int64,
             )
 
@@ -414,6 +419,8 @@ class SteelSectionOptEnvSB3(gym.Env):
         # pressure
         if options.get("pressure") is not None:
             self.pressure = options["pressure"]
+        elif self.fixed_pressure is not None:
+            self.pressure = float(self.fixed_pressure)
         else:
             self.pressure = rng.integers(20, 41) * 1000.0  # 20kPa to 40kPa
 
@@ -453,7 +460,7 @@ class SteelSectionOptEnvSB3(gym.Env):
         # Apply section changes
         new_idx = self.idx + section_deltas
         # Clip to valid range (should be valid due to masking, but safety check)
-        new_idx = np.clip(new_idx, 0, self.max_indices)
+        new_idx = np.clip(new_idx, self.min_indices, self.max_indices)
         self.idx = new_idx
 
         # Apply topology changes

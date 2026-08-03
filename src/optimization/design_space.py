@@ -119,6 +119,7 @@ class LayoutDesignAdapter:
         pressure: float,
         topology: dict[str, Any],
         sections: list[int],
+        base_params: BaseLayoutParameters | None = None,
     ) -> StructuralDesign:
         rules = SectionGroupingRuleset.by_beam_type(self.layout_strategy)
         return self.build_design(
@@ -129,6 +130,7 @@ class LayoutDesignAdapter:
             section_indices_by_group={
                 group_id: index for group_id, index in zip(rules.group_ids(), sections)
             },
+            base_params=base_params,
         )
 
     def _extra_param_kwargs(self, topology: dict[str, Any]) -> dict[str, Any]:

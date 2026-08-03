@@ -9,6 +9,7 @@ from src.optimization.section_constraints import (
     apply_group_section_constraints,
     apply_ungrouped_section_constraints,
 )
+from src.reinforcement.sb3.env import SteelSectionOptEnvSB3
 from src.reinforcement.sb3.optimize import select_best_state
 from src.structure.enums import BeamType
 from src.structure.layout.params import EngineeringLayoutParameters, WindowParameters
@@ -102,6 +103,52 @@ class RLResultSelectionTest(unittest.TestCase):
         ]
 
         self.assertEqual(select_best_state(trajectory)["step"], 1)
+
+
+class RLEnvironmentDesignTest(unittest.TestCase):
+    def test_build_design_preserves_base_engineering_parameters(self):
+        params = EngineeringLayoutParameters(
+            length=8.9,
+            width=3.6,
+            height=3.3,
+            main_beam_spacing=0.95,
+            support_beam_max_spacing=0.75,
+            add_support_beam=True,
+            window=WindowParameters(right_spans=[1, 2]),
+        )
+        env = SteelSectionOptEnvSB3({"layout_strategy": "engineering", "base_params": params})
+        env.L, env.W, env.H = params.length, params.width, params.height
+        env.spacing_idx = int(np.argmin(np.abs(env.spacing_options - params.main_beam_spacing)))
+        env.support_spacing_idx = int(
+            np.argmin(np.abs(env.support_spacing_options - params.support_beam_max_spacing))
+        )
+        env.add_support_beam = params.add_support_beam
+
+        design = env._build_design([2, 8, 7, 14])
+
+        self.assertEqual(design.params.window.right_spans, [1, 2])
+        self.assertEqual(design.params.support_beam_max_spacing, 0.75)
+
+    def test_frame_section_lower_bound_is_masked(self):
+        env = SteelSectionOptEnvSB3(
+            {"layout_strategy": "engineering", "min_section_indices": [2, 0, 0, 0]}
+        )
+        env.idx = np.array([2, 8, 7, 14], dtype=np.int64)
+        env.spacing_idx = 0
+        env.support_spacing_idx = 0
+
+        mask = env.action_masks()
+
+        self.assertFalse(mask[0])
+
+    def test_reset_keeps_configured_pressure(self):
+        env = SteelSectionOptEnvSB3({"layout_strategy": "engineering", "pressure": 30000.0})
+        env._evaluate = lambda: {"mass": 1.0, "u_sigma": 0.1, "u_delta": 0.1, "feasible": True}
+        env._calc_m0 = lambda: 2.0
+
+        env.reset(seed=42)
+
+        self.assertEqual(env.pressure, 30000.0)
 
 
 if __name__ == "__main__":

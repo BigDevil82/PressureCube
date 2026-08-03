@@ -1,9 +1,9 @@
-from pathlib import Path
+import importlib
+import re
 import sys
 from contextlib import redirect_stdout
 from io import StringIO
-import importlib
-import re
+from pathlib import Path
 
 import streamlit as st
 
@@ -19,10 +19,7 @@ from src.app.model_visualization import build_structure_figure
 from src.app.parametric_helpers import build_engineering_preview, hydrate_defaults
 from src.app.session import AppSession
 from src.structure.enums import BeamType
-from src.structure.layout.params import (
-    EngineeringLayoutParameters,
-    WindowParameters,
-)
+from src.structure.layout.params import EngineeringLayoutParameters, WindowParameters
 from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_assignment import BEAM_SECTION_TYPES, SectionAssignment
 from src.structure.section_library import SectionLibrary, SectionType
@@ -450,7 +447,7 @@ with ga_tab:
             "time_seconds": result.time_seconds,
         }
         summary_box.success("优化完成，页面参数已更新为最优方案。")
-        st.rerun()
+        # st.rerun()
 
     last_result = st.session_state.get("last_optimization_result")
     if last_result:
@@ -534,6 +531,7 @@ with rl_tab:
                     mesh_size=float(rl_fea_mesh_size),
                     seed=int(rl_seed),
                     deterministic=True,
+                    base_params=params,
                     verbose=True,
                 )
                 fea_result = finalize_ungrouped_result(
@@ -565,17 +563,12 @@ with rl_tab:
     last_rl_result = st.session_state.get("last_rl_optimization_result")
     if last_rl_result:
         st.markdown("#### 策略推荐最优结果")
-        r_col1, r_col2, r_col3, r_col4 = st.columns(4)
+        r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns(5)
         r_col1.metric("推荐质量", f"{last_rl_result['fea_mass']:.0f} kg")
         r_col2.metric("应力比", f"{last_rl_result['fea_u_sigma']:.3f}")
         r_col3.metric("位移比", f"{last_rl_result['fea_u_delta']:.3f}")
         r_col4.metric("FEA 校核", "通过" if last_rl_result["fea_feasible"] else "未通过")
-
-        eval_label = "代理模型" if last_rl_result.get("eval_mode") == "surrogate" else "有限元"
-        info_col1, info_col2 = st.columns(2)
-        info_col1.metric("推荐评估方式", eval_label)
-        selected_step = last_rl_result.get("selected_step", last_rl_result["steps"])
-        info_col2.metric("推荐来源步骤", f"第 {selected_step} / {last_rl_result['steps']} 步")
+        r_col5.metric("最优步骤", f"第 {last_rl_result['selected_step']} 步")
 
         topology_col, section_col = st.columns([1, 1.5])
         with topology_col:
