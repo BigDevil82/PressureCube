@@ -72,8 +72,8 @@ with st.sidebar:
     st.header("⚙️ 几何参数控制")
     st.caption("当前使用工程版布局")
     length = st.slider("舱体长度 (Length)", 7.2, 12.0, float(defaults["L"]), 0.1, key="L")
-    width = st.number_input("舱体宽度 (Width)", value=3.7, step=0.1, key="W", disabled=True)
-    height = st.number_input("舱体高度 (Height)", value=3.3, step=0.1, key="H", disabled=True)
+    width = st.number_input("舱体宽度 (Width)", value=3.7, step=0.1, key="W", disabled=False)
+    height = st.number_input("舱体高度 (Height)", value=3.3, step=0.1, key="H", disabled=False)
     section_library = SectionLibrary("src/data/steel_sections.json")
 
     st.divider()
@@ -237,6 +237,9 @@ class StreamlitLogBuffer(StringIO):
         self.placeholder.code(format_optimization_log(self.getvalue()[-12000:]))
         return result
 
+    def render_text(self) -> str:
+        return self.getvalue()
+
 
 def format_optimization_log(text: str) -> str:
     text = text.replace("Initial mass (max sections)", "基准方案质量")
@@ -392,6 +395,8 @@ with ga_tab:
     run_optimization = st.button("开始迭代优化", type="primary", width="stretch", key="run_ga_optimization")
     log_box = st.empty()
     summary_box = st.empty()
+    if st.session_state.get("last_ga_optimization_log"):
+        log_box.code(format_optimization_log(st.session_state["last_ga_optimization_log"][-12000:]))
 
     if run_optimization:
         pressure_pa = float(opt_pressure_kpa) * 1000.0
@@ -434,6 +439,7 @@ with ga_tab:
         result.is_feasible = final["feasible"]
 
         apply_optimization_result(result)
+        st.session_state["last_ga_optimization_log"] = log_buffer.render_text()
         st.session_state["last_optimization_result"] = {
             "initial_mass": result.initial_mass,
             "optimal_mass": result.optimal_mass,
@@ -447,7 +453,7 @@ with ga_tab:
             "time_seconds": result.time_seconds,
         }
         summary_box.success("优化完成，页面参数已更新为最优方案。")
-        # st.rerun()
+        st.rerun()
 
     last_result = st.session_state.get("last_optimization_result")
     if last_result:
@@ -500,6 +506,8 @@ with rl_tab:
     run_rl = st.button("开始策略推荐", type="primary", width="stretch", key="run_rl_optimization")
     rl_log_box = st.empty()
     rl_summary_box = st.empty()
+    if st.session_state.get("last_rl_optimization_log"):
+        rl_log_box.code(format_optimization_log(st.session_state["last_rl_optimization_log"][-12000:]))
 
     if run_rl:
         pressure_pa = float(rl_pressure_kpa) * 1000.0
@@ -543,6 +551,7 @@ with rl_tab:
                 )
 
         apply_rl_result(fea_result["sections"], fea_result["topology"])
+        st.session_state["last_rl_optimization_log"] = log_buffer.render_text()
         st.session_state["last_rl_optimization_result"] = {
             "eval_mass": rl_result.mass,
             "eval_u_sigma": rl_result.u_sigma,
@@ -559,6 +568,7 @@ with rl_tab:
             "selected_step": getattr(rl_result, "selected_step", rl_result.steps),
         }
         rl_summary_box.success("推荐完成，页面参数已更新为校核后的推荐方案。")
+        st.rerun()
 
     last_rl_result = st.session_state.get("last_rl_optimization_result")
     if last_rl_result:
