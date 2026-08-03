@@ -561,11 +561,10 @@ with rl_tab:
             "selected_step": getattr(rl_result, "selected_step", rl_result.steps),
         }
         rl_summary_box.success("推荐完成，页面参数已更新为校核后的推荐方案。")
-        st.rerun()
 
     last_rl_result = st.session_state.get("last_rl_optimization_result")
     if last_rl_result:
-        st.markdown("#### 最近一次策略推荐结果")
+        st.markdown("#### 策略推荐最优结果")
         r_col1, r_col2, r_col3, r_col4 = st.columns(4)
         r_col1.metric("推荐质量", f"{last_rl_result['fea_mass']:.0f} kg")
         r_col2.metric("应力比", f"{last_rl_result['fea_u_sigma']:.3f}")
