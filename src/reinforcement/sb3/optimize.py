@@ -34,12 +34,39 @@ class OptimizationResult:
     u_delta: float
     feasible: bool
     steps: int
+    selected_step: int
     trajectory: List[dict] = field(default_factory=list)  # History of all states
 
 
 def mask_fn(env: SteelSectionOptEnvSB3) -> np.ndarray:
     """Get action mask from environment."""
     return env.action_masks()
+
+
+def _constraint_violation(state: dict) -> float:
+    return float(
+        state.get(
+            "violation",
+            max(0.0, float(state["u_sigma"]) - 1.0) + max(0.0, float(state["u_delta"]) - 1.0),
+        )
+    )
+
+
+def select_best_state(trajectory: List[dict]) -> dict:
+    """Select the best state from an RL trajectory.
+
+    Feasible states are ranked by mass. If no feasible state exists, the least
+    violating state is used, with mass as the tie-breaker. This keeps the result
+    tied to the best state visited during rollout, not merely the final step.
+    """
+
+    feasible_states = [state for state in trajectory if state["feasible"]]
+    if feasible_states:
+        return min(feasible_states, key=lambda state: (float(state["mass"]), int(state["step"])))
+    return min(
+        trajectory,
+        key=lambda state: (_constraint_violation(state), float(state["mass"]), int(state["step"])),
+    )
 
 
 def optimize_structure(
@@ -131,13 +158,9 @@ def optimize_structure(
             "u_delta": info["u_delta"],
             "feasible": info["feasible"],
             "mnorm": info.get("mnorm", info["mass"] / env.unwrapped.m0),
+            "violation": info.get("violation"),
         }
     ]
-
-    # Track best feasible solution
-    best_feasible = None
-    if info["feasible"]:
-        best_feasible = trajectory[0].copy()
 
     # Optimization loop
     step = 0
@@ -163,15 +186,11 @@ def optimize_structure(
             "u_delta": info["u_delta"],
             "feasible": info["feasible"],
             "mnorm": info.get("mnorm", info["mass"] / env.unwrapped.m0),
+            "violation": info.get("violation"),
             "action": action.tolist() if isinstance(action, np.ndarray) else action,
             "reward": float(reward),
         }
         trajectory.append(state)
-
-        # Update best feasible
-        if info["feasible"]:
-            if best_feasible is None or state["mnorm"] < best_feasible["mnorm"]:
-                best_feasible = state.copy()
 
         if verbose:
             section_deltas, topology_deltas, support_toggle = env.unwrapped.decode_action(action)
@@ -186,8 +205,8 @@ def optimize_structure(
     env.close()
 
     # Determine final result
-    if best_feasible is not None:
-        final = best_feasible
+    final = select_best_state(trajectory)
+    if final["feasible"]:
         if verbose:
             print("-" * 60)
             print(f"Best feasible found at step {final['step']}:")
@@ -196,10 +215,9 @@ def optimize_structure(
             print(f"  Mass: {final['mass']:.1f}kg (mnorm={final['mnorm']:.3f})")
             print(f"  u_sigma: {final['u_sigma']:.3f}, u_delta: {final['u_delta']:.3f}")
     else:
-        final = trajectory[-1]
         if verbose:
             print("-" * 60)
-            print("No feasible solution found. Final state:")
+            print(f"No feasible solution found. Least violating state at step {final['step']}:")
             print(f"  Sections: {final['sections']}")
             print(f"  Topology: {final.get('topology', {})}")
             print(f"  Mass: {final['mass']:.1f}kg")
@@ -213,6 +231,7 @@ def optimize_structure(
         u_delta=final["u_delta"],
         feasible=final["feasible"],
         steps=step,
+        selected_step=int(final["step"]),
         trajectory=trajectory,
     )
 
@@ -350,6 +369,7 @@ def main():
 
     # Summary
     print(f"\nOptimization complete in {result.steps} steps")
+    print(f"Selected step: {result.selected_step}")
     print(f"Final sections: {result.sections}")
     print(f"Final topology: {result.topology}")
     print(f"Final mass: {result.mass:.1f}kg")

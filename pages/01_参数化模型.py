@@ -558,6 +558,7 @@ with rl_tab:
             "sections": fea_result["sections"],
             "topology": fea_result["topology"],
             "steps": rl_result.steps,
+            "selected_step": getattr(rl_result, "selected_step", rl_result.steps),
         }
         rl_summary_box.success("推荐完成，页面参数已更新为校核后的推荐方案。")
         st.rerun()
@@ -574,7 +575,8 @@ with rl_tab:
         eval_label = "代理模型" if last_rl_result.get("eval_mode") == "surrogate" else "有限元"
         info_col1, info_col2 = st.columns(2)
         info_col1.metric("推荐评估方式", eval_label)
-        info_col2.metric("策略执行步数", f"{last_rl_result['steps']} 步")
+        selected_step = last_rl_result.get("selected_step", last_rl_result["steps"])
+        info_col2.metric("推荐来源步骤", f"第 {selected_step} / {last_rl_result['steps']} 步")
 
         topology_col, section_col = st.columns([1, 1.5])
         with topology_col:

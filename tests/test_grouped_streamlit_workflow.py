@@ -9,6 +9,7 @@ from src.optimization.section_constraints import (
     apply_group_section_constraints,
     apply_ungrouped_section_constraints,
 )
+from src.reinforcement.sb3.optimize import select_best_state
 from src.structure.enums import BeamType
 from src.structure.layout.params import EngineeringLayoutParameters, WindowParameters
 from src.structure.section_grouping.discovery import sample_representative_designs
@@ -81,6 +82,26 @@ class FinalSectionConstraintTest(unittest.TestCase):
     def test_ungrouped_frame_uses_at_least_box_150x6(self):
         self.assertEqual(apply_ungrouped_section_constraints([0, 8, 7, 14]), [2, 8, 7, 14])
         self.assertEqual(apply_ungrouped_section_constraints([3, 8, 7, 14]), [3, 8, 7, 14])
+
+
+class RLResultSelectionTest(unittest.TestCase):
+    def test_selects_lightest_feasible_state(self):
+        trajectory = [
+            {"step": 0, "mass": 120.0, "u_sigma": 0.8, "u_delta": 0.9, "feasible": True},
+            {"step": 1, "mass": 140.0, "u_sigma": 0.7, "u_delta": 0.8, "feasible": True},
+            {"step": 2, "mass": 100.0, "u_sigma": 1.2, "u_delta": 0.8, "feasible": False},
+        ]
+
+        self.assertEqual(select_best_state(trajectory)["step"], 0)
+
+    def test_selects_least_violating_state_when_none_feasible(self):
+        trajectory = [
+            {"step": 0, "mass": 100.0, "u_sigma": 1.5, "u_delta": 1.0, "feasible": False},
+            {"step": 1, "mass": 130.0, "u_sigma": 1.1, "u_delta": 1.1, "feasible": False},
+            {"step": 2, "mass": 90.0, "u_sigma": 2.0, "u_delta": 1.0, "feasible": False},
+        ]
+
+        self.assertEqual(select_best_state(trajectory)["step"], 1)
 
 
 if __name__ == "__main__":
