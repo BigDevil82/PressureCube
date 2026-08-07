@@ -14,9 +14,14 @@ from src.utils.constants import LOAD_DEAD_BOTTOM_KPA, LOAD_LIVE_BOTTOM_KPA
 class RFEMExportOptions:
     model_name: str = "pressurized_cabin_check"
     pressure_pa: float = 30_000.0
-    steel_material_name: str = "S345"
+    steel_material_name: str = "Q355"
     opening_material_name: str = "Glass"
-    section_name_map: dict[str, str] = field(default_factory=dict)
+    section_name_map: dict[str, str] = field(default_factory=lambda: {
+        "BOX-150x6": "SHS 150/6.0/C",
+        "H-150x100.0": "H HT 145x73",
+        "H-125x60.0": "H HT 118x58",
+        "C-200x75x9.0": "U 5",
+    })
 
 
 def corner_support_node_ids(model: StructuralModel) -> list[int]:
@@ -121,6 +126,7 @@ Section and material database names may need mapping to the RFEM installation.
 from __future__ import annotations
 
 import json
+import os
 
 from dlubal.api import rfem
 
@@ -235,6 +241,20 @@ def build_object_list():
 
 def create_in_rfem(rfem_app):
     return rfem_app.create_object_list(build_object_list())
+
+
+def main():
+    api_key = os.getenv("DLUBAL_API_KEY")
+    api_key_name = os.getenv("DLUBAL_API_KEY_NAME")
+    with rfem.Application(api_key_value=api_key, api_key_name=api_key_name) as rfem_app:
+        rfem_app.create_model(name=DATA["model_name"])
+        rfem_app.delete_all_objects()
+        create_in_rfem(rfem_app)
+        print(f"Created RFEM model: {{DATA['model_name']}}")
+
+
+if __name__ == "__main__":
+    main()
 '''
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

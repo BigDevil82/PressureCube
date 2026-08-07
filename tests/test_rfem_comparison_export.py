@@ -57,3 +57,12 @@ def test_rfem_export_contains_geometry_sections_supports_and_loads():
     assert data["supports"][0]["nodes"]
     assert len(data["supports"][0]["nodes"]) == 4
     assert {load["load_case"] for load in data["surface_loads"]} == {1, 2, 3}
+
+
+def test_rfem_export_uses_engineering_section_names():
+    model = _engineering_model(length=4.0)
+    data = build_rfem_data(model)
+    names = {section["rfem_name"] for section in data["sections"]}
+
+    assert data["materials"][0]["name"] == "Q355"
+    assert names == {"SHS 150/6.0/C", "H HT 145x73", "H HT 118x58", "U 5"}
