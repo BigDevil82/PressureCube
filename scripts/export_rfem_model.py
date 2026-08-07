@@ -15,20 +15,19 @@ from src.analysis.rfem_export import (
 )
 from src.structure.enums import BeamType
 from src.structure.layout.params import EngineeringLayoutParameters, WindowParameters
-from src.structure.mesh_generator import MeshGenerator
 from src.structure.section_assignment import SectionAssignment
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import StructuralModel
 
 
-def build_default_engineering_model(mesh_size: float):
+def build_default_engineering_model(mesh_size: float | None = None):
     params = EngineeringLayoutParameters(
         length=8.9,
         width=3.7,
         height=3.3,
         main_beam_spacing=0.95,
         add_support_beam=True,
-        support_beam_max_spacing=0.75,
+        support_beam_max_spacing=0.55,
         window=WindowParameters(front_spans=[], back_spans=[], right_spans=[1, 2]),
     )
     assignment = SectionAssignment.by_beam_type(
@@ -36,12 +35,12 @@ def build_default_engineering_model(mesh_size: float):
     )
     model = StructuralModel(params, SectionLibrary("src/data/steel_sections.json"), section_assignment=assignment)
     model.generate()
-    return MeshGenerator(model, mesh_size).generate()
+    return model
 
 
 def main():
     parser = argparse.ArgumentParser(description="Export the engineering model for RFEM API comparison.")
-    parser.add_argument("--mesh-size", type=float, default=0.5)
+    parser.add_argument("--mesh-size", type=float, default=None, help="Deprecated; RFEM export now uses the unmeshed model.")
     parser.add_argument("--pressure-pa", type=float, default=30_000.0)
     parser.add_argument("--json", default="results/rfem/engineering_model.json")
     parser.add_argument("--script", default="results/rfem/create_engineering_model.py")

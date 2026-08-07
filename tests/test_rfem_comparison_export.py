@@ -6,6 +6,7 @@ from src.structure.layout.params import EngineeringLayoutParameters, ExtensionPa
 from src.structure.section_assignment import SectionAssignment
 from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import StructuralModel
+from scripts.export_rfem_model import build_default_engineering_model
 
 
 def _engineering_model(length=12.4):
@@ -65,7 +66,19 @@ def test_rfem_export_uses_engineering_section_names():
     names = {section["rfem_name"] for section in data["sections"]}
 
     assert data["materials"][0]["name"] == "Q355"
-    assert names == {"SHS 150/6.0/C", "H HT 145x73", "H HT 118x58", "U 5"}
+    assert names == {
+        "SHS 150x6",
+        "I 150/100/6/10/8/0/H",
+        "I 125/60/6/8/8/0/H",
+        "UTF 200/75/9/11/11/5.5/33/0.100/H",
+    }
+
+
+def test_rfem_export_contains_member_rotation_helpers():
+    model = _engineering_model(length=4.0)
+    data = build_rfem_data(model)
+
+    assert any(member["rotation_help_node"] for member in data["members"])
 
 
 def test_rfem_script_manager_export_uses_internal_script_objects(tmp_path):
@@ -75,5 +88,13 @@ def test_rfem_script_manager_export_uses_internal_script_objects(tmp_path):
 
     assert "engine.create_member" in script
     assert "engine.create_load" in script
+    assert "COORDINATE_SYSTEM_ROTATION_VIA_HELP_NODE" in script
     assert "dlubal.api" not in script
     assert "DLUBAL_API_KEY" not in script
+
+
+def test_default_rfem_export_model_is_unmeshed_with_updated_support_spacing():
+    model = build_default_engineering_model()
+
+    assert model.params.support_beam_max_spacing == 0.55
+    assert all(beam.parent_id is None for beam in model.beams.values())

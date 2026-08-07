@@ -17,10 +17,10 @@ class RFEMExportOptions:
     steel_material_name: str = "Q355"
     opening_material_name: str = "Glass"
     section_name_map: dict[str, str] = field(default_factory=lambda: {
-        "BOX-150x6": "SHS 150/6.0/C",
-        "H-150x100.0": "H HT 145x73",
-        "H-125x60.0": "H HT 118x58",
-        "C-200x75x9.0": "U 5",
+        "BOX-150x6": "SHS 150x6",
+        "H-150x100.0": "I 150/100/6/10/8/0/H",
+        "H-125x60.0": "I 125/60/6/8/8/0/H",
+        "C-200x75x9.0": "UTF 200/75/9/11/11/5.5/33/0.100/H",
     })
 
 
@@ -361,12 +361,33 @@ function createLines() {{
     }}
 }}
 
+function createMemberRotationHelpers() {{
+    for (var i = 0; i < DATA.members.length; ++i) {{
+        var helper = DATA.members[i].rotation_help_node;
+        if (helper === null) {{
+            continue;
+        }}
+        var node = engine.create_node(helper.no);
+        node.coordinate_1 = helper.x;
+        node.coordinate_2 = helper.y;
+        node.coordinate_3 = helper.z;
+        node.comment = "member rotation helper";
+    }}
+}}
+
 function createMembers() {{
     for (var i = 0; i < DATA.members.length; ++i) {{
         var src = DATA.members[i];
         var member = engine.create_member(src.no, src.line);
         member.type = members.TYPE_BEAM;
         member.section_start = sections[src.section];
+
+        if (src.rotation_help_node !== null) {{
+            var line = lines[src.line];
+            line.rotation_specification_type = lines.COORDINATE_SYSTEM_ROTATION_VIA_HELP_NODE;
+            line.rotation_help_node = nodes[src.rotation_help_node.no];
+            line.rotation_plane = lines.ROTATION_PLANE_XY;
+        }}
     }}
 }}
 
@@ -436,6 +457,7 @@ createThicknesses();
 createSections();
 createNodes();
 createLines();
+createMemberRotationHelpers();
 createMembers();
 createSurfaces();
 createSupports();
@@ -534,9 +556,59 @@ def _collect_members(model: StructuralModel, line_map: dict[tuple[int, int], int
                 "section": member_section[bid],
                 "beam_type": beam.beam_type.name,
                 "source_id": bid,
+                "rotation_help_node": _member_rotation_help_node(model, beam),
             }
         )
     return members
+
+
+def _member_rotation_help_node(model: StructuralModel, beam) -> dict[str, float | int] | None:
+    normal = _face_normal(beam.on_face)
+    if normal is None:
+        return None
+
+    p1 = model.points[beam.start_node]
+    p2 = model.points[beam.end_node]
+    axis = (p2.x - p1.x, p2.y - p1.y, p2.z - p1.z)
+    length = _norm(axis)
+    if length < 1e-9:
+        return None
+
+    axis = tuple(v / length for v in axis)
+    dot = sum(normal[i] * axis[i] for i in range(3))
+    vec = tuple(normal[i] - dot * axis[i] for i in range(3))
+    vec_len = _norm(vec)
+    if vec_len < 1e-9:
+        return None
+
+    vec = tuple(v / vec_len for v in vec)
+    mid = ((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
+    offset = 0.25
+    return {
+        "no": 900000 + beam.id + 1,
+        "x": mid[0] + offset * vec[0],
+        "y": mid[1] + offset * vec[1],
+        "z": mid[2] + offset * vec[2],
+    }
+
+
+def _face_normal(face: str) -> tuple[float, float, float] | None:
+    normals = {
+        "top": (0.0, 0.0, 1.0),
+        "bottom": (0.0, 0.0, -1.0),
+        "left": (0.0, -1.0, 0.0),
+        "right": (0.0, 1.0, 0.0),
+        "front": (1.0, 0.0, 0.0),
+        "back": (-1.0, 0.0, 0.0),
+    }
+    for part in str(face).split("/"):
+        if part in normals:
+            return normals[part]
+    return None
+
+
+def _norm(vec: tuple[float, float, float]) -> float:
+    return sum(v * v for v in vec) ** 0.5
 
 
 def _collect_surfaces(model: StructuralModel, line_map: dict[tuple[int, int], int]):
