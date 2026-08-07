@@ -1,5 +1,5 @@
 from src.analysis.opensees_analysis import OpenSeesSolver
-from src.analysis.rfem_export import build_rfem_data
+from src.analysis.rfem_export import build_rfem_data, write_rfem_script_manager_js
 from src.analysis.unit import E_STEEL_MPA, G_STEEL_MPA, NU_STEEL
 from src.structure.enums import BeamType
 from src.structure.layout.params import EngineeringLayoutParameters, ExtensionParameters, WindowParameters
@@ -66,3 +66,14 @@ def test_rfem_export_uses_engineering_section_names():
 
     assert data["materials"][0]["name"] == "Q355"
     assert names == {"SHS 150/6.0/C", "H HT 145x73", "H HT 118x58", "U 5"}
+
+
+def test_rfem_script_manager_export_uses_internal_script_objects(tmp_path):
+    model = _engineering_model(length=4.0)
+    path = write_rfem_script_manager_js(model, tmp_path / "model.js")
+    script = path.read_text(encoding="utf-8")
+
+    assert "engine.create_member" in script
+    assert "engine.create_load" in script
+    assert "dlubal.api" not in script
+    assert "DLUBAL_API_KEY" not in script

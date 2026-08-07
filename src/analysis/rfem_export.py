@@ -262,6 +262,196 @@ if __name__ == "__main__":
     return path
 
 
+def write_rfem_script_manager_js(
+    model: StructuralModel,
+    path: str | Path,
+    options: RFEMExportOptions | None = None,
+) -> Path:
+    data = build_rfem_data(model, options)
+    payload = json.dumps(data, indent=2, ensure_ascii=False, default=_json_default)
+    script = f"""// Generated RFEM Script Manager model creation script.
+// Open RFEM 6, create/open an empty model, then paste/run this script in Script Manager.
+// It does not use the WebService/gRPC API and therefore does not need an API subscription.
+
+var DATA = {payload};
+
+function clearModel() {{
+    var containers = [];
+    try {{ if (typeof surface_sets !== "undefined") containers.push(surface_sets); }} catch (err) {{}}
+    try {{ if (typeof solid_sets !== "undefined") containers.push(solid_sets); }} catch (err) {{}}
+    try {{ if (typeof members !== "undefined") containers.push(members); }} catch (err) {{}}
+    try {{ if (typeof surfaces !== "undefined") containers.push(surfaces); }} catch (err) {{}}
+    try {{ if (typeof lines !== "undefined") containers.push(lines); }} catch (err) {{}}
+    try {{ if (typeof nodes !== "undefined") containers.push(nodes); }} catch (err) {{}}
+    try {{ if (typeof nodal_supports !== "undefined") containers.push(nodal_supports); }} catch (err) {{}}
+    try {{ if (typeof thicknesses !== "undefined") containers.push(thicknesses); }} catch (err) {{}}
+    try {{ if (typeof sections !== "undefined") containers.push(sections); }} catch (err) {{}}
+    try {{ if (typeof materials !== "undefined") containers.push(materials); }} catch (err) {{}}
+    try {{ if (typeof load_cases !== "undefined") containers.push(load_cases); }} catch (err) {{}}
+    try {{ if (typeof actions !== "undefined") containers.push(actions); }} catch (err) {{}}
+    try {{ if (typeof load_combinations !== "undefined") containers.push(load_combinations); }} catch (err) {{}}
+    try {{ if (typeof result_combinations !== "undefined") containers.push(result_combinations); }} catch (err) {{}}
+    try {{ if (typeof static_analysis_settings !== "undefined") containers.push(static_analysis_settings); }} catch (err) {{}}
+
+    for (var i = 0; i < containers.length; ++i) {{
+        try {{
+            var c = containers[i];
+            for (var j = c.count(); j > 0; --j) {{
+                c.erase(c.getNthObjectId(j));
+            }}
+        }} catch (err) {{
+        }}
+    }}
+}}
+
+function createMaterials() {{
+    for (var i = 0; i < DATA.materials.length; ++i) {{
+        var src = DATA.materials[i];
+        var mat = materials.create(src.no);
+        mat.name = src.name;
+
+        // Numerical properties are assigned to match the OpenSees comparison model.
+        try {{
+            mat.user_defined = true;
+            mat.elasticity_modulus_global = src.E_MPa * 1000000.0;
+            mat.shear_modulus_global = src.G_MPa * 1000000.0;
+            mat.poisson_ratio_global = src.poisson;
+            mat.mass_density = src.density_kg_m3;
+            mat.specific_weight = src.density_kg_m3 * 9.81;
+        }} catch (err) {{
+            console.log("Material property assignment skipped for material " + src.no + ": " + err);
+        }}
+    }}
+}}
+
+function createThicknesses() {{
+    for (var i = 0; i < DATA.thicknesses.length; ++i) {{
+        var src = DATA.thicknesses[i];
+        var thk = thicknesses.create(src.no);
+        thk.name = src.name;
+        thk.type = thicknesses.TYPE_UNIFORM;
+        thk.material = materials[src.material];
+        thk.uniform_thickness = src.thickness_m;
+    }}
+}}
+
+function createSections() {{
+    for (var i = 0; i < DATA.sections.length; ++i) {{
+        var src = DATA.sections[i];
+        var sec = engine.create_section(src.no, materials[1]);
+        sec.name = src.rfem_name;
+    }}
+}}
+
+function createNodes() {{
+    for (var i = 0; i < DATA.nodes.length; ++i) {{
+        var src = DATA.nodes[i];
+        var node = engine.create_node(src.no);
+        node.coordinate_1 = src.x;
+        node.coordinate_2 = src.y;
+        node.coordinate_3 = src.z;
+    }}
+}}
+
+function createLines() {{
+    for (var i = 0; i < DATA.lines.length; ++i) {{
+        var src = DATA.lines[i];
+        var line = engine.create_line(src.no, src.nodes);
+        line.type = lines.TYPE_POLYLINE;
+    }}
+}}
+
+function createMembers() {{
+    for (var i = 0; i < DATA.members.length; ++i) {{
+        var src = DATA.members[i];
+        var member = engine.create_member(src.no, src.line);
+        member.type = members.TYPE_BEAM;
+        member.section_start = sections[src.section];
+    }}
+}}
+
+function createSurfaces() {{
+    for (var i = 0; i < DATA.surfaces.length; ++i) {{
+        var src = DATA.surfaces[i];
+        var surface = engine.create_surface(src.no, src.boundary_lines);
+        surface.type = surfaces.TYPE_STANDARD;
+        surface.thickness = thicknesses[src.thickness];
+    }}
+}}
+
+function createSupports() {{
+    var INF = "inf";
+    for (var i = 0; i < DATA.supports.length; ++i) {{
+        var src = DATA.supports[i];
+        var support = nodal_supports.create(src.no);
+        support.nodes = src.nodes;
+        support.spring_x = INF;
+        support.spring_y = INF;
+        support.spring_z = INF;
+        support.rotational_restraint_x = 0;
+        support.rotational_restraint_y = 0;
+        support.rotational_restraint_z = 0;
+    }}
+}}
+
+function createLoadCases() {{
+    var sas = static_analysis_settings.create(1);
+    sas.analysis_type = static_analysis_settings.GEOMETRICALLY_LINEAR;
+
+    for (var i = 0; i < DATA.load_cases.length; ++i) {{
+        var src = DATA.load_cases[i];
+        var lc = load_cases.create(src.no);
+        lc.name = src.name;
+        lc.analysis_type = load_cases.ANALYSIS_TYPE_STATIC;
+        lc.static_analysis_settings = static_analysis_settings[1];
+        lc.self_weight_active = false;
+    }}
+}}
+
+function surfaceLoadDirection(axis) {{
+    if (axis === "X") {{
+        return surface_loads.LOAD_DIRECTION_GLOBAL_X_OR_USER_DEFINED_U_TRUE;
+    }}
+    if (axis === "Y") {{
+        return surface_loads.LOAD_DIRECTION_GLOBAL_Y_OR_USER_DEFINED_V_TRUE;
+    }}
+    return surface_loads.LOAD_DIRECTION_GLOBAL_Z_OR_USER_DEFINED_W_TRUE;
+}}
+
+function createSurfaceLoads() {{
+    for (var i = 0; i < DATA.surface_loads.length; ++i) {{
+        var src = DATA.surface_loads[i];
+        var load = engine.create_load(src.no, "Surface_Load", load_cases[src.load_case]);
+        load.surfaces = src.surfaces;
+        load.load_type = surface_loads.LOAD_TYPE_FORCE;
+        load.load_distribution = surface_loads.LOAD_DISTRIBUTION_UNIFORM;
+        load.load_direction = surfaceLoadDirection(src.axis);
+        load.uniform_magnitude = src.magnitude_n_m2;
+    }}
+}}
+
+clearModel();
+createMaterials();
+createThicknesses();
+createSections();
+createNodes();
+createLines();
+createMembers();
+createSurfaces();
+createSupports();
+createLoadCases();
+createSurfaceLoads();
+
+applyChanges();
+console.log("Created RFEM Script Manager model: " + DATA.model_name);
+console.log("Nodes: " + DATA.nodes.length + ", members: " + DATA.members.length + ", surfaces: " + DATA.surfaces.length);
+"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(script, encoding="utf-8")
+    return path
+
+
 def _bottom_nodes(model: StructuralModel):
     min_z = min(p.z for p in model.points.values())
     return {nid: p for nid, p in model.points.items() if abs(p.z - min_z) < 1e-6}
