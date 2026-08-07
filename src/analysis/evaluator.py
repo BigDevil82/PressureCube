@@ -28,6 +28,8 @@ class EvalResult:
     max_stress_pos: tuple[str, int] | None = None
     max_deflection_mm: float | None = None
     max_deflection_pos: int | None = None
+    max_deflection_vector: tuple[float, float, float] | None = None
+    max_deflection_coord: tuple[float, float, float] | None = None
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -39,6 +41,8 @@ class EvalResult:
             "max_stress_pos": self.max_stress_pos,
             "max_deflection_mm": self.max_deflection_mm,
             "max_deflection_pos": self.max_deflection_pos,
+            "max_deflection_vector": self.max_deflection_vector,
+            "max_deflection_coord": self.max_deflection_coord,
         }
 
 
@@ -96,6 +100,8 @@ class StructuralEvaluator:
             max_stress_pos=strength_check.max_stress_pos,
             max_deflection_mm=disp_check.max_deflection,
             max_deflection_pos=disp_check.max_deflection_pos,
+            max_deflection_vector=disp_check.max_deflection_vector,
+            max_deflection_coord=disp_check.max_deflection_coord,
         )
 
     def _evaluate_surrogate(self, design: StructuralDesign) -> EvalResult:

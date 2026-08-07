@@ -1,4 +1,3 @@
-import math
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -47,8 +46,7 @@ class OpenSeesSolver:
     def _identify_support_nodes(self) -> List[int]:
         """
         确定支座节点逻辑：
-        1. 必须包含底部4个角点。
-        2. 若长边 > 10m，需在长边中部均匀布置支座，间距 <= 2.5m。
+        为便于与 RFEM 对比，当前只约束底部 4 个角点。
         该函数会将结果存储在 self.support_node_ids 中并返回。
         """
 
@@ -88,26 +86,6 @@ class OpenSeesSolver:
             nid = find_nearest_node(cx, cy, bottom_nodes)
             if nid is not None:
                 supports.add(nid)
-
-        # 4. 处理长边加密逻辑
-        long_edge_len = max_y - min_y  # 长边沿y轴方向
-
-        if long_edge_len > 10.0:
-            # 计算分段数，确保间距 <= 2.5m
-            # 例如 12m: ceil(12/2.5) = 5段 -> 间距 2.4m
-            num_segments = math.ceil(long_edge_len / 2.5)
-            step = long_edge_len / num_segments
-
-            # 生成中间点坐标 (排除首尾 0 和 long_edge_len，因为角点已加)
-            for i in range(1, num_segments):
-                dist = min_y + i * step
-
-                targets = [(min_x, dist), (max_x, dist)]
-
-                for tx, ty in targets:
-                    nid = find_nearest_node(tx, ty, bottom_nodes)
-                    if nid is not None:
-                        supports.add(nid)
 
         return list[int](supports)
 
@@ -184,6 +162,7 @@ class OpenSeesSolver:
         """建立几何模型：节点、材料、截面、单元"""
         ops.wipe()
         ops.model("basic", "-ndm", 3, "-ndf", 6)
+        self.node_map_mm = {}
 
         # 1. Nodes
         for nid, point in self.model.points.items():
@@ -261,6 +240,27 @@ class OpenSeesSolver:
 
         return vecxz
 
+    def _beam_local_axes(self, beam: Beam) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        p1 = np.array(self.node_map_mm[beam.start_node])
+        p2 = np.array(self.node_map_mm[beam.end_node])
+        x_axis = p2 - p1
+        x_axis = x_axis / np.linalg.norm(x_axis)
+
+        vecxz = self._calculate_vecxz(p1, p2, beam.on_face)
+        vecxz = vecxz / np.linalg.norm(vecxz)
+        y_axis = np.cross(vecxz, x_axis)
+        y_axis = y_axis / np.linalg.norm(y_axis)
+        z_axis = np.cross(x_axis, y_axis)
+        z_axis = z_axis / np.linalg.norm(z_axis)
+        return x_axis, y_axis, z_axis
+
+    def _global_uniform_load_to_local(self, beam: Beam, load_global: np.ndarray) -> tuple[float, float, float]:
+        x_axis, y_axis, z_axis = self._beam_local_axes(beam)
+        wy = float(np.dot(load_global, y_axis))
+        wz = float(np.dot(load_global, z_axis))
+        wx = float(np.dot(load_global, x_axis))
+        return wy, wz, wx
+
     def _apply_distributed_plate_load(
         self, plate_ids: List[int], load_mpa: float, direction_local_z: bool = True
     ):
@@ -313,7 +313,8 @@ class OpenSeesSolver:
             sec = beam.section
             # w = A * rho * g (N/mm)
             w = (sec.area * RHO_STEEL_KG_M3 * G_M_S2) * N_M_TO_N_MM
-            ops.eleLoad("-ele", bid, "-type", "-beamUniform", 0, 0, -w)  # Global Z down
+            wy, wz, wx = self._global_uniform_load_to_local(beam, np.array([0.0, 0.0, -w]))
+            ops.eleLoad("-ele", bid, "-type", "-beamUniform", wy, wz, wx)
 
         # B. 结构自重 (板) - 分配到节点
         for pid, plate in self.model.plates.items():

@@ -28,6 +28,8 @@ class DesignCheckResult:
     critical_beam_id: int  # 最危险梁ID
     critical_plate_id: int  # 最危险板ID
     failure_mode: str  # "Bending", "Shear", "PlateMises", "Deflection"
+    max_deflection_vector: Tuple[float, float, float] | None = None  # 最大位移节点的 ux/uy/uz (mm)
+    max_deflection_coord: Tuple[float, float, float] | None = None  # 最大位移节点坐标 (m)
 
 
 class ResultProcessor:
@@ -46,7 +48,7 @@ class ResultProcessor:
         plate_max_ratio, plate_max_stress, crit_plate = self._check_plates(results)
 
         # 3. 挠度校核
-        disp_max_ratio, max_deflection, max_deflection_pos = self._check_deflection(results)
+        disp_max_ratio, max_deflection, max_deflection_pos, disp_vec, disp_coord = self._check_deflection(results)
 
         # 汇总最不利情况
         max_stress_ratio = max(beam_max_ratio, plate_max_ratio)
@@ -70,6 +72,8 @@ class ResultProcessor:
             critical_beam_id=crit_elem if mode != "PlateMises" else -1,
             critical_plate_id=crit_elem if mode == "PlateMises" else -1,
             failure_mode=mode,
+            max_deflection_vector=disp_vec,
+            max_deflection_coord=disp_coord,
         )
 
     def _check_single_beam_stress(self, bid, forces):
@@ -120,24 +124,35 @@ class ResultProcessor:
 
         return max_ratio, max_stress, crit_id
 
-    def _check_deflection(self, res: AnalysisResults) -> Tuple[float, float, int]:
+    def _check_deflection(
+        self, res: AnalysisResults
+    ) -> Tuple[float, float, int, Tuple[float, float, float], Tuple[float, float, float]]:
         """校核最大挠度比 (Disp / L)"""
         # 这里做一个简化：计算所有节点的最大位移，除以结构最短跨度或特征长度
         # 严格来说应该按构件计算 (Mid-span deflection relative to ends)
 
         max_disp = 0.0
         max_disp_node = -1
+        max_disp_vec = np.zeros(3)
         for node_id, d in res.displacements.items():
             disp_norm = np.linalg.norm(d[:3])  # XYZ displacement
             if disp_norm > max_disp:
                 max_disp = disp_norm
                 max_disp_node = node_id
+                max_disp_vec = d[:3]
 
         L_ref_mm = self.model.params.width * M_TO_MM
 
         # 规范限值: L/250
         limit = L_ref_mm / 250.0
-        return max_disp / limit, max_disp, max_disp_node
+        coord = self.model.points[max_disp_node].coordinates() if max_disp_node in self.model.points else np.zeros(3)
+        return (
+            max_disp / limit,
+            max_disp,
+            max_disp_node,
+            tuple(float(v) for v in max_disp_vec),
+            tuple(float(v) for v in coord),
+        )
 
 
 def run_full_design_check(model: StructuralModel, internal_pressure_pa: float = 30000):
