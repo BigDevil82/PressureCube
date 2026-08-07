@@ -245,7 +245,7 @@ def create_in_rfem(rfem_app):
 
 def main():
     api_key = os.getenv("DLUBAL_API_KEY")
-    api_key_name = os.getenv("DLUBAL_API_KEY_NAME")
+    api_key_name = os.getenv("DLUBAL_API_KEY_NAME", "Leo")
     with rfem.Application(api_key_value=api_key, api_key_name=api_key_name) as rfem_app:
         rfem_app.create_model(name=DATA["model_name"])
         rfem_app.delete_all_objects()

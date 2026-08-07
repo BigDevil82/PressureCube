@@ -11,7 +11,7 @@ def main():
     parser.add_argument("--url", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9000)
     parser.add_argument("--api-key", default=os.getenv("DLUBAL_API_KEY"))
-    parser.add_argument("--api-key-name", default=os.getenv("DLUBAL_API_KEY_NAME"))
+    parser.add_argument("--api-key-name", default=os.getenv("DLUBAL_API_KEY_NAME", "Leo"))
     args = parser.parse_args()
 
     with rfem.Application(
