@@ -10,13 +10,13 @@ def main():
     parser = argparse.ArgumentParser(description="Check RFEM gRPC API connectivity.")
     parser.add_argument("--url", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9000)
-    parser.add_argument("--api-key", default=os.getenv("DLUBAL_API_KEY"))
-    parser.add_argument("--api-key-name", default=os.getenv("DLUBAL_API_KEY_NAME", "Leo"))
+    parser.add_argument("--api-key", default="ak-9a6f1e572f73493384c89eedabcd01a56e0995af234e467a8")
+    parser.add_argument("--api-key-name", default="shanhongbo")
     args = parser.parse_args()
 
     with rfem.Application(
         api_key_value=args.api_key,
-        api_key_name=args.api_key_name,
+        # api_key_name=args.api_key_name,
         url=args.url,
         port=args.port,
     ) as app:
