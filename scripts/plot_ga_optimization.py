@@ -120,7 +120,7 @@ def plot_ga_optimization():
 
     # 创建右y轴
     ax2 = ax1.twinx()
-    ax2.set_ylabel("材料体积 (m³)", color="black")
+    ax2.set_ylabel("材料体积/m³", color="black")
     ax2.tick_params(axis="y", labelcolor="black")
 
     # 简化原型名称
@@ -202,7 +202,9 @@ def plot_ga_optimization():
     plt.subplots_adjust(top=0.85)  # 为图例预留空间
 
     # 保存为SVG格式
-    output_path = "paper_draft/建筑结构学报/figs/GA_optimization_process.svg"
+    output_path = (
+        r"E:\Common\Desktop\Research\增压建筑智能设计\建筑结构学报投稿\figs\GA_optimization_process.svg"
+    )
     plt.savefig(output_path, format="svg", dpi=600, bbox_inches="tight", pad_inches=0.05)
     print(f"改进版图表已保存至: {output_path}")
 

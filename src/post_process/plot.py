@@ -28,6 +28,7 @@ def setup_matplotlib_fonts():
 
     # 配置matplotlib
     plt.rcParams["font.family"] = [english_font, chinese_font]
+    plt.rcParams["font.sans-serif"] = ["SimHei"]
     # plt.rcParams["font.sans-serif"] = [chinese_font, english_font]
     # plt.rcParams["font.serif"] = [english_font, chinese_font]
     plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
@@ -157,8 +158,8 @@ def plot_reward_curve(
     ax.plot(episodes, smoothed_rewards, color="blue", linewidth=1.0, label=f"滑动平均")
 
     # 设置坐标轴标签
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("累积奖励")
+    ax.set_xlabel("优化回合")
+    ax.set_ylabel(r"累积奖励")
 
     ax.set_xlim(0, len(episodes))
 
@@ -250,8 +251,8 @@ def plot_displacement_curve(
     )
 
     # 设置坐标轴标签
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("最大位移 (mm)")
+    ax.set_xlabel("优化回合")
+    ax.set_ylabel("最大位移/mm")
 
     ax.set_xlim(0, len(episodes))
 
@@ -340,8 +341,8 @@ def plot_stress_curve(
     )
 
     # 设置坐标轴标签
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("最大应力 (MPa)")
+    ax.set_xlabel("优化回合")
+    ax.set_ylabel("最大应力/MPa")
 
     ax.set_xlim(0, len(episodes))
 
