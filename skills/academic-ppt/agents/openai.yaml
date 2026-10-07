@@ -1,0 +1,4 @@
+interface:
+  display_name: "学术PPT生成"
+  short_description: "基于代码与真实算例生成学术汇报，微软雅黑、无页码、无多余注释"
+  default_prompt: "使用 $academic-ppt，结合当前项目代码、实验结果和参考版式，制作简洁的学术研究进展PPT。"
