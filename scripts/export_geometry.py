@@ -151,14 +151,16 @@ def build_default_engineering_model() -> StructuralModel:
     return model
 
 
-def main():
+def main(model: StructuralModel | None = None, output_dir: str | None = None):
     """
     主函数，用于读取StructuralModel实例信息，并把结构的几何信息写入文本文件。
     """
-    model = build_default_engineering_model()
+    if model is None:
+        model = build_default_engineering_model()
 
     # 创建输出目录
-    output_dir = "results/output_geometry"
+    if output_dir is None:
+        output_dir = "results/output_geometry"
     os.makedirs(output_dir, exist_ok=True)
 
     # 1. 导出节点坐标

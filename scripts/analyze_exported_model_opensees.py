@@ -28,8 +28,11 @@ DEFAULT_STRENGTH_COMBO = {"DL": 1.3, "LL": 1.5, "PL": 1.25}
 DEFAULT_SERVICE_COMBO = {"DL": 1.0, "LL": 1.0, "PL": 1.0}
 
 
-def build_analysis_model(mesh_size: float | None) -> tuple[StructuralModel, StructuralModel]:
-    base_model = build_default_engineering_model()
+def build_analysis_model(
+    mesh_size: float | None, base_model: StructuralModel | None = None
+) -> tuple[StructuralModel, StructuralModel]:
+    if base_model is None:
+        base_model = build_default_engineering_model()
     if mesh_size is None:
         return base_model, base_model
     return base_model, MeshGenerator(base_model, mesh_size).generate()
@@ -473,8 +476,10 @@ def write_text_report(report: dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def make_report(args: argparse.Namespace, mesh_size: float | None) -> dict[str, Any]:
-    base_model, model = build_analysis_model(mesh_size)
+def make_report(
+    args: argparse.Namespace, mesh_size: float | None, base_model: StructuralModel | None = None
+) -> dict[str, Any]:
+    base_model, model = build_analysis_model(mesh_size, base_model)
     model_solver = OpenSeesSolver(model)
 
     report = {

@@ -1,0 +1,467 @@
+{
+  "input": {
+    "pressure_pa": 30000.0,
+    "mesh_size": 0.1,
+    "base_nodes": 488,
+    "base_beams": 906,
+    "base_plates": 470,
+    "strength_combo": {
+      "DL": 1.3,
+      "LL": 1.5,
+      "PL": 1.25
+    },
+    "service_combo": {
+      "DL": 1.0,
+      "LL": 1.0,
+      "PL": 1.0
+    },
+    "modes": 6,
+    "case_config": {
+      "params": {
+        "length": 8.5,
+        "width": 3.7,
+        "height": 3.3,
+        "main_beam_spacing": 1.05,
+        "support_beam_max_spacing": 0.5,
+        "add_support_beam": true,
+        "window": {
+          "front_spans": [],
+          "back_spans": [],
+          "right_spans": [
+            1,
+            2
+          ]
+        }
+      },
+      "sections": {
+        "FRAME": 2,
+        "MAIN": 8,
+        "SECONDARY": 7,
+        "BRACE": 14
+      },
+      "pressure_pa": 30000.0,
+      "mesh_size": 0.1,
+      "modes": 6
+    },
+    "model_params": {
+      "length": 8.5,
+      "width": 3.7,
+      "height": 3.3,
+      "main_beam_spacing": 1.05,
+      "add_support_beam": true,
+      "extension": {
+        "active": true,
+        "length": 1.1,
+        "width": 1.85,
+        "height": 3.3,
+        "offset_x": 1.85
+      },
+      "plate_thickness": 0.005,
+      "opening_panel": {
+        "elastic_modulus_mpa": 70000.0,
+        "poisson_ratio": 0.23,
+        "density_kg_m3": 2500.0,
+        "thickness": 0.02,
+        "design_strength_mpa": 180.0
+      },
+      "layout_strategy": "engineering",
+      "min_edge_remainder": 0.1,
+      "support_beam_max_spacing": 0.5,
+      "window": {
+        "active": true,
+        "sill_height": 0.9,
+        "height": 1.5,
+        "front_spans": [],
+        "back_spans": [],
+        "right_spans": [
+          1,
+          2
+        ]
+      },
+      "door": {
+        "active": true,
+        "width": 0.8,
+        "height": 2.21,
+        "bottom_offset": 0.3,
+        "face": "left",
+        "center_x": null
+      }
+    },
+    "gravity_m_s2": 9.80665
+  },
+  "model": {
+    "nodes": 17456,
+    "beams_total": 5862,
+    "beams_physical": 5862,
+    "beams_virtual": 0,
+    "plates_total": 17360,
+    "plates_opening": 560,
+    "plates_bottom": 3780,
+    "support_nodes_0_based": [
+      0,
+      10,
+      284,
+      294
+    ],
+    "support_nodes_rfem_1_based": [
+      1,
+      11,
+      285,
+      295
+    ],
+    "structural_mass_kg": 18762.249782001898,
+    "modal_nodal_mass_sum_kg": 18762.24978199669,
+    "mass_breakdown_kg": {
+      "beams": 12633.809781999174,
+      "steel_plates": 5874.940000000801,
+      "opening_panels": 253.5,
+      "total": 18762.249781999977
+    },
+    "self_weight_kn_g_9_80665": 183.9948168246689,
+    "self_weight_kn_g_10_0": 187.62249782001896,
+    "beam_types": {
+      "FRAME": {
+        "count": 1082,
+        "total_length_m": 102.39999999999935
+      },
+      "MAIN": {
+        "count": 1235,
+        "total_length_m": 115.29999999999973
+      },
+      "SECONDARY": {
+        "count": 1108,
+        "total_length_m": 105.59999999999845
+      },
+      "BRACE": {
+        "count": 2437,
+        "total_length_m": 232.09999999999656
+      }
+    },
+    "sections": {
+      "BOX-150x6": {
+        "count": 1082,
+        "beam_types": [
+          "FRAME"
+        ]
+      },
+      "C-200x75x9.0": {
+        "count": 2437,
+        "beam_types": [
+          "BRACE"
+        ]
+      },
+      "H-125x60.0": {
+        "count": 1108,
+        "beam_types": [
+          "SECONDARY"
+        ]
+      },
+      "H-150x100.0": {
+        "count": 1235,
+        "beam_types": [
+          "MAIN"
+        ]
+      }
+    }
+  },
+  "load_reconciliation": {
+    "bottom_area_m2": 33.48499999999811,
+    "dead_bottom_kn": 167.42499999999055,
+    "live_bottom_kn": 66.96999999999622,
+    "self_weight_kn_g_9_80665": 183.9948168246689,
+    "self_weight_kn_g_10_0": 187.62249782001896,
+    "combos": {
+      "strength": {
+        "vertical_load_kn_g_9_80665": 557.3007618720517,
+        "vertical_load_kn_g_10_0": 562.0167471660068
+      },
+      "service": {
+        "vertical_load_kn_g_9_80665": 418.38981682465567,
+        "vertical_load_kn_g_10_0": 422.01749782000576
+      }
+    }
+  },
+  "static_combos": [
+    {
+      "name": "strength",
+      "factors": {
+        "DL": 1.3,
+        "LL": 1.5,
+        "PL": 1.25
+      },
+      "success": true,
+      "design_check": {
+        "max_stress_ratio": 1.1711680330032421,
+        "max_stress_mpa": 367.74676236301804,
+        "max_stress_pos": [
+          "Beam",
+          608
+        ],
+        "critical_beam_id": 608,
+        "critical_beam_rfem_1_based": 609,
+        "critical_plate_id": -1,
+        "failure_mode": "Bending",
+        "max_deflection_ratio": 1.1902113161103842,
+        "max_deflection_mm": 17.61512747843369,
+        "max_deflection_node_0_based": 6531,
+        "max_deflection_node_rfem_1_based": 6532,
+        "max_deflection_vector_mm": [
+          -0.01821400050933817,
+          -0.011161232878217334,
+          -17.615114525842166
+        ],
+        "max_deflection_coord_m": [
+          1.6750000000000005,
+          4.486363636363636,
+          0.0
+        ]
+      },
+      "displacements": {
+        "max_translation_node_0_based": 6531,
+        "max_translation_node_rfem_1_based": 6532,
+        "max_translation_mm": 17.61512747843369,
+        "max_translation_vector_mm": [
+          -0.01821400050933817,
+          -0.011161232878217334,
+          -17.615114525842166
+        ],
+        "max_translation_coord_m": [
+          1.6750000000000005,
+          4.486363636363636,
+          0.0
+        ],
+        "max_ux": {
+          "node_0_based": 13762,
+          "node_rfem_1_based": 13763,
+          "value_mm": 6.5283970893514995
+        },
+        "max_uy": {
+          "node_0_based": 15737,
+          "node_rfem_1_based": 15738,
+          "value_mm": -3.2843504651933952
+        },
+        "max_uz": {
+          "node_0_based": 6531,
+          "node_rfem_1_based": 6532,
+          "value_mm": -17.615114525842166
+        }
+      },
+      "member_probe": null,
+      "reactions": {
+        "support_reaction_sum_n": [
+          2.1283231035340577e-06,
+          -2.757929905783385e-06,
+          557300.7619207585
+        ],
+        "support_reaction_sum_abs_n": [
+          146964.0164456208,
+          318799.199791903,
+          557300.7619207585
+        ]
+      },
+      "result_counts": {
+        "displacements": 17456,
+        "beam_forces": 5862,
+        "plate_stresses": 17360,
+        "reactions": 4
+      }
+    },
+    {
+      "name": "service",
+      "factors": {
+        "DL": 1.0,
+        "LL": 1.0,
+        "PL": 1.0
+      },
+      "success": true,
+      "design_check": {
+        "max_stress_ratio": 0.9246626182828602,
+        "max_stress_mpa": 290.3440621408181,
+        "max_stress_pos": [
+          "Beam",
+          608
+        ],
+        "critical_beam_id": 608,
+        "critical_beam_rfem_1_based": 609,
+        "critical_plate_id": -1,
+        "failure_mode": "Bending",
+        "max_deflection_ratio": 0.9277407925344043,
+        "max_deflection_mm": 13.730563729509186,
+        "max_deflection_node_0_based": 6531,
+        "max_deflection_node_rfem_1_based": 6532,
+        "max_deflection_vector_mm": [
+          -0.014504475893454938,
+          -0.008885636192384984,
+          -13.730553193362667
+        ],
+        "max_deflection_coord_m": [
+          1.6750000000000005,
+          4.486363636363636,
+          0.0
+        ]
+      },
+      "displacements": {
+        "max_translation_node_0_based": 6531,
+        "max_translation_node_rfem_1_based": 6532,
+        "max_translation_mm": 13.730563729509186,
+        "max_translation_vector_mm": [
+          -0.014504475893454938,
+          -0.008885636192384984,
+          -13.730553193362667
+        ],
+        "max_translation_coord_m": [
+          1.6750000000000005,
+          4.486363636363636,
+          0.0
+        ],
+        "max_ux": {
+          "node_0_based": 13762,
+          "node_rfem_1_based": 13763,
+          "value_mm": 5.292589298742905
+        },
+        "max_uy": {
+          "node_0_based": 15737,
+          "node_rfem_1_based": 15738,
+          "value_mm": -2.6273916321819883
+        },
+        "max_uz": {
+          "node_0_based": 6531,
+          "node_rfem_1_based": 6532,
+          "value_mm": -13.730553193362667
+        }
+      },
+      "member_probe": null,
+      "reactions": {
+        "support_reaction_sum_n": [
+          1.876960595836863e-06,
+          -2.1485357137862593e-06,
+          418389.81686150713
+        ],
+        "support_reaction_sum_abs_n": [
+          112558.45566566804,
+          243672.4684773564,
+          418389.81686150713
+        ]
+      },
+      "result_counts": {
+        "displacements": 17456,
+        "beam_forces": 5862,
+        "plate_stresses": 17360,
+        "reactions": 4
+      }
+    }
+  ],
+  "modal": {
+    "success": true,
+    "modes": [
+      {
+        "mode": 1,
+        "frequency_hz": 20.730565374672842,
+        "period_s": 0.04823795115697762,
+        "dominant_translation_direction": "Z",
+        "max_shape_node_0_based": 6797,
+        "max_shape_node_rfem_1_based": 6798,
+        "max_shape_node_coord_m": [
+          1.9375000000000002,
+          4.390909090909091,
+          0.0
+        ],
+        "max_shape_vector": [
+          -0.002297361231947102,
+          -0.00030084398765604226,
+          -0.6612983752987007
+        ]
+      },
+      {
+        "mode": 2,
+        "frequency_hz": 22.47144428273388,
+        "period_s": 0.04450092247823867,
+        "dominant_translation_direction": "Z",
+        "max_shape_node_0_based": 9060,
+        "max_shape_node_rfem_1_based": 9061,
+        "max_shape_node_coord_m": [
+          1.6749999999999998,
+          3.722727272727273,
+          3.3
+        ],
+        "max_shape_vector": [
+          -0.211300073641763,
+          -0.052644689725570085,
+          -0.46964336319575956
+        ]
+      },
+      {
+        "mode": 3,
+        "frequency_hz": 26.812939626786136,
+        "period_s": 0.03729542578766707,
+        "dominant_translation_direction": "X",
+        "max_shape_node_0_based": 6531,
+        "max_shape_node_rfem_1_based": 6532,
+        "max_shape_node_coord_m": [
+          1.6750000000000005,
+          4.486363636363636,
+          0.0
+        ],
+        "max_shape_vector": [
+          0.03280776915235371,
+          0.0016017385509382225,
+          -0.6749542700504847
+        ]
+      },
+      {
+        "mode": 4,
+        "frequency_hz": 33.33275402782422,
+        "period_s": 0.03000052138401942,
+        "dominant_translation_direction": "Z",
+        "max_shape_node_0_based": 14037,
+        "max_shape_node_rfem_1_based": 14038,
+        "max_shape_node_coord_m": [
+          3.7000000000000006,
+          2.481818181818182,
+          1.6000000000000003
+        ],
+        "max_shape_vector": [
+          0.8563493573989572,
+          -0.02619788051701922,
+          0.010118152574463446
+        ]
+      },
+      {
+        "mode": 5,
+        "frequency_hz": 33.918119944294446,
+        "period_s": 0.029482766192299392,
+        "dominant_translation_direction": "X",
+        "max_shape_node_0_based": 14877,
+        "max_shape_node_rfem_1_based": 14878,
+        "max_shape_node_coord_m": [
+          3.7000000000000006,
+          5.631818181818181,
+          1.6000000000000003
+        ],
+        "max_shape_vector": [
+          -0.8921833516331362,
+          0.023133313498953877,
+          -0.017993472240073662
+        ]
+      },
+      {
+        "mode": 6,
+        "frequency_hz": 38.810900298720256,
+        "period_s": 0.025765957303313932,
+        "dominant_translation_direction": "Z",
+        "max_shape_node_0_based": 6579,
+        "max_shape_node_rfem_1_based": 6580,
+        "max_shape_node_coord_m": [
+          1.6749999999999998,
+          6.10909090909091,
+          0.0
+        ],
+        "max_shape_vector": [
+          0.0075143677170616905,
+          -0.00495360748879775,
+          -0.7951068204084437
+        ]
+      }
+    ]
+  }
+}

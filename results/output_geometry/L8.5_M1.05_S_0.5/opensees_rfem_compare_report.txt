@@ -1,0 +1,62 @@
+OpenSees RFEM Comparison Report
+
+[Input]
+mesh_size: 0.1
+base_nodes: 488
+base_beams: 906
+base_plates: 470
+pressure_pa: 30000.0
+
+[Model]
+nodes: 17456
+beams_total: 5862
+beams_physical: 5862
+beams_virtual: 0
+plates_total: 17360
+plates_opening: 560
+plates_bottom: 3780
+structural_mass_kg: 18762.249782001898
+modal_nodal_mass_sum_kg: 18762.24978199669
+mass_breakdown_kg: {'beams': np.float64(12633.809781999174), 'steel_plates': np.float64(5874.940000000801), 'opening_panels': np.float64(253.5), 'total': np.float64(18762.249781999977)}
+self_weight_kn_g_9_80665: 183.9948168246689
+self_weight_kn_g_10_0: 187.62249782001896
+support_nodes_rfem_1_based: [1, 11, 285, 295]
+
+[Load Reconciliation]
+bottom_area_m2: 33.48499999999811
+dead_bottom_kn: 167.42499999999055
+live_bottom_kn: 66.96999999999622
+self_weight_kn_g_9_80665: 183.9948168246689
+self_weight_kn_g_10_0: 187.62249782001896
+strength: {'vertical_load_kn_g_9_80665': np.float64(557.3007618720517), 'vertical_load_kn_g_10_0': np.float64(562.0167471660068)}
+service: {'vertical_load_kn_g_9_80665': np.float64(418.38981682465567), 'vertical_load_kn_g_10_0': np.float64(422.01749782000576)}
+
+[Static Combos]
+strength: factors={'DL': 1.3, 'LL': 1.5, 'PL': 1.25} success=True
+  max_stress_ratio: 1.17117
+  max_stress_mpa: 367.747
+  max_stress_pos: ['Beam', 608]
+  max_deflection_ratio: 1.19021
+  max_deflection_mm: 17.6151
+  max_deflection_node_rfem_1_based: 6532
+  max_translation_mm: 17.6151
+  max_translation_node_rfem_1_based: 6532
+  support_reaction_sum_n: [2.1283231035340577e-06, -2.757929905783385e-06, 557300.7619207585]
+service: factors={'DL': 1.0, 'LL': 1.0, 'PL': 1.0} success=True
+  max_stress_ratio: 0.924663
+  max_stress_mpa: 290.344
+  max_stress_pos: ['Beam', 608]
+  max_deflection_ratio: 0.927741
+  max_deflection_mm: 13.7306
+  max_deflection_node_rfem_1_based: 6532
+  max_translation_mm: 13.7306
+  max_translation_node_rfem_1_based: 6532
+  support_reaction_sum_n: [1.876960595836863e-06, -2.1485357137862593e-06, 418389.81686150713]
+
+[Modal]
+  mode 1: f=20.7306 Hz, T=0.048238 s, dominant=Z, max_node_rfem=6798
+  mode 2: f=22.4714 Hz, T=0.0445009 s, dominant=Z, max_node_rfem=9061
+  mode 3: f=26.8129 Hz, T=0.0372954 s, dominant=X, max_node_rfem=6532
+  mode 4: f=33.3328 Hz, T=0.0300005 s, dominant=Z, max_node_rfem=14038
+  mode 5: f=33.9181 Hz, T=0.0294828 s, dominant=X, max_node_rfem=14878
+  mode 6: f=38.8109 Hz, T=0.025766 s, dominant=Z, max_node_rfem=6580

@@ -1,0 +1,467 @@
+{
+  "input": {
+    "pressure_pa": 30000.0,
+    "mesh_size": 0.1,
+    "base_nodes": 450,
+    "base_beams": 849,
+    "base_plates": 490,
+    "strength_combo": {
+      "DL": 1.3,
+      "LL": 1.5,
+      "PL": 1.25
+    },
+    "service_combo": {
+      "DL": 1.0,
+      "LL": 1.0,
+      "PL": 1.0
+    },
+    "modes": 6,
+    "case_config": {
+      "params": {
+        "length": 12.0,
+        "width": 3.7,
+        "height": 3.3,
+        "main_beam_spacing": 1.2,
+        "support_beam_max_spacing": 0.6,
+        "add_support_beam": true,
+        "window": {
+          "front_spans": [],
+          "back_spans": [],
+          "right_spans": [
+            1,
+            2
+          ]
+        }
+      },
+      "sections": {
+        "FRAME": 2,
+        "MAIN": 8,
+        "SECONDARY": 7,
+        "BRACE": 14
+      },
+      "pressure_pa": 30000.0,
+      "mesh_size": 0.1,
+      "modes": 6
+    },
+    "model_params": {
+      "length": 12.0,
+      "width": 3.7,
+      "height": 3.3,
+      "main_beam_spacing": 1.2,
+      "add_support_beam": true,
+      "extension": {
+        "active": true,
+        "length": 1.1,
+        "width": 1.85,
+        "height": 3.3,
+        "offset_x": 1.85
+      },
+      "plate_thickness": 0.005,
+      "opening_panel": {
+        "elastic_modulus_mpa": 70000.0,
+        "poisson_ratio": 0.23,
+        "density_kg_m3": 2500.0,
+        "thickness": 0.02,
+        "design_strength_mpa": 180.0
+      },
+      "layout_strategy": "engineering",
+      "min_edge_remainder": 0.1,
+      "support_beam_max_spacing": 0.6,
+      "window": {
+        "active": true,
+        "sill_height": 0.9,
+        "height": 1.5,
+        "front_spans": [],
+        "back_spans": [],
+        "right_spans": [
+          1,
+          2
+        ]
+      },
+      "door": {
+        "active": true,
+        "width": 0.6500000000000001,
+        "height": 2.21,
+        "bottom_offset": 0.3,
+        "face": "left",
+        "center_x": null
+      }
+    },
+    "gravity_m_s2": 9.80665
+  },
+  "model": {
+    "nodes": 23366,
+    "beams_total": 6677,
+    "beams_physical": 6677,
+    "beams_virtual": 0,
+    "plates_total": 24738,
+    "plates_opening": 980,
+    "plates_bottom": 5439,
+    "support_nodes_0_based": [
+      0,
+      8,
+      250,
+      258
+    ],
+    "support_nodes_rfem_1_based": [
+      1,
+      9,
+      251,
+      259
+    ],
+    "structural_mass_kg": 22674.43728449949,
+    "modal_nodal_mass_sum_kg": 22674.437284501826,
+    "mass_breakdown_kg": {
+      "beams": 14103.837284500116,
+      "steel_plates": 8132.600000000051,
+      "opening_panels": 438.00000000000193,
+      "total": 22674.43728450017
+    },
+    "self_weight_kn_g_9_80665": 222.36027039603692,
+    "self_weight_kn_g_10_0": 226.7443728449949,
+    "beam_types": {
+      "FRAME": {
+        "count": 1234,
+        "total_length_m": 116.39999999999986
+      },
+      "MAIN": {
+        "count": 1421,
+        "total_length_m": 129.29999999999984
+      },
+      "SECONDARY": {
+        "count": 1466,
+        "total_length_m": 140.74999999999798
+      },
+      "BRACE": {
+        "count": 2556,
+        "total_length_m": 244.84999999999215
+      }
+    },
+    "sections": {
+      "BOX-150x6": {
+        "count": 1234,
+        "beam_types": [
+          "FRAME"
+        ]
+      },
+      "C-200x75x9.0": {
+        "count": 2556,
+        "beam_types": [
+          "BRACE"
+        ]
+      },
+      "H-125x60.0": {
+        "count": 1466,
+        "beam_types": [
+          "SECONDARY"
+        ]
+      },
+      "H-150x100.0": {
+        "count": 1421,
+        "beam_types": [
+          "MAIN"
+        ]
+      }
+    }
+  },
+  "load_reconciliation": {
+    "bottom_area_m2": 46.435000000000485,
+    "dead_bottom_kn": 232.17500000000243,
+    "live_bottom_kn": 92.87000000000097,
+    "self_weight_kn_g_9_80665": 222.36027039603692,
+    "self_weight_kn_g_10_0": 226.7443728449949,
+    "combos": {
+      "strength": {
+        "vertical_load_kn_g_9_80665": 730.2008515148526,
+        "vertical_load_kn_g_10_0": 735.9001846984979
+      },
+      "service": {
+        "vertical_load_kn_g_9_80665": 547.4052703960404,
+        "vertical_load_kn_g_10_0": 551.7893728449983
+      }
+    }
+  },
+  "static_combos": [
+    {
+      "name": "strength",
+      "factors": {
+        "DL": 1.3,
+        "LL": 1.5,
+        "PL": 1.25
+      },
+      "success": true,
+      "design_check": {
+        "max_stress_ratio": 1.3209142780040846,
+        "max_stress_mpa": 414.76708329328255,
+        "max_stress_pos": [
+          "Beam",
+          5657
+        ],
+        "critical_beam_id": 5657,
+        "critical_beam_rfem_1_based": 5658,
+        "critical_plate_id": -1,
+        "failure_mode": "Bending",
+        "max_deflection_ratio": 1.8468987289480987,
+        "max_deflection_mm": 27.334101188431863,
+        "max_deflection_node_0_based": 7841,
+        "max_deflection_node_rfem_1_based": 7842,
+        "max_deflection_vector_mm": [
+          -0.01641661586139281,
+          0.10427707822393507,
+          -27.33389735411167
+        ],
+        "max_deflection_coord_m": [
+          1.592857142857143,
+          5.446153846153846,
+          0.0
+        ]
+      },
+      "displacements": {
+        "max_translation_node_0_based": 7841,
+        "max_translation_node_rfem_1_based": 7842,
+        "max_translation_mm": 27.334101188431863,
+        "max_translation_vector_mm": [
+          -0.01641661586139281,
+          0.10427707822393507,
+          -27.33389735411167
+        ],
+        "max_translation_coord_m": [
+          1.592857142857143,
+          5.446153846153846,
+          0.0
+        ],
+        "max_ux": {
+          "node_0_based": 18580,
+          "node_rfem_1_based": 18581,
+          "value_mm": 6.539195440198143
+        },
+        "max_uy": {
+          "node_0_based": 22773,
+          "node_rfem_1_based": 22774,
+          "value_mm": 8.689459668106394
+        },
+        "max_uz": {
+          "node_0_based": 7841,
+          "node_rfem_1_based": 7842,
+          "value_mm": -27.33389735411167
+        }
+      },
+      "member_probe": null,
+      "reactions": {
+        "support_reaction_sum_n": [
+          1.8496939446777105e-07,
+          -457874.999997207,
+          730200.8515203632
+        ],
+        "support_reaction_sum_abs_n": [
+          246871.60297984726,
+          670022.5823450849,
+          730200.8515203632
+        ]
+      },
+      "result_counts": {
+        "displacements": 23366,
+        "beam_forces": 6677,
+        "plate_stresses": 24738,
+        "reactions": 4
+      }
+    },
+    {
+      "name": "service",
+      "factors": {
+        "DL": 1.0,
+        "LL": 1.0,
+        "PL": 1.0
+      },
+      "success": true,
+      "design_check": {
+        "max_stress_ratio": 1.0418809508297793,
+        "max_stress_mpa": 327.1506185605507,
+        "max_stress_pos": [
+          "Beam",
+          808
+        ],
+        "critical_beam_id": 808,
+        "critical_beam_rfem_1_based": 809,
+        "critical_plate_id": -1,
+        "failure_mode": "Bending",
+        "max_deflection_ratio": 1.441111047825639,
+        "max_deflection_mm": 21.328443507819458,
+        "max_deflection_node_0_based": 7841,
+        "max_deflection_node_rfem_1_based": 7842,
+        "max_deflection_vector_mm": [
+          -0.01246596074412471,
+          0.0836517018861974,
+          -21.328275820113547
+        ],
+        "max_deflection_coord_m": [
+          1.592857142857143,
+          5.446153846153846,
+          0.0
+        ]
+      },
+      "displacements": {
+        "max_translation_node_0_based": 7841,
+        "max_translation_node_rfem_1_based": 7842,
+        "max_translation_mm": 21.328443507819458,
+        "max_translation_vector_mm": [
+          -0.01246596074412471,
+          0.0836517018861974,
+          -21.328275820113547
+        ],
+        "max_translation_coord_m": [
+          1.592857142857143,
+          5.446153846153846,
+          0.0
+        ],
+        "max_ux": {
+          "node_0_based": 18580,
+          "node_rfem_1_based": 18581,
+          "value_mm": 5.32618922543532
+        },
+        "max_uy": {
+          "node_0_based": 22773,
+          "node_rfem_1_based": 22774,
+          "value_mm": 6.981917947941742
+        },
+        "max_uz": {
+          "node_0_based": 7841,
+          "node_rfem_1_based": 7842,
+          "value_mm": -21.328275820113547
+        }
+      },
+      "member_probe": null,
+      "reactions": {
+        "support_reaction_sum_n": [
+          4.304311005398631e-07,
+          -366299.9999977078,
+          547405.2704003149
+        ],
+        "support_reaction_sum_abs_n": [
+          189766.05951117486,
+          517665.8385383801,
+          547405.2704003149
+        ]
+      },
+      "result_counts": {
+        "displacements": 23366,
+        "beam_forces": 6677,
+        "plate_stresses": 24738,
+        "reactions": 4
+      }
+    }
+  ],
+  "modal": {
+    "success": true,
+    "modes": [
+      {
+        "mode": 1,
+        "frequency_hz": 18.824712837545317,
+        "period_s": 0.0531216602680669,
+        "dominant_translation_direction": "Z",
+        "max_shape_node_0_based": 7841,
+        "max_shape_node_rfem_1_based": 7842,
+        "max_shape_node_coord_m": [
+          1.592857142857143,
+          5.446153846153846,
+          0.0
+        ],
+        "max_shape_vector": [
+          0.006380289233447273,
+          0.00027454454630135706,
+          0.6495543072360038
+        ]
+      },
+      {
+        "mode": 2,
+        "frequency_hz": 19.11228380133844,
+        "period_s": 0.05232237080583586,
+        "dominant_translation_direction": "X",
+        "max_shape_node_0_based": 11814,
+        "max_shape_node_rfem_1_based": 11815,
+        "max_shape_node_coord_m": [
+          1.5071428571428571,
+          4.246153846153846,
+          3.3
+        ],
+        "max_shape_vector": [
+          -0.2240246789160425,
+          -0.03485128184240319,
+          -0.42301916467752204
+        ]
+      },
+      {
+        "mode": 3,
+        "frequency_hz": 23.26652564179833,
+        "period_s": 0.04298020320676926,
+        "dominant_translation_direction": "Z",
+        "max_shape_node_0_based": 12492,
+        "max_shape_node_rfem_1_based": 12493,
+        "max_shape_node_coord_m": [
+          2.107142857142857,
+          3.0999999999999996,
+          3.3
+        ],
+        "max_shape_vector": [
+          -0.001756832506719176,
+          0.0008712556208221674,
+          0.6667279553711561
+        ]
+      },
+      {
+        "mode": 4,
+        "frequency_hz": 24.634967622496752,
+        "period_s": 0.04059270608039265,
+        "dominant_translation_direction": "Z",
+        "max_shape_node_0_based": 7835,
+        "max_shape_node_rfem_1_based": 7836,
+        "max_shape_node_coord_m": [
+          1.592857142857143,
+          5.3538461538461535,
+          0.0
+        ],
+        "max_shape_vector": [
+          -0.048968768222767856,
+          -0.0001341979458369425,
+          0.68727199410441
+        ]
+      },
+      {
+        "mode": 5,
+        "frequency_hz": 28.66756379136837,
+        "period_s": 0.034882629276684264,
+        "dominant_translation_direction": "Z",
+        "max_shape_node_0_based": 8734,
+        "max_shape_node_rfem_1_based": 8735,
+        "max_shape_node_coord_m": [
+          2.107142857142857,
+          7.938461538461539,
+          0.0
+        ],
+        "max_shape_vector": [
+          0.034390332941652106,
+          0.0038318403060122737,
+          0.8445642298053923
+        ]
+      },
+      {
+        "mode": 6,
+        "frequency_hz": 30.427182487964792,
+        "period_s": 0.03286534993489921,
+        "dominant_translation_direction": "Z",
+        "max_shape_node_0_based": 8512,
+        "max_shape_node_rfem_1_based": 8513,
+        "max_shape_node_coord_m": [
+          2.107142857142857,
+          4.246153846153846,
+          0.0
+        ],
+        "max_shape_vector": [
+          0.023218031446897974,
+          -0.006133053876992911,
+          0.7190972618072803
+        ]
+      }
+    ]
+  }
+}
