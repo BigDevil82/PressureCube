@@ -13,7 +13,6 @@ from src.structure.section_library import SectionLibrary
 from src.structure.structural_model import Beam, StructuralModel
 from src.utils.constants import INTERNAL_PRESSURE, LOAD_DEAD_BOTTOM_KPA, LOAD_LIVE_BOTTOM_KPA
 
-
 LOAD_DIRECTION_LABELS = {
     "X": "X<sub>A</sub>",
     "Y": "Y<sub>A</sub>",
@@ -36,7 +35,9 @@ def find_line_by_nodes(n1: int, n2: int, line_map: Dict[frozenset, int]) -> int 
     return line_map.get(key)
 
 
-def add_boundary_line(n1: int, n2: int, line_records: List[tuple[int, int]], line_map: Dict[frozenset, int]) -> int:
+def add_boundary_line(
+    n1: int, n2: int, line_records: List[tuple[int, int]], line_map: Dict[frozenset, int]
+) -> int:
     """追加一条只用于围合面的边界线，并返回 1-based 线编号。"""
     line_no = len(line_records) + 1
     line_records.append((n1, n2))
@@ -44,7 +45,9 @@ def add_boundary_line(n1: int, n2: int, line_records: List[tuple[int, int]], lin
     return line_no
 
 
-def is_node_on_segment(node_id: int, start_id: int, end_id: int, model: StructuralModel, tol: float = 1e-6) -> bool:
+def is_node_on_segment(
+    node_id: int, start_id: int, end_id: int, model: StructuralModel, tol: float = 1e-6
+) -> bool:
     node = model.points[node_id]
     start = model.points[start_id]
     end = model.points[end_id]
@@ -94,9 +97,7 @@ def find_boundary_line_ids(
     if direct_line_id is not None:
         return [direct_line_id]
 
-    segment_nodes = [
-        node_id for node_id in model.points if is_node_on_segment(node_id, n1, n2, model)
-    ]
+    segment_nodes = [node_id for node_id in model.points if is_node_on_segment(node_id, n1, n2, model)]
     segment_nodes = sorted(
         set(segment_nodes),
         key=lambda node_id: (segment_parameter(node_id, n1, n2, model), node_id),
@@ -123,20 +124,17 @@ def calculate_beam_direction(beam: Beam, model: StructuralModel) -> tuple[float,
 
 
 def surface_load_row(surface_no: int, axis: str, magnitude_kpa: float) -> str:
-    return (
-        f"{surface_no}\t力\t均匀\t1 - 全局 XYZ\t"
-        f"{LOAD_DIRECTION_LABELS[axis]}\t{magnitude_kpa:.2f}\n"
-    )
+    return f"{surface_no}\t力\t均匀\t1 - 全局 XYZ\t" f"{LOAD_DIRECTION_LABELS[axis]}\t{magnitude_kpa:.2f}\n"
 
 
 def build_default_engineering_model() -> StructuralModel:
     params = EngineeringLayoutParameters(
-        length=7.2,
+        length=8.5,
         width=3.7,
         height=3.3,
-        main_beam_spacing=0.95,
+        main_beam_spacing=1.05,
         add_support_beam=True,
-        support_beam_max_spacing=0.55,
+        support_beam_max_spacing=0.5,
         window=WindowParameters(front_spans=[], back_spans=[], right_spans=[1, 2]),
     )
 
@@ -160,7 +158,7 @@ def main(model: StructuralModel | None = None, output_dir: str | None = None):
 
     # 创建输出目录
     if output_dir is None:
-        output_dir = "results/output_geometry"
+        output_dir = "results/output_geometry/L8.5_M1.05_S_0.5"
     os.makedirs(output_dir, exist_ok=True)
 
     # 1. 导出节点坐标
@@ -175,8 +173,7 @@ def main(model: StructuralModel | None = None, output_dir: str | None = None):
 
     sorted_beam_ids = sorted(model.beams.keys())
     line_records = [
-        (model.beams[beam_id].start_node, model.beams[beam_id].end_node)
-        for beam_id in sorted_beam_ids
+        (model.beams[beam_id].start_node, model.beams[beam_id].end_node) for beam_id in sorted_beam_ids
     ]
     line_map = {
         frozenset([start_node, end_node]): index + 1
