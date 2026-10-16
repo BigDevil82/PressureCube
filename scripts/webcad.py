@@ -27,11 +27,10 @@ def load_env(path: Path) -> None:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
-        os.environ.setdefault(key.strip(), value)
-    # Accept the short keys already used in the local credential file.
-    for short, full in [("username", "WEBCAD_USERNAME"), ("password", "WEBCAD_PASSWORD")]:
-        if os.getenv(short):
-            os.environ.setdefault(full, os.environ[short])
+        # Normalize before touching os.environ: Windows treats username and the
+        # system USERNAME as the same key. Never replace/use the OS login name.
+        key = {"username": "WEBCAD_USERNAME", "password": "WEBCAD_PASSWORD"}.get(key.strip(), key.strip())
+        os.environ.setdefault(key, value)
 
 
 def trial_plan() -> dict:

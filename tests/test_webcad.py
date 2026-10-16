@@ -176,13 +176,14 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(os.environ["WEBCAD_PASSWORD"], "literal#with=sign")
 
     def test_local_short_login_keys(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {}, clear=True):
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {"USERNAME": "windows-login"}, clear=True):
             path = Path(directory) / ".env.local"
             path.write_text('username=user\npassword=test-secret\n', encoding="utf-8")
             load_env(path)
             import os
             self.assertEqual(os.environ["WEBCAD_USERNAME"], "user")
             self.assertEqual(os.environ["WEBCAD_PASSWORD"], "test-secret")
+            self.assertEqual(os.environ["USERNAME"], "windows-login")
 
 
 class ExportTests(unittest.TestCase):
