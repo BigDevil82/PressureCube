@@ -120,7 +120,7 @@ class WebCADClient:
         data = result.get("data") or {}
         token = data.get("access_token") or data.get("accessToken")
         if not token:
-            raise WebCADError("Login did not return data.access_token/accessToken; verify credentials and platform login settings")
+            raise WebCADError(f"Login failed (code={result.get('code', 'unknown')}); no access_token received; verify username, password, clientId and tenantId")
         self.http.headers["Authorization"] = f"Bearer {token}"
 
     def sessions(self) -> list[dict]:

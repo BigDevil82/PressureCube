@@ -57,6 +57,7 @@ def main() -> None:
     parser.add_argument("--mapping", type=Path)
     parser.add_argument("--plan", type=Path, help="Reviewed plan from the actual final model; required for export")
     parser.add_argument("--base-url", default="https://124.223.165.124:4006", help="Defaults to the supplied JS example server")
+    parser.add_argument("--ca-bundle", type=Path, help="Trusted CA certificate bundle for this connection only")
     parser.add_argument("--confirm-create", action="store_true", help="Explicitly create and save in the target editor")
     args = parser.parse_args()
     load_env(args.env_file)
@@ -74,6 +75,8 @@ def main() -> None:
     if args.action == "export" and not args.plan:
         parser.error("Export requires --plan from the actual final model")
     config = WebCADConfig.from_env()
+    if args.ca_bundle:
+        config.verify_tls = str(args.ca_bundle.resolve())
     if config.verify_tls is False:
         print("WARNING: TLS verification is explicitly disabled for this connection")
     client = WebCADClient(config)

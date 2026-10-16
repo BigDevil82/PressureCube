@@ -29,6 +29,8 @@ CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WE
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\webcad.py probe
+# 使用已提供的 CA，不修改系统证书库
+.\.venv\Scripts\python.exe scripts\webcad.py probe --ca-bundle "docs\WebCAD对接\2.证书安装\ca_all.crt"
 ```
 
 该命令只读：获取会话、构件类型及六种梁柱的实时 Schema，输出到 `results/webcad`。没有会话、多个未指定会话、认证失败或 Schema 不符合文档时中止，不任意选择最后一个页面。
@@ -104,7 +106,7 @@ CLI 预览使用现有 `scripts/export_geometry.py` 的默认工程模型，只�
 
 2026-10-16：示例地址可达；正常证书验证提示缺少可信证书链；仅对一次不带凭据的诊断请求临时关闭验证后，`GET /api/cad-agent/sessions` 返回 HTTP 401，错误为 `Invalid or missing WebCAD admin token`。当前尚未证明登录、有效会话、Schema、创建和保存成功。
 
-随后已用本地账号配置尝试加密登录，请求仍在 TLS 握手阶段因证书链校验失败中止。用户选择保持证书校验并提供 CA；等待配置 `WEBCAD_CA_BUNDLE`，不使用关闭证书验证的方式发送凭据。
+用户选择保持证书校验并提供 `2.证书安装/ca_all.crt` 后，使用该 CA 的 TLS 校验已通过；加密登录返回业务 `code: 500`、消息“用户不存在/密码错误”，未返回 token。已停止继续重试，待核对账号与登录配置。不使用关闭证书验证的方式发送凭据。
 
 离线默认模型预览读取到 906 根实际杆件，生成待确认列表；未执行远程创建。新增测试覆盖登录加密、CA 传递、梁柱和截面映射、实时 Schema 校验、重复导出、超时及保存失败记录；现有分组优化、RFEM 导出与工程布局回归测试也已通过。
 
