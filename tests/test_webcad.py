@@ -79,6 +79,7 @@ class MappingTests(unittest.TestCase):
     def test_column_order(self):
         member = build_export_plan(model(axis="z", reverse=True), ready_mapping())["members"][0]
         self.assertTrue(member["type"].endswith("Pillar"))
+        self.assertEqual(member["params"]["typeCode"], "15-002")
         self.assertLess(member["params"]["startPoint"]["z"], member["params"]["endPoint"]["z"])
 
     def test_unknown_dimensions_and_rotation_not_guessed(self):
@@ -88,7 +89,7 @@ class MappingTests(unittest.TestCase):
         self.assertNotIn("outerArcRadiusR", plan["members"][0]["params"]["sectionParams"])
 
     def test_open_sections_require_confirmation(self):
-        for cls, expected in [(HShapeSection, "gongShaped"), (ChannelSection, "channel")]:
+        for cls, expected in [(HShapeSection, "hShaped"), (ChannelSection, "channel")]:
             with self.subTest(cls=cls):
                 plan = build_export_plan(model(BeamType.MAIN, sec=section(cls, "open")))
                 self.assertIn(expected, plan["members"][0]["type"])

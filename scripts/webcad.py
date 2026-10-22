@@ -88,12 +88,12 @@ def main() -> None:
             client.select_session()
             types = client.call_tool("cad.node.list_types")
             write_json(args.output_dir / "types.json", types)
-            for family in ["squareTubeSteel", "gongShapedSteel", "channelSteel"]:
+            for family in ["squareTubeSteel", "hShapedSteel", "gongShapedSteel", "channelSteel"]:
                 for kind in ["Girder", "Pillar"]:
                     node_type = f"structure.{family}{kind}"
                     schema = client.describe_type(node_type)
                     write_json(args.output_dir / f"{node_type}.json", schema)
-            print("Saved target sessions, supported types and six live schemas; no model changes")
+            print("Saved target sessions, supported types and eight live schemas; no model changes")
         else:
             plan = trial_plan() if args.action == "trial" else json.loads(args.plan.read_text(encoding="utf-8"))
             manifest = args.output_dir / ("trial_manifest.json" if args.action == "trial" else "export_manifest.json")
