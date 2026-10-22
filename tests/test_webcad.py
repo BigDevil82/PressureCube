@@ -8,9 +8,10 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from scripts.webcad import load_env, trial_plan
+from scripts.webcad import load_env, trial_plan, wait_for_sessions
 from src.integrations.webcad import MappingConfig, WebCADClient, WebCADConfig, WebCADError, build_export_plan, export_plan
 from src.integrations.webcad.client import UncertainCallError, encrypt_password
+from src.integrations.webcad.exporter import mark_export_cleared
 from src.structure.enums import BeamType
 from src.structure.structural_model import Beam, Point
 from src.structure.section_library import BoxSection, HShapeSection, ChannelSection
@@ -66,6 +67,17 @@ class FakeClient:
 
 
 class MappingTests(unittest.TestCase):
+    def test_trial_placement_is_explicitly_provisional(self):
+        plan = build_export_plan(model(), MappingConfig(trial_mode=True, use_box_reference_radius=True))
+        self.assertFalse(plan["pending"])
+        self.assertTrue(plan["test_only"])
+        self.assertTrue(plan["warnings"])
+        self.assertEqual(plan["members"][0]["params"]["crosssectionRotationAngle"], 0)
+
+    def test_trial_mode_does_not_bypass_missing_section_dimensions(self):
+        plan = build_export_plan(model(), MappingConfig(trial_mode=True))
+        self.assertTrue(plan["pending"])
+
     def test_units_group_and_frame_girder(self):
         plan = build_export_plan(model(), ready_mapping())
         self.assertFalse(plan["pending"])
@@ -112,6 +124,14 @@ class MappingTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
+    def test_editor_wait_retries_only_read_requests(self):
+        client = Mock()
+        client.sessions.side_effect = [[], [{"id": "editor", "documentId": "doc"}]]
+        with patch("scripts.webcad.time.sleep"):
+            self.assertEqual(wait_for_sessions(client, 10), [{"id": "editor", "documentId": "doc"}])
+        self.assertEqual(client.sessions.call_count, 2)
+        client.call_tool.assert_not_called()
+
     def test_login_uses_local_api(self):
         client = WebCADClient(WebCADConfig("https://example.test", username="user", password="test-secret"))
         client._request = Mock(return_value={"code": 200, "data": {"access_token": "test-token"}})
@@ -199,6 +219,35 @@ class ClientTests(unittest.TestCase):
 
 
 class ExportTests(unittest.TestCase):
+    def test_cleared_manifest_allows_new_export_after_single_list_query(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient()
+            path = Path(directory) / "previous.json"
+            export_plan(trial_plan(), client, path)
+            client.call_tool = Mock(return_value=[])
+            record = mark_export_cleared(client, path)
+            self.assertEqual(record["status"], "cleared")
+            client.call_tool.assert_called_once_with("cad.node.list")
+            client = FakeClient()
+            result = export_plan(trial_plan(), client, Path(directory) / "new.json")
+            self.assertEqual(result["status"], "saved")
+
+    def test_cannot_clear_manifest_while_previous_node_remains(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient()
+            path = Path(directory) / "previous.json"
+            export_plan(trial_plan(), client, path)
+            client.call_tool = Mock(return_value=[{"nodeId": "remote-1"}])
+            with self.assertRaises(WebCADError):
+                mark_export_cleared(client, path)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["status"], "saved")
+
+    def test_non_manifest_json_list_does_not_break_duplicate_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "types.json").write_text('[]', encoding="utf-8")
+            result = export_plan(trial_plan(), FakeClient(), Path(directory) / "manifest.json")
+            self.assertEqual(result["status"], "saved")
+
     def test_create_save_and_block_duplicates(self):
         with tempfile.TemporaryDirectory() as directory:
             client = FakeClient()

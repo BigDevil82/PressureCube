@@ -34,6 +34,8 @@ class MappingConfig:
     world_placement_confirmed: bool = False
     # GB/T 3094 Table A.1 weight-calculation radius, not a measured product radius.
     use_box_reference_radius: bool = False
+    # Explicit visual trial only: provisional placement/rotation remain warnings.
+    trial_mode: bool = False
 
 
 def _section(section, config: MappingConfig) -> tuple[str, dict, list[str], dict]:
@@ -97,6 +99,7 @@ def build_export_plan(model: StructuralModel, config: MappingConfig | None = Non
     """Read actual final beam sections, retaining unresolved engineering decisions."""
     config = config or MappingConfig()
     members = []
+    warnings = set()
     for beam_id, beam in sorted(model.beams.items()):
         if beam.is_virtual:
             continue
@@ -114,12 +117,18 @@ def build_export_plan(model: StructuralModel, config: MappingConfig | None = Non
             a, b = b, a
             delta[2] *= -1
         family, section, pending, geometry = _section(beam.section, config)
+        member_warnings = []
         if beam.beam_type == BeamType.FRAME and not pillar and not config.horizontal_frames_confirmed:
-            pending.append("Confirm horizontal FRAME members should be exported as steel girders")
+            message = "Confirm horizontal FRAME members should be exported as steel girders"
+            (member_warnings if config.trial_mode else pending).append(message)
         if not config.world_placement_confirmed:
-            pending.append("Confirm world-coordinate placement and active workplane behavior using trial members")
+            message = "Confirm world-coordinate placement and active workplane behavior using trial members"
+            (member_warnings if config.trial_mode else pending).append(message)
         key = f"{beam.beam_type.name}:{beam.on_face}:{'xyz'[axis]}:{'+' if delta[axis] > 0 else '-'}"
         angle = config.rotations.get(key)
+        if angle is None and config.trial_mode:
+            angle = 0.0
+            member_warnings.append(f"Provisional 0-degree WebCAD rotation for {key}; not verified against FEA axes")
         if angle is None:
             pending.append(f"Confirm WebCAD cross-section rotation for {key}")
         elif not isfinite(angle):
@@ -143,6 +152,9 @@ def build_export_plan(model: StructuralModel, config: MappingConfig | None = Non
             "section_geometry": geometry,
             "type": f"structure.{prefix}{'Pillar' if pillar else 'Girder'}",
             "params": params, "pending": pending,
+            "warnings": member_warnings,
         })
+        warnings.update(member_warnings)
     return {"units": "mm", "members": members,
-            "pending": sorted({p for member in members for p in member["pending"]})}
+            "pending": sorted({p for member in members for p in member["pending"]}),
+            "test_only": config.trial_mode, "warnings": sorted(warnings)}

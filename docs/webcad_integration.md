@@ -43,6 +43,22 @@ CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WE
 
 创建任务说明中的一根示例方钢管梁：100×100×5 mm、外圆角 8 mm，从 `(0,0,3000)` 到 `(4000,0,3000)` mm，旋转 0°。这是文档联调样例，不是优化方案；在目标试验模型中执行。创建前用实时 Schema 校验，成功后调用 `cad.document.save`。在浏览器检查尺寸、位置、朝向和刷新后持久化。试建记录为 `results/webcad/trial_manifest.json`。
 
+## 完整钢结构试建
+
+```powershell
+.\.venv\Scripts\python.exe -u scripts\webcad.py cabin --confirm-create --ca-bundle "docs\WebCAD对接\2.证书安装\ca_all.crt" --cleared-manifest results/webcad/trial_manifest.json
+```
+
+`cabin` 读取当前 `export_geometry.py` 的默认工程模型，创建钢结构骨架，不包括舱壁板、玻璃、连接节点和机电构件，也不冒充优化后的最终方案。当前默认参数为长 8.5 m、宽 3.7 m、高 3.3 m、主梁间距 1.05 m、支撑梁最大间距 0.5 m，右侧第 1、2 跨窗洞。原始模型共有 906 个实际杆段：102 个方管梁段、84 个方管柱段、413 个 H 型钢梁段、307 个槽钢梁段；杆段数量不等于完整工程构件数量。
+
+这是显式的视觉试建模式：`MappingConfig.trial_mode=True`，同时开启方管理论参考圆角。缺少用户旋转映射的杆段先用平台 0°；世界坐标、工作面行为、水平 FRAME 杆件分类和局部轴对应仍记录为 `warnings`，不会标为已经验证。未知截面尺寸仍然阻止创建，不通过试建模式绕过。已给定的 `rotations` 优先于临时 0°。正式导出默认关闭试建模式，仍需要解决 `pending`。
+
+创建前统一校验全部类型的实时 Schema；之后串行发送创建请求，只检查每次响应并写记录，不逐根调用读取工具。每 25 根显示一次进度，全部成功后保存。计划与记录分别为 `results/webcad/cabin_plan.json`、`results/webcad/export_manifest.json`。
+
+如果旧的单根测试构件已由用户删除，`--cleared-manifest` 会在同一目标文档中用一次 `cad.node.list` 确认旧记录内全部 nodeId 已不存在，再把旧记录标为 `cleared`。它不删除任何远程构件；未删除、目标文档不符或旧记录包含不确定创建结果时拒绝自动清理。没有旧记录需要处理时省略该参数。
+
+编辑页尚未建立 CAD Agent 会话时，可添加 `--wait-for-editor 120` 有限等待；期间只查询会话，不重复登录或发送创建请求。超时仍无会话则停止，不绕过连接条件。
+
 ## 最终模型与 Streamlit 入口
 
 直接读取原始 `StructuralModel` 中每根实际杆件的 `section`、`beam_type`、`on_face` 和 `section_assignment.beam_groups`，不再按四大类别硬编码截面值，因而保留构件分组优化后的真实截面差异。跳过虚拟杆，拒绝带 `parent_id` 的有限元网格模型。当前逐条导出原始几何杆段，不自动合并成四根整柱。
@@ -88,6 +104,7 @@ CLI 预览使用现有 `scripts/export_geometry.py` 的默认工程模型，只�
 - `horizontal_frames_confirmed`：确认水平 FRAME 杆件按普通钢梁创建。
 - `world_placement_confirmed`：实测确认世界坐标、工作面和截面定位行为后开启。
 - `use_box_reference_radius`：显式启用 GB/T 3094—2012 表 A.1 注中的理论计算参考圆角，默认关闭；开启不表示已确认厂家实测圆角或供货工艺。
+- `trial_mode`：仅用于视觉试建，允许把未核实的放置约定与临时 0° 朝向记录为警告；不放宽截面尺寸和 Schema 校验，不用于宣称实体与有限元完全一致。
 
 预览保留所有 `pending`，正式导出拒绝任何未确认项；不补猜测的半径、旋转角、材质或工作面 ID。方管映射 `squareTubeSteel*`；根据新提供的 GB/T 11263—2024，HShape 对应 `hShapedSteel*`，不能按普通工字钢 `gongShapedSteel*` 的字段传入；槽钢映射 `channelSteel*`。钢柱业务编码按实时 Schema 的 `businessQuery` 使用 `15-002`，不沿用静态文档的 `02-003`。
 

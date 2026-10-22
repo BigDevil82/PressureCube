@@ -21,16 +21,41 @@ def write_json(path: Path, value) -> None:
 def validate_members(client: WebCADClient, members: list[dict]) -> dict:
     """Validate every request against live schemas before the first write."""
     schemas = {}
+    validators = {}
     for member in members:
         node_type = member["type"]
         if node_type not in schemas:
             schemas[node_type] = client.describe_type(node_type)
-        schema = schemas[node_type]["createSchema"]
-        validator = validator_for(schema)
-        validator.check_schema(schema)
+            schema = schemas[node_type]["createSchema"]
+            validator = validator_for(schema)
+            validator.check_schema(schema)
+            validators[node_type] = validator(schema)
         # No defaults, guessed fields, or silent field deletion here.
-        validator(schema).validate(member["params"])
+        validators[node_type].validate(member["params"])
     return schemas
+
+
+def mark_export_cleared(client: WebCADClient, manifest_path: str | Path) -> dict:
+    """Acknowledge manual deletion after one list query; never delete remotely."""
+    path = Path(manifest_path)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if record["status"] != "saved" or not record["members"] or any(not m.get("node_id") for m in record["members"]):
+        raise WebCADError("Only a saved manifest with known node IDs can be reconciled automatically")
+    client.authenticate()
+    target = client.select_session()
+    previous = record["target"]
+    if previous["base_url"] != client.config.base_url.rstrip("/") or not previous.get("document_id") or previous["document_id"] != target.get("documentId"):
+        raise WebCADError("Target document does not match the previous export")
+    nodes = client.call_tool("cad.node.list")
+    if not isinstance(nodes, list) or any(not isinstance(n, dict) or not n.get("nodeId") for n in nodes):
+        raise WebCADError("Unexpected node list response; cannot confirm removal")
+    remaining = {m["node_id"] for m in record["members"]} & {n["nodeId"] for n in nodes}
+    if remaining:
+        raise WebCADError(f"Previous export still has {len(remaining)} nodes in the document")
+    record["status"] = "cleared"
+    record["clearance"] = "Tracked nodes absent from cad.node.list after user-reported manual deletion"
+    write_json(path, record)
+    return record
 
 
 def export_plan(
@@ -59,13 +84,16 @@ def export_plan(
         previous_target = data.get("target", {}) if isinstance(data, dict) else {}
         same_document = bool(identity["document_id"]) and previous_target.get("document_id") == identity["document_id"]
         same_session = previous_target.get("session_id") == identity["session_id"]
-        if previous_target.get("base_url") == identity["base_url"] and (same_document or same_session):
+        previous_status = data.get("status") if isinstance(data, dict) else None
+        if previous_status != "cleared" and previous_target.get("base_url") == identity["base_url"] and (same_document or same_session):
             raise WebCADError("This target already has an export manifest; reconcile existing nodes before re-exporting")
     if path.exists():
         raise WebCADError("Manifest already exists; inspect it instead of retrying")
     schemas = validate_members(client, plan["members"])
     fingerprint = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
-    record = {"target": identity, "fingerprint": fingerprint, "status": "creating", "members": [], "schemas": schemas}
+    record = {"target": identity, "fingerprint": fingerprint, "status": "creating", "members": [], "schemas": schemas,
+              "test_only": plan.get("test_only", False), "warnings": plan.get("warnings", []),
+              "model_parameters": plan.get("model_parameters", {}), "total_members": len(plan["members"])}
     # Exclusive creation also guards same-path simultaneous callers.
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("x", encoding="utf-8") as stream:
