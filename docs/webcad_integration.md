@@ -59,6 +59,8 @@ CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WE
 
 编辑页尚未建立 CAD Agent 会话时，可添加 `--wait-for-editor 120` 有限等待；期间只查询会话，不重复登录或发送创建请求。超时仍无会话则停止，不绕过连接条件。
 
+后续整舱重试状态（2026-10-22）：用户已授权清理旧测试梁后继续，但新请求在 TLS 握手阶段失败，未登录、删除或新增构件。直连诊断排除了仅由环境代理导致的可能：服务器叶证书 Authority Key Identifier 为 `93f2b2891b5dc212e7e55ba25f71a0b23dc45ce4`，所提供 CA 的 Subject Key Identifier 为 `3167d62a46a0d9a7eb4b135855468946263f181b`，使用所提供 CA 公钥验证叶证书签名失败。颁发者名称相同不能证明密钥相同；本机信任库也只有当前这份 CA。需平台提供可验证当前服务器证书链的 CA/中间证书，或恢复匹配原 CA 的服务器证书。保持 TLS 验证，不使用 `verify=False` 绕过。
+
 ## 最终模型与 Streamlit 入口
 
 直接读取原始 `StructuralModel` 中每根实际杆件的 `section`、`beam_type`、`on_face` 和 `section_assignment.beam_groups`，不再按四大类别硬编码截面值，因而保留构件分组优化后的真实截面差异。跳过虚拟杆，拒绝带 `parent_id` 的有限元网格模型。当前逐条导出原始几何杆段，不自动合并成四根整柱。
