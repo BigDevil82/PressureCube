@@ -65,6 +65,10 @@ CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WE
 
 平台随后确认重新生成证书并提供 `2.证书安装/ca.crt`。已按用户授权安装至 `Cert:\CurrentUser\Root`，指纹（SHA-1）为 `1D0A1C5A3F4AF68CC3FF76F09BC1CD6F764DCF48`，SHA-256 为 `17278cf1f38a66f5a87c9e0206634c8a4f8061d604f018cdc1ccda75c739d800`。新 CA 的 SKI 与服务器 AKI 一致，签名验证通过；使用新 CA 的公网请求报错已变为 `IP address mismatch`，原因仍是服务器 SAN 没有公网 IP。文档内网示例 `https://10.1.1.112:3001` 从本机直连超时，不能作为当前替代入口。尚未删除旧测试梁或创建整舱；需平台为实际公网地址签发匹配 SAN 的服务器证书，或提供可达且证书匹配的正式入口。客户端现保留具体 TLS 错误，区分 CA 链和地址不匹配，不统一建议更换 CA。
 
+2026-10-22 平台再次替换服务器证书后，公网入口的 CA 链和 IP 地址校验均已通过，账号登录成功。当前叶证书 SHA-256 为 `aac340d58184c02687ff2beeeecb8847cf858fe74b0b709c4178ef469fefc656`，SAN 已包含 `124.223.165.124`。前述 TLS 阻塞已解除，无需关闭证书校验。刷新编辑页后恢复了 `mcp-demo` 会话；一次列表查询确认旧测试梁已不存在，原 `trial_manifest.json` 已保留并标为 `cleared`，未删除其他构件。
+
+随后整舱请求通过实时 Schema 校验并开始创建。前 380 个杆段返回成功及 nodeId，第 381 个请求返回 HTTP 404，重新查询编辑会话列表为空。导出记录 `results/webcad/export_manifest.json` 状态为 `interrupted`，包含 380 个 `created` 和 1 个 `failed`；尚未调用整舱保存，其余 525 个杆段尚未发送。会话消失的具体原因待平台或浏览器侧核实，不能将已返回成功视为已持久化。恢复连接后须先核对已创建构件，再决定清理或续建，不能直接重跑整舱命令。此次相关 37 项单元测试通过，未修改分析或优化逻辑。
+
 ## 最终模型与 Streamlit 入口
 
 直接读取原始 `StructuralModel` 中每根实际杆件的 `section`、`beam_type`、`on_face` 和 `section_assignment.beam_groups`，不再按四大类别硬编码截面值，因而保留构件分组优化后的真实截面差异。跳过虚拟杆，拒绝带 `parent_id` 的有限元网格模型。当前逐条导出原始几何杆段，不自动合并成四根整柱。
@@ -154,7 +158,7 @@ GB/T 3094—2012 表 A.1 注用于理论重量计算：S≤6 时 R=1.5S，S>6 �
 - 实时 Schema 校验后成功创建一根 `structure.squareTubeSteelGirder`。截面为 100×100×5 mm、外圆角 8 mm，起点 `(0,0,3000)`、终点 `(4000,0,3000)` mm，定位 0、旋转 0°；创建响应中的实际参数与请求一致。
 - 创建的 `nodeId` 为 `7341552054505472_M09_YH-s`；`cad.document.save` 返回成功；随后独立调用 `cad.node.list` 再次查询到该构件。
 
-会话、类型、Schema、创建记录与只读复核分别位于 `results/webcad/sessions.json`、`types.json`、`structure.*.json`、`trial_manifest.json` 和 `node_list_after_trial.json`，不纳入 Git。尚未通过浏览器刷新验证持久化，也未导入完整增压舱。
+会话、类型、Schema、创建记录与只读复核分别位于 `results/webcad/sessions.json`、`types.json`、`structure.*.json`、`trial_manifest.json` 和 `node_list_after_trial.json`，不纳入 Git。以上为首次单构件联调记录；后续整舱中断情况见“完整钢结构试建”，尚未完成完整增压舱的保存和持久化验收。
 
 离线默认模型预览读取到 906 根实际杆件，生成待确认列表。单构件联调时 21 项 WebCAD 测试通过；标准参数补充后共 30 项测试通过，覆盖原两套库全部 H/槽钢匹配、方管参考圆角显式选择、出处保留及分析数据不变。现有分组优化、RFEM 导出与工程布局测试在前次开发时已通过。
 
