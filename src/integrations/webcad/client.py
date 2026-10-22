@@ -109,7 +109,7 @@ class WebCADClient:
             return
         if not self.config.username or not self.config.password:
             raise WebCADError("Set WEBCAD_ACCESS_TOKEN or WEBCAD_USERNAME and WEBCAD_PASSWORD")
-        result = self._request("POST", "/dev-api/auth/login", {
+        result = self._request("POST", "/local-api/auth/login", {
             "tenantId": self.config.tenant_id,
             "username": self.config.username,
             "password": encrypt_password(self.config.password),

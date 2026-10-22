@@ -23,7 +23,7 @@ WEBCAD_PASSWORD=你的密码
 # WEBCAD_VERIFY_TLS=false
 ```
 
-密码加密严格参照所附 JS：随机 32 字符 AES 密钥、AES-ECB/PKCS7 加密密码、RSA PKCS1v15 加密 Base64 密钥，二者以 `|` 连接。登录路径为 `/dev-api/auth/login`，Bearer token 只保留在内存中，不输出或写入导出记录。公钥、clientId、tenantId 来自示例，部署环境是否相同仍需用实际登录验证；后两者支持环境变量覆盖。登录不自动刷新或重试。
+密码加密严格参照所附 JS：随机 32 字符 AES 密钥、AES-ECB/PKCS7 加密密码、RSA PKCS1v15 加密 Base64 密钥，二者以 `|` 连接。根据平台技术人员 2026-10-22 的调整，登录路径改为 `/local-api/auth/login`（原 `/dev-api/auth/login`）；会话与工具调用仍使用 `/api/cad-agent/...`。Bearer token 只保留在内存中，不输出或写入导出记录。公钥、clientId、tenantId 来自示例，部署环境是否相同仍需用实际登录验证；后两者支持环境变量覆盖。登录不自动刷新或重试。
 
 CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WEBCAD_*` 环境变量优先。CLI 默认地址取所附 JS 的示例地址，可用 `--base-url` 或 `WEBCAD_BASE_URL` 指定实际环境；Python API 则要求显式配置地址。
 
@@ -104,18 +104,24 @@ CLI 预览使用现有 `scripts/export_geometry.py` 的默认工程模型，只�
 
 ## 实测状态与待确认
 
-2026-10-16：示例地址可达；正常证书验证提示缺少可信证书链；仅对一次不带凭据的诊断请求临时关闭验证后，`GET /api/cad-agent/sessions` 返回 HTTP 401，错误为 `Invalid or missing WebCAD admin token`。当前尚未证明登录、有效会话、Schema、创建和保存成功。
+2026-10-16 的联调中，使用提供的 CA 后 TLS 校验通过，但旧 `/dev-api/auth/login` 返回“用户不存在/密码错误”。Windows 系统 `USERNAME` 与本地 `username` 的同名冲突已修正：简写先转换为 `WEBCAD_*`，不读取或覆盖系统登录名。
 
-用户选择保持证书校验并提供 `2.证书安装/ca_all.crt` 后，使用该 CA 的 TLS 校验已通过；加密登录返回业务 `code: 500`、消息“用户不存在/密码错误”，未返回 token。已停止继续重试，待核对账号与登录配置。不使用关闭证书验证的方式发送凭据。
+2026-10-22，平台技术人员调整后，按要求把登录前缀改为 `/local-api`，已实测完成：
 
-已修正 Windows 下系统 `USERNAME` 与 `.env.local` 的 `username` 同名冲突：简写字段先转换为 `WEBCAD_*` 再写入环境变量，不读取或覆盖系统登录名。已确认本地两份配置的用户名一致，密码、clientId、tenantId、公钥也与 JS 示例一致；显式指定正确用户名仍返回登录失败。实际浏览器地址与服务端账号所属环境尚待确认。
+- 使用 `2.证书安装/ca_all.crt`，全程开启 TLS 证书校验；原加密算法、公钥、clientId 和 tenantId 可用，账号密码登录成功。
+- 获取到唯一编辑会话，目标文档为 `mcp-demo`。
+- `cad.node.list_types` 和六种钢梁、钢柱的 `cad.node.describe_type` 均成功，Schema 已保存到 `results/webcad`。方管外圆角、工字钢/槽钢两个圆角均为必填项，不能省略或臆造。
+- 实时 Schema 校验后成功创建一根 `structure.squareTubeSteelGirder`。截面为 100×100×5 mm、外圆角 8 mm，起点 `(0,0,3000)`、终点 `(4000,0,3000)` mm，定位 0、旋转 0°；创建响应中的实际参数与请求一致。
+- 创建的 `nodeId` 为 `7341552054505472_M09_YH-s`；`cad.document.save` 返回成功；随后独立调用 `cad.node.list` 再次查询到该构件。
 
-离线默认模型预览读取到 906 根实际杆件，生成待确认列表；未执行远程创建。新增测试覆盖登录加密、CA 传递、梁柱和截面映射、实时 Schema 校验、重复导出、超时及保存失败记录；现有分组优化、RFEM 导出与工程布局回归测试也已通过。
+会话、类型、Schema、创建记录与只读复核分别位于 `results/webcad/sessions.json`、`types.json`、`structure.*.json`、`trial_manifest.json` 和 `node_list_after_trial.json`，不纳入 Git。尚未通过浏览器刷新验证持久化，也未导入完整增压舱。
+
+离线默认模型预览读取到 906 根实际杆件，生成待确认列表。当前 WebCAD 测试共 21 项通过，包含新登录路径回归测试；现有分组优化、RFEM 导出与工程布局测试在前次开发时已通过。
 
 仍须联调确认：
 
-1. 实际登录凭据、示例公钥及客户端配置适用性；TLS 证书链；有效 token 是否具有该 HTTP 入口权限。
-2. 目标编辑会话及六种类型的实时 Schema；文档使用 `get_by_id`，旧接入说明列 `get`，读取工具名称及入参须核实，不自动猜测调用。
+1. 在浏览器检查试建实体的可视几何、坐标与截面朝向，并通过刷新检查保存后的持久化；API 成功不等同于这些人工验收已完成。
+2. 单构件详细读取工具：文档使用 `get_by_id`，旧接入说明列 `get`，工具名称及入参仍须核实。本次只读复核使用已确认可用的 `cad.node.list`。
 3. 本地 HShape 的 `tf` 沿用原数据字段 `l`；槽钢缺少 `t` 时本地用腹板厚回退。平台要求平均腿厚等定义，不能未经确认当作完全相同。
 4. 型钢圆角未保存在 `SectionProperties`；应按真实型号补齐，不编造标准值。
 5. 本地 `FRAME` 同时包含竖向与水平杆件。暂按竖向 FRAME 为柱、水平为梁生成候选计划，需确认与四角柱业务定义一致；原始杆段也不等同四根完整柱。

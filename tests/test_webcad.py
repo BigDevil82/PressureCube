@@ -111,6 +111,17 @@ class MappingTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
+    def test_login_uses_local_api(self):
+        client = WebCADClient(WebCADConfig("https://example.test", username="user", password="test-secret"))
+        client._request = Mock(return_value={"code": 200, "data": {"access_token": "test-token"}})
+        with patch("src.integrations.webcad.client.encrypt_password", return_value="encrypted"):
+            client.authenticate()
+        args = client._request.call_args.args
+        self.assertEqual(args[:2], ("POST", "/local-api/auth/login"))
+        self.assertEqual(args[2]["password"], "encrypted")
+        self.assertEqual(client.http.headers["Authorization"], "Bearer test-token")
+        client.close()
+
     def test_ca_bundle_is_used_without_disabling_tls(self):
         with patch.dict("os.environ", {"WEBCAD_BASE_URL": "https://example.test", "WEBCAD_CA_BUNDLE": "trusted-ca.pem"}, clear=True):
             config = WebCADConfig.from_env()
