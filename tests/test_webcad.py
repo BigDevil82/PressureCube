@@ -124,6 +124,14 @@ class MappingTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
+    def test_tls_error_preserves_hostname_mismatch_diagnostic(self):
+        client = WebCADClient(WebCADConfig("https://example.test"))
+        client.http.request = Mock(side_effect=requests.exceptions.SSLError("IP address mismatch"))
+        with self.assertRaisesRegex(WebCADError, "IP address mismatch"):
+            client._request("GET", "/api/cad-agent/sessions")
+        self.assertIs(client.http.request.call_args.kwargs["verify"], True)
+        client.close()
+
     def test_editor_wait_retries_only_read_requests(self):
         client = Mock()
         client.sessions.side_effect = [[], [{"id": "editor", "documentId": "doc"}]]

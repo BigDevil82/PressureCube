@@ -93,7 +93,7 @@ class WebCADClient:
                 allow_redirects=False,
             )
         except requests.exceptions.SSLError as exc:
-            raise WebCADError("TLS verification failed; configure WEBCAD_CA_BUNDLE or explicitly opt in to test-only TLS bypass") from exc
+            raise WebCADError(f"TLS verification failed: {exc}. Check the CA chain and certificate hostname/SAN; validation remains enabled") from exc
         except requests.RequestException as exc:
             raise UncertainCallError(f"{method} {path}: network failure; verify the remote state before retrying") from exc
         if not 200 <= response.status_code < 300:

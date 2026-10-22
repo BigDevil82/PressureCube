@@ -30,7 +30,7 @@ CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WE
 ```powershell
 .\.venv\Scripts\python.exe scripts\webcad.py probe
 # 使用已提供的 CA，不修改系统证书库
-.\.venv\Scripts\python.exe scripts\webcad.py probe --ca-bundle "docs\WebCAD对接\2.证书安装\ca_all.crt"
+.\.venv\Scripts\python.exe scripts\webcad.py probe --ca-bundle "docs\WebCAD对接\2.证书安装\ca.crt"
 ```
 
 该命令只读：获取会话、构件类型及方管、H 型钢、工字钢、槽钢共八种梁柱的实时 Schema，输出到 `results/webcad`。没有会话、多个未指定会话、认证失败或 Schema 不符合文档时中止，不任意选择最后一个页面。
@@ -46,7 +46,7 @@ CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WE
 ## 完整钢结构试建
 
 ```powershell
-.\.venv\Scripts\python.exe -u scripts\webcad.py cabin --confirm-create --ca-bundle "docs\WebCAD对接\2.证书安装\ca_all.crt" --cleared-manifest results/webcad/trial_manifest.json
+.\.venv\Scripts\python.exe -u scripts\webcad.py cabin --confirm-create --ca-bundle "docs\WebCAD对接\2.证书安装\ca.crt" --cleared-manifest results/webcad/trial_manifest.json
 ```
 
 `cabin` 读取当前 `export_geometry.py` 的默认工程模型，创建钢结构骨架，不包括舱壁板、玻璃、连接节点和机电构件，也不冒充优化后的最终方案。当前默认参数为长 8.5 m、宽 3.7 m、高 3.3 m、主梁间距 1.05 m、支撑梁最大间距 0.5 m，右侧第 1、2 跨窗洞。原始模型共有 906 个实际杆段：102 个方管梁段、84 个方管柱段、413 个 H 型钢梁段、307 个槽钢梁段；杆段数量不等于完整工程构件数量。
@@ -62,6 +62,8 @@ CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WE
 后续整舱重试状态（2026-10-22）：用户已授权清理旧测试梁后继续，但新请求在 TLS 握手阶段失败，未登录、删除或新增构件。直连诊断排除了仅由环境代理导致的可能：服务器叶证书 Authority Key Identifier 为 `93f2b2891b5dc212e7e55ba25f71a0b23dc45ce4`，所提供 CA 的 Subject Key Identifier 为 `3167d62a46a0d9a7eb4b135855468946263f181b`，使用所提供 CA 公钥验证叶证书签名失败。颁发者名称相同不能证明密钥相同；本机信任库也只有当前这份 CA。需平台提供可验证当前服务器证书链的 CA/中间证书，或恢复匹配原 CA 的服务器证书。保持 TLS 验证，不使用 `verify=False` 绕过。
 
 补充证据：单构件成功记录的本地保存时间为 2026-10-22 10:32:16（北京时间），当前叶证书 NotBefore 为同日 15:41:04（北京时间），不能视作上午成功时同一份有效证书。连续三次直连取得相同 SHA-256 指纹 `a24fe49de5ff1a01372251fde23e83a0697931a28ad856c9d196bea820b3eefb`，服务端当前只发送一张叶证书；SAN 仅含 `10.1.1.110/111/112/113/115`，未含访问入口 `124.223.165.124`。即使补齐 CA，公网 IP 的名称校验也需要处理。由部署、证书重载还是网关切换导致，客户端无法确定；应由平台恢复原入口证书，或提供匹配当前证书的可信链及覆盖实际访问地址的证书/正式域名。
+
+平台随后确认重新生成证书并提供 `2.证书安装/ca.crt`。已按用户授权安装至 `Cert:\CurrentUser\Root`，指纹（SHA-1）为 `1D0A1C5A3F4AF68CC3FF76F09BC1CD6F764DCF48`，SHA-256 为 `17278cf1f38a66f5a87c9e0206634c8a4f8061d604f018cdc1ccda75c739d800`。新 CA 的 SKI 与服务器 AKI 一致，签名验证通过；使用新 CA 的公网请求报错已变为 `IP address mismatch`，原因仍是服务器 SAN 没有公网 IP。文档内网示例 `https://10.1.1.112:3001` 从本机直连超时，不能作为当前替代入口。尚未删除旧测试梁或创建整舱；需平台为实际公网地址签发匹配 SAN 的服务器证书，或提供可达且证书匹配的正式入口。客户端现保留具体 TLS 错误，区分 CA 链和地址不匹配，不统一建议更换 CA。
 
 ## 最终模型与 Streamlit 入口
 
