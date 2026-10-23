@@ -136,7 +136,66 @@ H150×100 沿 X 梁的实测外包范围为 Y 向 150 mm、Z 向 100 mm；因此
 
 两轮请求均全部成功，保存文档核对存在 19 个测试节点；其 `hasBackendSave=false`，该字段及保存接口是否真正触发后台落库仍须平台确认，不能仅凭返回序列化文档就承诺刷新后持久化。测试件保留供浏览器查看，后台保存需人工确认。请求、原始文档及测量结果位于 `results/webcad/cut_tests/experiment.json`、`followup.json`，简报为 `report.md`，均不跟踪。相关单元测试共 50 项通过。
 
-## 最终模型与 Streamlit 入口
+## 本地精确定位与端部截断
+
+2026-10-23 新增 `production.py`（布局转换）、`profiles.py`（解析截面）与 `production_export.py`（创建和 BREP 验收），不再依赖平台钢梁旋转和自动切割。原 `cabin/export` 命令保留为原生钢构件的视觉试建；需要外尺寸、面平齐和无贯穿的几何模型时使用独立的 `scripts/webcad_production.py`。
+
+### 几何约定
+
+- 输入必须为未网格化的轴线模型，单位 m；输出统一为 mm，X 为宽度、Y 为长度、Z 为高度。
+- 尺寸基准为钢骨架外包面，尚不包含壁板、玻璃、保温层和连接件。主舱长度不包含原模型单独定义的扩展段。
+- 同直线、同分组、同截面、同类型及同所属面的连续杆段先合并；不跨优化分组或截面变化合并。各加工件的 `stock_id/source_ids` 可追溯至这一组原始杆段。
+- 截面高度沿所属面法向，宽度在面内且与杆轴垂直，两个截面轴与正向杆轴构成右手系。槽钢开口按面中心方向统一；H 型钢及方管保留内外圆角，槽钢保留 1:10 翼缘斜度和圆角。当前 H150×100、方管 150×150×6 和槽钢 20b 的解析面积均与实测原生截面 BREP 一致，方管理论参考圆角的供货确认要求不变。
+- 按各自实际截面尺寸向舱内偏移，使顶、底和各侧面的外表面平齐；主舱在与扩展段共享的边界优先定位。不是给所有构件统一减去同一个尺寸。
+- 柱优先于同类水平杆，随后按边框、主梁、次梁、支撑排序；同级采用固定的轴向和坐标顺序。低优先构件在高优先构件的外包接触面处计算平直端部，不做空心型钢相减，不生成缺口碎片。
+- `gap_mm=0` 表示几何接触，可显式设置正装配间隙；不擅自填入焊缝或加工余量。若整个连续杆会被吃掉、外尺寸/所属面平齐不符或仍有包围盒体积重叠，拒绝导出。
+- 靠边的内部排架若因边框内移而放不下，会整排联动调整，而不是静默删杆。当前默认模型的 Y=8400 mm 一排调整为 Y=8250 mm；外尺寸不变，原轴网不再被无条件视为加工定位。
+
+### 平台表示与核对
+
+平台创建类型为 `engine.prism`，草图中显式给出世界坐标、圆弧、内孔及工作面法向，沿杆轴按本地净长拉伸。H 型钢和空心方管试样已实测核对朝向、圆角、内孔和体积。批量接口仅传 `id/sketch/lengthStart/lengthEnd`：本次发现 `engine.prism` 拒绝 `name/userData` 等额外参数，因此不能假称它仍是平台原生钢梁业务节点，截面、分组、源杆和加工长度保存在外部清单中。正式请求设置 `skipCutRelations=true`，平台无需再剪切实体。
+
+导出前使用实际保存文档而不是可能过期的 `cad.node.list` 检查空模型；只允许通过显式记录列表清理本次试样，不按通配符删除。每次请求保留日志，不自动重试。已存在导出记录的目录禁止覆盖原计划和清单；新一轮方案使用新的输出目录。
+
+返回后逐件读取保存文档内的 BREP（不是逐件远程查询），使用现有 Gmsh/OpenCASCADE 验证单实体、体积与解析截面面积×净长一致、包围盒与计划一致，并复核包围盒无重叠；随后对可能接触的实体测量真实最短距离，零间隙模式下要求整个构架连通，不只检查包围盒相接。通用 `transform` 固定为单位阵，不重复变换几何。
+
+### 实测结果
+
+当前主舱参数为 8.5×3.7×3.3 m，扩展段沿负 Y 方向为 1.1 m，整体外包范围为 X=[0,3700]、Y=[-1100,8500]、Z=[0,3300] mm。906 个原始杆段合并为 126 条连续参考杆，截断后为 442 个实体件：边框 40、主梁 33、次梁 111、支撑 258。所有连续杆均保留，没有整条杆被吃掉；最短加工件 50 mm。
+
+已清理记录中的 19 个切割测试节点和 2 个截面试样，完成全部 442 件的创建。BREP 核对全部通过：每件为一个实体，最大包围盒误差约 1e-7 mm，无包围盒体积重叠；926 对实际接触检查全部通过，构架为一个包含 442 件的连通整体，无孤立件。批量创建 11.95 秒，创建/保存响应及逐件几何核对共 38.11 秒，追加接触核对为 18.70 秒。钢件几何理论质量约 11157.98 kg，不含板、玻璃、连接件或损耗，不能与轴线分析中的名义截面质量混为一谈。
+
+保存接口仍返回 `hasBackendSave=false`，所以仅确认前端文档和保存返回的几何，不承诺后台落库或刷新后持久化；需在页面手动保存并由平台确认。结果位于 `results/webcad/production/plan.json`、`request.json`、`cut_list.csv`、`export_manifest.json` 和 `report.md`，不纳入 Git。相关测试共 64 项通过。
+
+### 使用方法
+
+```powershell
+# 离线计算，不接触平台；输出目录不能已有导出记录
+.\.venv\Scripts\python.exe scripts\webcad_production.py --output-dir results/webcad/new_production
+# 向空白目标文档导入；页面必须保持打开
+.\.venv\Scripts\python.exe -u scripts\webcad_production.py --confirm-create --document-id 实际文档ID --ca-bundle "docs\WebCAD对接\2.证书安装\ca.crt" --output-dir results/webcad/new_production
+# 可选：--gap-mm 1；或 --plan 来自最终优化模型的生产计划.json
+```
+
+默认 CLI 仍使用 `export_geometry.py` 的当前示例模型，不冒充最优解。最终优化和 Streamlit 直接调用：
+
+```python
+from src.integrations.webcad import (
+    ProductionConfig, build_production_plan, export_production_plan,
+)
+
+plan = build_production_plan(final_model, ProductionConfig(gap_mm=0))
+# 展示 plan["grid_adjustments"]、加工清单与约定，确认后调用
+record = export_production_plan(
+    plan, client, "results/webcad/final_production/export_manifest.json",
+    document_id=target_document_id,
+    on_progress=lambda done, total: progress.progress(done / total),
+)
+```
+
+这仍是几何深化，不代表连接设计和生产图纸已经完成：焊缝、螺栓、节点板、供货圆角及公差需另行确认；门窗参数仍是原轴网名义尺寸，不保证最终净空。原 OpenSees/RFEM 模型未修改，因偏心、实际跨度和末跨排架位置已变化，投入生产前须回传进行结构一致性复核。
+
+## 原生钢构件与 Streamlit 入口
 
 直接读取原始 `StructuralModel` 中每根实际杆件的 `section`、`beam_type`、`on_face` 和 `section_assignment.beam_groups`，不再按四大类别硬编码截面值，因而保留构件分组优化后的真实截面差异。跳过虚拟杆，拒绝带 `parent_id` 的有限元网格模型。当前逐条导出原始几何杆段，不自动合并成四根整柱。
 
