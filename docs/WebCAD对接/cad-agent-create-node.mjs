@@ -1,12 +1,12 @@
-import crypto from 'node:crypto';
 import CryptoJS from 'crypto-js';
+import crypto from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // 配置（可通过环境变量覆盖）
 // ---------------------------------------------------------------------------
 const BASE_URL = (process.env.CAD_SCRIPT_BASE_URL ?? 'https://124.223.165.124:4006/').replace(/\/$/, '');
-const USERNAME = '账号';
-const PASSWORD = '密码';
+const USERNAME = 'leng123456';
+const PASSWORD = 'leng123456';
 const CLIENT_ID = 'e5cd7e4891bf95d1d19206ce24a7b32e';
 const TENANT_ID = '000000';
 const PUBLIC_KEY = `-----BEGIN RSA PUBLIC KEY-----\n${'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC/XwRpoHnvtFxR5cSzw0m220gpyydQ0fO/u2NqajTsa8A3+nm6LHAufv5rxLWafb3x7OYUnMv/5Llief/tZHNrf7ElQYRtHLk21C/gIJUkwb1F2cns6E3IKoTJOdBUbPyTy0zFeexxznCkIqmy53zLw4yJFYGK53h0OZdrUbq/ZwIDAQAB'}\n-----END RSA PUBLIC KEY-----`;
