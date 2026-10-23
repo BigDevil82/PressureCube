@@ -1,0 +1,11 @@
+{
+  "name": "cad.node.create_batch",
+  "arguments": {
+    "nodeList": [
+      /* 906 条 */
+    ],
+    "components": [],
+    "batchSize": 1000, // 每加载分片大小后保存，性能够的情况下不用给这个属性
+    "skipCutRelations": true
+  }
+}

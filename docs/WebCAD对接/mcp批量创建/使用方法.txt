@@ -1,0 +1,5 @@
+build-to-batch.mjs 降旧格式json转换成新的批量格式
+
+转换后的nodeList和components需要粘贴到 mcp数据格式(删除注释使用)
+
+后续新生成的文件可以直接按照 mcp数据格式
