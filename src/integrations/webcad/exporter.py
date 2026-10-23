@@ -39,8 +39,12 @@ def mark_export_cleared(client: WebCADClient, manifest_path: str | Path) -> dict
     """Acknowledge manual deletion after one list query; never delete remotely."""
     path = Path(manifest_path)
     record = json.loads(path.read_text(encoding="utf-8"))
-    if record["status"] != "saved" or not record["members"] or any(not m.get("node_id") for m in record["members"]):
-        raise WebCADError("Only a saved manifest with known node IDs can be reconciled automatically")
+    members = record["members"]
+    known = [m["node_id"] for m in members if m.get("node_id")]
+    if (record["status"] not in {"saved", "interrupted"} or not known
+            or any(m.get("status") not in {"created", "failed"} for m in members)
+            or any(m.get("status") == "created" and not m.get("node_id") for m in members)):
+        raise WebCADError("Only manifests with known created nodes and no uncertain writes can be reconciled automatically")
     client.authenticate()
     target = client.select_session()
     previous = record["target"]
@@ -49,13 +53,27 @@ def mark_export_cleared(client: WebCADClient, manifest_path: str | Path) -> dict
     nodes = client.call_tool("cad.node.list")
     if not isinstance(nodes, list) or any(not isinstance(n, dict) or not n.get("nodeId") for n in nodes):
         raise WebCADError("Unexpected node list response; cannot confirm removal")
-    remaining = {m["node_id"] for m in record["members"]} & {n["nodeId"] for n in nodes}
+    remaining = set(known) & {n["nodeId"] for n in nodes}
     if remaining:
         raise WebCADError(f"Previous export still has {len(remaining)} nodes in the document")
     record["status"] = "cleared"
-    record["clearance"] = "Tracked nodes absent from cad.node.list after user-reported manual deletion"
+    record["clearance"] = "Tracked nodes absent from cad.node.list; no remote deletion performed"
     write_json(path, record)
     return record
+
+
+def check_previous_exports(path: Path, identity: dict) -> None:
+    """Block duplicate exports to a target, including after partial failures."""
+    for previous in path.parent.glob("*.json"):
+        data = json.loads(previous.read_text(encoding="utf-8"))
+        previous_target = data.get("target", {}) if isinstance(data, dict) else {}
+        same_document = bool(identity["document_id"]) and previous_target.get("document_id") == identity["document_id"]
+        same_session = previous_target.get("session_id") == identity["session_id"]
+        previous_status = data.get("status") if isinstance(data, dict) else None
+        if previous_status != "cleared" and previous_target.get("base_url") == identity["base_url"] and (same_document or same_session):
+            raise WebCADError("This target already has an export manifest; reconcile existing nodes before re-exporting")
+    if path.exists():
+        raise WebCADError("Manifest already exists; inspect it instead of retrying")
 
 
 def export_plan(
@@ -78,17 +96,7 @@ def export_plan(
     target = client.select_session()
     identity = {"base_url": client.config.base_url.rstrip("/"),
                 "session_id": target["id"], "document_id": target.get("documentId")}
-    # Scan neighboring manifests as well, not only this chosen filename.
-    for previous in path.parent.glob("*.json"):
-        data = json.loads(previous.read_text(encoding="utf-8"))
-        previous_target = data.get("target", {}) if isinstance(data, dict) else {}
-        same_document = bool(identity["document_id"]) and previous_target.get("document_id") == identity["document_id"]
-        same_session = previous_target.get("session_id") == identity["session_id"]
-        previous_status = data.get("status") if isinstance(data, dict) else None
-        if previous_status != "cleared" and previous_target.get("base_url") == identity["base_url"] and (same_document or same_session):
-            raise WebCADError("This target already has an export manifest; reconcile existing nodes before re-exporting")
-    if path.exists():
-        raise WebCADError("Manifest already exists; inspect it instead of retrying")
+    check_previous_exports(path, identity)
     schemas = validate_members(client, plan["members"])
     fingerprint = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     record = {"target": identity, "fingerprint": fingerprint, "status": "creating", "members": [], "schemas": schemas,

@@ -12,7 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.integrations.webcad import MappingConfig, WebCADClient, WebCADConfig, WebCADError, build_export_plan, export_plan
+from src.integrations.webcad import (
+    MappingConfig, WebCADClient, WebCADConfig, WebCADError,
+    build_export_plan, export_plan, build_batch_request, export_batch_plan,
+)
 from src.integrations.webcad.exporter import mark_export_cleared, write_json
 
 
@@ -75,6 +78,9 @@ def main() -> None:
     parser.add_argument("--confirm-create", action="store_true", help="Explicitly create and save in the target editor")
     parser.add_argument("--cleared-manifest", type=Path, help="Verify user-deleted nodes are absent and preserve the old record as cleared")
     parser.add_argument("--wait-for-editor", type=float, default=0, help="Seconds to wait for a browser editor to connect")
+    parser.add_argument("--batch", action="store_true", help="Use documented cad.node.create_batch instead of serial creation")
+    parser.add_argument("--batch-size", type=int, default=100, help="Platform batch save chunk size (default: 100)")
+    parser.add_argument("--request-timeout", type=float, help="HTTP timeout; default 600 seconds for batch, otherwise 30")
     args = parser.parse_args()
     load_env(args.env_file)
     os.environ.setdefault("WEBCAD_BASE_URL", args.base_url)
@@ -91,6 +97,10 @@ def main() -> None:
     if args.action == "export" and not args.plan:
         parser.error("Export requires --plan from the actual final model")
     config = WebCADConfig.from_env()
+    if args.request_timeout is not None:
+        config.timeout = args.request_timeout
+    elif args.batch:
+        config.timeout = 600
     if args.ca_bundle:
         config.verify_tls = str(args.ca_bundle.resolve())
     if config.verify_tls is False:
@@ -131,12 +141,19 @@ def main() -> None:
                 print(f"Cabin visual trial: {len(plan['members'])} physical steel members; {len(plan['warnings'])} placement warnings", flush=True)
             else:
                 plan = trial_plan() if args.action == "trial" else json.loads(args.plan.read_text(encoding="utf-8"))
-            manifest = args.output_dir / ("trial_manifest.json" if args.action == "trial" else "export_manifest.json")
+            filename = "batch_manifest.json" if args.batch else ("trial_manifest.json" if args.action == "trial" else "export_manifest.json")
+            manifest = args.output_dir / filename
             def progress(done, total):
                 if done == 1 or done % 25 == 0 or done == total:
                     print(f"Created {done}/{total}", flush=True)
 
-            record = export_plan(plan, client, manifest, on_progress=progress)
+            if args.batch:
+                request = build_batch_request(plan, args.batch_size)
+                write_json(args.output_dir / "cabin_plan.batch.json", {"name": "cad.node.create_batch", "arguments": request})
+                print(f"Submitting one batch call: {len(request['nodeList'])} nodes; batchSize={args.batch_size}; skipCutRelations=true", flush=True)
+                record = export_batch_plan(plan, client, manifest, args.batch_size, on_progress=progress)
+            else:
+                record = export_plan(plan, client, manifest, on_progress=progress)
             print(f"{record['status']}: {len(record['members'])} members; manifest: {manifest}")
     finally:
         client.close()

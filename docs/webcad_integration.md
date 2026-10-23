@@ -45,6 +45,8 @@ CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WE
 
 ## 完整钢结构试建
 
+完整模型优先使用下文的批量接口。下面的串行命令保留用于单构件诊断，不建议用于完整舱体：
+
 ```powershell
 .\.venv\Scripts\python.exe -u scripts\webcad.py cabin --confirm-create --ca-bundle "docs\WebCAD对接\2.证书安装\ca.crt" --cleared-manifest results/webcad/trial_manifest.json
 ```
@@ -68,6 +70,37 @@ CLI 也兼容 `.env.local` 中的 `username`、`password` 简写；规范的 `WE
 2026-10-22 平台再次替换服务器证书后，公网入口的 CA 链和 IP 地址校验均已通过，账号登录成功。当前叶证书 SHA-256 为 `aac340d58184c02687ff2beeeecb8847cf858fe74b0b709c4178ef469fefc656`，SAN 已包含 `124.223.165.124`。前述 TLS 阻塞已解除，无需关闭证书校验。刷新编辑页后恢复了 `mcp-demo` 会话；一次列表查询确认旧测试梁已不存在，原 `trial_manifest.json` 已保留并标为 `cleared`，未删除其他构件。
 
 随后整舱请求通过实时 Schema 校验并开始创建。前 380 个杆段返回成功及 nodeId，第 381 个请求返回 HTTP 404，重新查询编辑会话列表为空。导出记录 `results/webcad/export_manifest.json` 状态为 `interrupted`，包含 380 个 `created` 和 1 个 `failed`；尚未调用整舱保存，其余 525 个杆段尚未发送。会话消失的具体原因待平台或浏览器侧核实，不能将已返回成功视为已持久化。恢复连接后须先核对已创建构件，再决定清理或续建，不能直接重跑整舱命令。此次相关 37 项单元测试通过，未修改分析或优化逻辑。
+
+### Python 批量创建
+
+2026-10-23 技术人员提供 `docs/WebCAD对接/mcp批量创建` 中的转换脚本和调用格式后，新增独立模块 `src/integrations/webcad/batch.py`。HTTP 地址和调用信封保持原样，工具名改为 `cad.node.create_batch`，其参数为：
+
+```json
+{
+  "nodeList": [{"type": "structure.squareTubeSteelGirder", "params": {}}],
+  "components": [],
+  "batchSize": 100,
+  "skipCutRelations": true
+}
+```
+
+以上 `params` 仅作结构占位，实际必须包含原计划中的完整截面、端点和业务参数。一次提交全部杆段，由平台按 `batchSize` 分片保存，不是 Python 并发调用或循环发送单根创建。`skipCutRelations=true` 沿用技术人员示例，跳过切割关系，不代表已验证连接节点的加工几何。
+
+```powershell
+.\.venv\Scripts\python.exe -u scripts\webcad.py cabin --batch --batch-size 100 --confirm-create --ca-bundle "docs\WebCAD对接\2.证书安装\ca.crt" --wait-for-editor 120
+# 最终优化方案：使用实际 final_model 生成并审阅的计划，不使用 cabin 默认试建模型
+.\.venv\Scripts\python.exe -u scripts\webcad.py export --plan 最终导出计划.json --batch --confirm-create --ca-bundle "docs\WebCAD对接\2.证书安装\ca.crt"
+```
+
+同一目标已有未清理的导出记录时仍拒绝重复创建。此次仅在列表确认上次的 380 个 ID 均不存在后，使用 `--cleared-manifest results/webcad/export_manifest.json` 保留并核销旧中断记录；不会远程删除其他构件。已标记 `cleared` 的记录不要再次传给该参数。
+
+转换保留 m→mm 后的原坐标与截面，新增稳定的 `params.id=cabin-{source_id}`、`compentName`、`detailName` 和 `userData.originId` 等字段。906 条 `nodeList` 与所附 JS 生成文件逐项一致。按技术人员说明，这几种钢构件使用世界坐标几何，不能只凭截面和长度跨位置共享 `shapeReuseKey`，本实现不设置该键。文档指出 BeamNode 路径可能忽略截面旋转，因此批量入口暂拒绝非 0°，不宣称已解决朝向映射；材质仍使用平台默认值。
+
+批量函数 `export_batch_plan(plan, client, manifest_path, batch_size=100, on_progress=None)` 可直接从 Streamlit 调用，`plan` 使用 `build_export_plan(final_model, mapping)` 生成。`on_progress` 仅在整体完成时回调，不模拟服务端实时进度。CLI 批量请求超时默认 600 秒，可通过 `--request-timeout` 调整；超时或中断不自动重试。分片可能已经保存，即使最终失败也不能假设全部回滚。
+
+本次实测目标仍为 `mcp-demo`：创建前节点数为 0；批量响应为 `total=906`、`successCount=906`、`failureCount=0`、`failures=[]`。返回的 `nodeIds` 与请求中的 `params.id` 完全一致；一次整体列表核对确认新增 ID 集合一致，包含 102 个方管梁段、84 个方管柱段、413 个 H 型钢梁段和 307 个槽钢梁段，随后 `cad.document.save` 成功返回。未逐根读取，也未重现此前 380 根时会话中断的问题；长期内存占用及刷新后持久化仍待人工验收。
+
+静态文件未描述批量返回值 Schema；上述返回字段及保留 `params.id` 的行为来自本次实时响应。Python 在后续调用中校验成功/失败数量及 ID 集合，返回结构变化或部分成功时保留原始结果并停止，不擅自假定创建全部成功。请求文件为 `results/webcad/cabin_plan.batch.json`（含 `name` 和 `arguments`），执行记录为 `results/webcad/batch_manifest.json`，包含原请求、响应、整体核对节点及保存响应，均不纳入 Git。45 项相关单元测试通过，未修改结构分析和优化流程。
 
 ## 最终模型与 Streamlit 入口
 
@@ -144,7 +177,7 @@ GB/T 3094—2012 表 A.1 注用于理论重量计算：S≤6 时 R=1.5S，S>6 �
 
 每个构件发送前记录 `in_flight`，成功后记录 `node_id`、源杆件、分组、截面、实际返回属性。超时或响应不完整标为 `uncertain`，不自动重试，也不在部分失败后保存。全部成功才调用保存，保存失败保留已创建构件记录。
 
-已有同路径或同目录同目标模型的记录时拒绝再次导出；CLI 与 UI 应保持目标模型对应的记录目录固定。这不是服务端幂等保证：移动/删除记录或使用其他目录不能防重。首版不提供自动删除或断点续传，须先人工核对并清理本次记录中的构件，不能误删用户原有构件。没有事务或自动回滚承诺。
+已有同路径或同目录同目标模型的记录时拒绝再次导出；CLI 与 UI 应保持目标模型对应的记录目录固定。这不是服务端幂等保证：移动/删除记录或使用其他目录不能防重。首版不提供自动删除或断点续传，须先人工核对并清理本次记录中的构件，不能误删用户原有构件。没有事务或自动回滚承诺。以上逐构件状态适用于串行接口；批量接口保存整包请求/响应和整体节点核对结果，平台本身可能已经分片保存，不能套用“部分失败后未保存”的串行假设。
 
 ## 实测状态与待确认
 
