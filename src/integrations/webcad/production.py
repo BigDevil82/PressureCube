@@ -26,6 +26,7 @@ RANK = {"FRAME": 0, "MAIN": 1, "SECONDARY": 2, "BRACE": 3}
 class ProductionConfig:
     gap_mm: float = 0.0
     use_box_reference_radius: bool = True
+    end_ring_threshold_mm: float = 500.0
 
 
 def _stock_members(model, config):
@@ -96,6 +97,41 @@ def _stock_members(model, config):
             m["section_name"],
         ),
     )
+
+
+def _omit_end_ring(stocks, length_mm, threshold_mm):
+    rings = [
+        s
+        for s in stocks
+        if s["beam_type"] == "MAIN"
+        and s["axis"] != 1
+        and TOL < s["start"][1] < length_mm - TOL
+    ]
+    if not rings:
+        return stocks, []
+    last_y = max(s["start"][1] for s in rings)
+    distance = float(length_mm - last_y)
+    if distance >= threshold_mm - TOL:
+        return stocks, []
+    kept, omitted = [], []
+    for stock in stocks:
+        if (
+            stock["beam_type"] == "MAIN"
+            and stock["axis"] != 1
+            and abs(stock["start"][1] - last_y) < TOL
+        ):
+            omitted.append(
+                {
+                    "source_ids": stock["source_ids"],
+                    "section_name": stock["section_name"],
+                    "nominal_y_mm": float(last_y),
+                    "distance_to_end_mm": distance,
+                    "reason": "last_main_ring_below_end_distance_threshold",
+                }
+            )
+        else:
+            kept.append(stock)
+    return kept, omitted
 
 
 def _place(stock, zones):
@@ -305,7 +341,7 @@ def _cut_stocks(stocks, gap):
     return parts, stock_records
 
 
-def _verify_layout(model, stocks, stock_records, parts):
+def _verify_layout(model, stocks, stock_records, parts, omitted):
     if overlap_pairs(parts):
         raise ValueError("Production envelope overlap remains")
     if any(not stock["part_ids"] for stock in stock_records):
@@ -340,10 +376,14 @@ def _verify_layout(model, stocks, stock_records, parts):
         raise ValueError("Outer steel envelope differs from the requested dimensions")
     originals = {i for i, b in model.beams.items() if not b.is_virtual}
     accounted = {i for stock in stock_records for i in stock["source_ids"]}
-    if accounted != originals:
+    excluded = {i for stock in omitted for i in stock["source_ids"]}
+    if accounted & excluded or accounted | excluded != originals:
         raise ValueError("Source-member coverage mismatch")
     return {
         "source_segments": len(originals),
+        "included_source_segments": len(accounted),
+        "omitted_source_segments": len(excluded),
+        "omitted_stocks": len(omitted),
         "merged_stocks": len(stocks),
         "parts": len(parts),
         "fully_consumed_stocks": 0,
@@ -357,11 +397,18 @@ def build_production_plan(model, config: ProductionConfig | None = None):
     config = config or ProductionConfig()
     if config.gap_mm < 0:
         raise ValueError("gap_mm must be nonnegative")
+    if config.end_ring_threshold_mm < 0:
+        raise ValueError("end_ring_threshold_mm must be nonnegative")
     zones = create_layout_engine(model.params).zones
-    stocks = [_place(stock, zones) for stock in _stock_members(model, config)]
+    stocks, omitted = _omit_end_ring(
+        _stock_members(model, config),
+        model.params.length * 1000,
+        config.end_ring_threshold_mm,
+    )
+    stocks = [_place(stock, zones) for stock in stocks]
     grid_changes = _reconcile_grids(stocks, zones, config.gap_mm)
     parts, stock_records = _cut_stocks(stocks, config.gap_mm)
-    summary = _verify_layout(model, stocks, stock_records, parts)
+    summary = _verify_layout(model, stocks, stock_records, parts, omitted)
     return {
         "units": "mm",
         "reference": "steel_outer_faces_excluding_cladding",
@@ -378,6 +425,7 @@ def build_production_plan(model, config: ProductionConfig | None = None):
         },
         "parts": parts,
         "stocks": stock_records,
+        "omitted_stocks": omitted,
         "grid_adjustments": grid_changes,
         "summary": summary,
         "limitations": [

@@ -29,18 +29,24 @@ def main():
         help="Use a reviewed production plan from the actual optimized model",
     )
     parser.add_argument("--gap-mm", type=float, default=0)
+    parser.add_argument("--end-ring-threshold-mm", type=float, default=500)
     parser.add_argument(
         "--output-dir", type=Path, default=ROOT / "results/webcad/production"
     )
     parser.add_argument("--document-id")
     parser.add_argument("--ca-bundle", type=Path)
-    parser.add_argument("--clear-test-record", type=Path, action="append", default=[])
+    parser.add_argument(
+        "--clear-test-record", "--clear-record", type=Path, action="append", default=[]
+    )
     args = parser.parse_args()
     plan = (
         json.loads(args.plan.read_text(encoding="utf-8"))
         if args.plan
         else build_production_plan(
-            build_default_engineering_model(), ProductionConfig(gap_mm=args.gap_mm)
+            build_default_engineering_model(),
+            ProductionConfig(
+                gap_mm=args.gap_mm, end_ring_threshold_mm=args.end_ring_threshold_mm
+            ),
         )
     )
     write_production_files(plan, args.output_dir)
@@ -64,9 +70,7 @@ def main():
                 args.clear_test_record,
                 args.output_dir / "test_cleanup.json",
             )
-            print(
-                "Known test nodes removed; actual saved document is empty", flush=True
-            )
+            print("Recorded nodes removed; actual saved document is empty", flush=True)
         result = export_production_plan(
             plan,
             client,

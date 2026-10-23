@@ -186,7 +186,7 @@ def audit_contacts(plan, document):
 
 
 def clear_known_tests(client, document_id, record_paths, output):
-    """Delete only IDs in the specified test records, never a prefix wildcard."""
+    """Delete only IDs in explicit test/export records, never a prefix wildcard."""
     output = Path(output)
     if output.exists():
         raise WebCADError("Cleanup record exists; inspect it before retrying")
@@ -200,7 +200,9 @@ def clear_known_tests(client, document_id, record_paths, output):
     before = client.call_tool("cad.document.save")
     nodes = saved_nodes(before)
     if not set(nodes) <= known:
-        raise WebCADError("Document contains non-test nodes: no deletion performed")
+        raise WebCADError(
+            "Document contains nodes outside the supplied records: no deletion performed"
+        )
     record = {
         "document_id": document_id,
         "status": "deleting",

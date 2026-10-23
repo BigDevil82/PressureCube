@@ -13,6 +13,7 @@ from scripts.export_geometry import build_default_engineering_model
 from src.integrations.webcad.client import UncertainCallError, WebCADError
 from src.integrations.webcad.production import (
     ProductionConfig,
+    _omit_end_ring,
     _subtract,
     build_production_plan,
     overlap_pairs,
@@ -99,16 +100,24 @@ class ProductionTests(unittest.TestCase):
         cls.model = build_default_engineering_model()
         cls.plan = build_production_plan(cls.model)
 
-    def test_full_model_bounds_source_coverage_and_no_omitted_stocks(self):
+    def test_full_model_bounds_source_coverage_and_explicit_ring_omission(self):
         plan = self.plan
         self.assertEqual(plan["summary"]["source_segments"], 906)
-        self.assertEqual(plan["summary"]["merged_stocks"], 126)
-        self.assertEqual(plan["summary"]["parts"], 442)
+        self.assertEqual(plan["summary"]["merged_stocks"], 122)
+        self.assertEqual(plan["summary"]["parts"], 420)
+        self.assertEqual(plan["summary"]["omitted_source_segments"], 34)
+        self.assertEqual(plan["summary"]["omitted_stocks"], 4)
         self.assertEqual(plan["summary"]["fully_consumed_stocks"], 0)
         self.assertEqual(plan["summary"]["bounds_mm"], [0, -1100, 0, 3700, 8500, 3300])
         ids = [i for s in plan["stocks"] for i in s["source_ids"]]
-        self.assertEqual(len(set(ids)), 906)
-        self.assertEqual(len(ids), 906)
+        omitted = [i for s in plan["omitted_stocks"] for i in s["source_ids"]]
+        self.assertEqual(len(set(ids)), 872)
+        self.assertEqual(len(ids), 872)
+        self.assertFalse(set(ids) & set(omitted))
+        self.assertEqual(
+            set(ids) | set(omitted),
+            {i for i, b in self.model.beams.items() if not b.is_virtual},
+        )
         self.assertFalse(overlap_pairs(plan["parts"]))
 
     def test_top_and_bottom_faces_are_flush_for_all_sections(self):
@@ -118,13 +127,49 @@ class ProductionTests(unittest.TestCase):
             if part["face"] == "bottom":
                 self.assertEqual(part["bounds_mm"][2], 0)
 
-    def test_end_grid_adjustment_preserves_near_end_primary_members(self):
-        self.assertEqual(
-            self.plan["grid_adjustments"],
-            [dict(axis="y", nominal_mm=8400.0, placed_mm=8250.0)],
+    def test_end_ring_is_omitted_instead_of_shifted(self):
+        self.assertEqual(self.plan["grid_adjustments"], [])
+        self.assertTrue(
+            all(s["nominal_y_mm"] == 8400 for s in self.plan["omitted_stocks"])
+        )
+        self.assertTrue(
+            all(s["distance_to_end_mm"] == 100 for s in self.plan["omitted_stocks"])
         )
         for stock in self.plan["stocks"]:
             self.assertTrue(stock["part_ids"])
+
+    def test_threshold_zero_preserves_previous_layout(self):
+        plan = build_production_plan(
+            self.model, ProductionConfig(end_ring_threshold_mm=0)
+        )
+        self.assertFalse(plan["omitted_stocks"])
+        self.assertEqual(plan["summary"]["parts"], 442)
+        self.assertEqual(
+            plan["grid_adjustments"],
+            [dict(axis="y", nominal_mm=8400.0, placed_mm=8250.0)],
+        )
+
+    def test_threshold_boundary_only_affects_last_main_ring(self):
+        def stock(i, y, axis=0, kind="MAIN"):
+            return dict(
+                source_ids=[i],
+                start=np.array([0.0, y, 0.0]),
+                axis=axis,
+                beam_type=kind,
+                section_name="test",
+            )
+
+        for y, expected in [(7999, 0), (8000, 0), (8001, 2)]:
+            stocks = [
+                stock(1, 7000),
+                stock(2, y),
+                stock(3, y, 2),
+                stock(4, 8500, 0, "FRAME"),
+                stock(5, 0, 1),
+            ]
+            kept, omitted = _omit_end_ring(stocks, 8500, 500)
+            self.assertEqual(len(omitted), expected)
+            self.assertTrue({1, 4, 5} <= {s["source_ids"][0] for s in kept})
 
     def test_source_model_unchanged_and_plan_deterministic(self):
         before = [(i, p.coordinates().tolist()) for i, p in self.model.points.items()]
@@ -156,11 +201,12 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(plan["summary"]["bounds_mm"], [0, -1100, 0, 3700, 7200, 3300])
         self.assertFalse(overlap_pairs(plan["parts"]))
         self.assertEqual(plan["summary"]["fully_consumed_stocks"], 0)
+        self.assertFalse(plan["omitted_stocks"])
 
     def test_prism_request_uses_only_validated_fields_without_cut_relations(self):
         request = production_request(self.plan)
         self.assertTrue(request["skipCutRelations"])
-        self.assertEqual(len(request["nodeList"]), 442)
+        self.assertEqual(len(request["nodeList"]), 420)
         for node in request["nodeList"]:
             self.assertEqual(node["type"], "engine.prism")
             self.assertEqual(
@@ -173,6 +219,10 @@ class ProductionTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             build_production_plan(self.model, ProductionConfig(gap_mm=-1))
+        with self.assertRaises(ValueError):
+            build_production_plan(
+                self.model, ProductionConfig(end_ring_threshold_mm=-1)
+            )
 
 
 class ProductionExportTests(unittest.TestCase):
@@ -286,7 +336,7 @@ class ProductionExportTests(unittest.TestCase):
                     }
                 }
             )
-            with self.assertRaisesRegex(WebCADError, "non-test"):
+            with self.assertRaisesRegex(WebCADError, "outside"):
                 clear_known_tests(client, "doc1", [source], Path(td) / "cleanup.json")
             client.call_tool.assert_called_once_with("cad.document.save")
 
